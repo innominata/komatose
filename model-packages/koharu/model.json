@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "koharu",
+  "name": "Koharu",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "workflow-image"
+  },
+  "config": {
+    "backend": "koharu"
+  },
+  "service": {
+    "id": "cleaning-worker",
+    "resource": "native-image-workers"
+  },
+  "setup": {
+    "executable": "{root}/.venv-workflow/bin/python",
+    "args": [
+      "{root}/scripts/install-koharu.py"
+    ],
+    "executableEnv": "SCAN_WORKFLOW_PYTHON"
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_WORKFLOW_MODELS_DIR"
+  ]
+}

@@ -1,0 +1,4 @@
+Vendored inference modules from https://github.com/wndaasa/ko-en-translator
+commit e88cedeb62a05f3cbfc69ff390172af87a0f4f10 (2026-07-03).
+Used with Imsbee/ko-en-translator sentence-base weights (Apache-2.0).
+Do not edit these copies except to retarget that commit.

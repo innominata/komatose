@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "translategemma-4b-q4",
+  "name": "TranslateGemma 4B Q4",
+  "revision": "1",
+  "model": "translategemma-4b-q4",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-translator"
+  },
+  "config": {},
+  "service": {
+    "id": "translation-worker"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-translation-models.py",
+      "--model",
+      "translategemma-4b-q4"
+    ]
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_TRANSLATION_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/translation",
+      "rootEnv": "SCAN_TRANSLATION_MODELS_DIR",
+      "subdirectory": "translategemma-4b-q4"
+    }
+  ]
+}

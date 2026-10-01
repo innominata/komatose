@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "ctd",
+  "name": "Comic Text Detector",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-detector"
+  },
+  "config": {
+    "backend": "ctd"
+  },
+  "service": {
+    "id": "ocr-worker",
+    "resource": "native-image-workers"
+  },
+  "setup": {
+    "executable": "{root}/.venv-ocr/bin/python",
+    "args": [
+      "{root}/scripts/install-detect-models.py",
+      "--model",
+      "ctd"
+    ],
+    "executableEnv": "PADDLEOCR_PYTHON"
+  },
+  "dependencies": [
+    "env-ocr",
+    "env-workflow"
+  ],
+  "environment": [
+    "PADDLEOCR_PYTHON",
+    "SCAN_OCR_MODELS_DIR",
+    "HF_HOME"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{home}/.cache/huggingface",
+      "rootEnv": "HF_HOME",
+      "subdirectory": "hub/models--mayocream--comic-text-detector-onnx"
+    }
+  ]
+}

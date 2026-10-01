@@ -1,0 +1,15 @@
+{#- llama.cpp cannot compile Google's template: it raises unless content is a one-item map.
+   This emits the same Japanese-to-English text prompt from a plain user string. -#}
+{{ '<bos>' }}
+{%- for message in messages -%}
+{%- if message['role'] == 'user' -%}
+{{ '<start_of_turn>user\nYou are a professional Japanese (ja) to English (en) translator. Your goal is to accurately convey the meaning and nuances of the original Japanese text while adhering to English grammar, vocabulary, and cultural sensitivities.\nProduce only the English translation, without any additional explanations or commentary. Please translate the following Japanese text into English:\n\n\n' + message['content'] | trim }}
+{{ '<end_of_turn>\n' }}
+{%- elif message['role'] == 'assistant' -%}
+{{ '<start_of_turn>model\n' + message['content'] | trim }}
+{{ '<end_of_turn>\n' }}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{ '<start_of_turn>model\n' }}
+{%- endif -%}

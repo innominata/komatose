@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "lama-manga",
+  "name": "LaMa Manga",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "workflow-image"
+  },
+  "config": {
+    "backend": "lama-manga",
+    "aliases": [
+      "lama"
+    ]
+  },
+  "service": {
+    "id": "cleaning-worker",
+    "resource": "native-image-workers"
+  },
+  "setup": {
+    "executable": "{root}/.venv-workflow/bin/python",
+    "args": [
+      "{root}/scripts/install-clean-models.py",
+      "--model",
+      "lama-manga"
+    ],
+    "executableEnv": "SCAN_WORKFLOW_PYTHON"
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_WORKFLOW_MODELS_DIR",
+    "HF_HOME"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{home}/.cache/huggingface",
+      "rootEnv": "HF_HOME",
+      "subdirectory": "hub/models--ogkalu--lama-manga-onnx-dynamic"
+    }
+  ]
+}

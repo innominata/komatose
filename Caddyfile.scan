@@ -1,0 +1,16 @@
+# Deployment hostnames stay out of the repository. Export SCAN_SITE_ADDRESS
+# (one or more comma-separated site addresses) and optionally SCAN_PORT before
+# reloading Caddy, for example:
+#   SCAN_SITE_ADDRESS=scan.example.com,scan.internal.example SCAN_PORT=3847 caddy reload
+{$SCAN_SITE_ADDRESS:localhost} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+
+	reverse_proxy 127.0.0.1:{$SCAN_PORT:3847}
+	header Cache-Control "no-cache, no-store, must-revalidate"
+	header Pragma "no-cache"
+	header Expires "0"
+}

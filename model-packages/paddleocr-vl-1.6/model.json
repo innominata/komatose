@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "paddleocr-vl-1.6",
+  "name": "PaddleOCR-VL-1.6",
+  "revision": "1",
+  "model": "paddleocr-vl-1.6",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-ocr"
+  },
+  "config": {},
+  "service": {
+    "id": "paddleocr-vl-1.6"
+  },
+  "setup": {
+    "executable": "{root}/.venv-review/bin/python",
+    "args": [
+      "{root}/scripts/install-review-models.py",
+      "--model",
+      "paddleocr-vl-1.6"
+    ],
+    "executableEnv": "SCAN_REVIEW_PYTHON"
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_REVIEW_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/review",
+      "rootEnv": "SCAN_REVIEW_MODELS_DIR",
+      "subdirectory": "paddleocr-vl-1.6"
+    }
+  ]
+}

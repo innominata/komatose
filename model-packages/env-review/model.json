@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "env-review",
+  "name": "env-review",
+  "revision": "1",
+  "kind": "runtime",
+  "access": "local_http",
+  "adapter": {
+    "id": "environment"
+  },
+  "artifacts": [
+    "{root}/.venv-review/bin/python"
+  ],
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/setup-python-env.py",
+      "--env",
+      "review"
+    ]
+  }
+}

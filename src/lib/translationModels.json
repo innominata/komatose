@@ -1,0 +1,212 @@
+[
+  {
+    "id": "hy-mt2-manga-v5",
+    "label": "Hy-MT2 1.8B Manga v5 · Japanese → English",
+    "repository": "fumetodev/Hy-MT2-1.8B-JP-Manga-Finetune-v5-GGUF",
+    "aliases": ["fumetoday/Hy-MT2-1.8B-JP-Manga-Finetune-v5", "fumetodev/Hy-MT2-1.8B-JP-Manga-Finetune-v5"],
+    "languages": ["japanese"],
+    "profile": "hy-manga",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_HY",
+    "weights": {
+      "revision": "e17bc6a8dd92ddf930bd7858ceb916117ee5f916",
+      "filename": "manga-v5-Q4_K_M.gguf",
+      "bytes": 1133080512,
+      "sha256": "e4ed3cf8535c4e99e4b9f3d930ecc6f93bc3b3e0b4b5edca872c4cff5a112abe"
+    }
+  },
+  {
+    "id": "cat-translate-7b-q4",
+    "label": "CAT-Translate 7B Q4 · Japanese → English",
+    "repository": "mradermacher/CAT-Translate-7b-i1-GGUF",
+    "aliases": ["cyberagent/CAT-Translate-7b", "CyberAgent/CAT-Translate-7b", "mradermacher/CAT-Translate-7b-i1-GGUF"],
+    "languages": ["japanese"],
+    "profile": "cat-translate",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_CAT",
+    "weights": {
+      "revision": "1d53d50066add9e349a75fd8b7b1cae939afb4df",
+      "filename": "CAT-Translate-7b.i1-Q4_K_M.gguf",
+      "bytes": 4537758304,
+      "sha256": "07a7e6589908cb269a1a48b67aeebc3e7d02724d9069e94df8ee266f32d07aec"
+    }
+  },
+  {
+    "id": "hy-mt2-7b-q4",
+    "label": "Hy-MT2 7B Q4 · Japanese → English",
+    "repository": "tencent/Hy-MT2-7B-GGUF",
+    "aliases": ["tencent/Hy-MT2-7B", "tencent/Hy-MT2-7B-GGUF"],
+    "languages": ["japanese"],
+    "profile": "hy-mt",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_HY7",
+    "weights": {
+      "revision": "ab8472660ac61fac25f1af43fac2599d52a8a775",
+      "filename": "Hy-MT2-7B-Q4_K_M.gguf",
+      "bytes": 4624648896,
+      "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b"
+    }
+  },
+  {
+    "id": "imsbee-ko-en-translator",
+    "label": "Imsbee Ko→En Translator · Korean → English",
+    "repository": "Imsbee/ko-en-translator",
+    "aliases": ["Imsbee/ko-en-translator", "ko-en-translator"],
+    "languages": ["korean"],
+    "profile": "ko-en-minrnn",
+    "runtime": "pytorch",
+    "envPrefix": "SCAN_TRANSLATION_KOEN",
+    "weights": {
+      "revision": "d21a8e314fcd9d68a27766217012c479cdf9cc81",
+      "filename": "sentence-base/best.pt",
+      "bytes": 1071708740,
+      "sha256": "4dcaa0f16d6bba3906a82bd65fb4518a93e29b3b029ced4d4f8e67db870bcf06",
+      "extras": [
+        {
+          "filename": "tokenizer.json",
+          "bytes": 2508117,
+          "sha256": "065c62fe8d68554a616cb282b6fbff526f16e52daac0117127c40d34d0082e25"
+        }
+      ]
+    }
+  },
+  {
+    "id": "opus-mt-ja-en",
+    "label": "Opus-MT Ja→En · Japanese → English",
+    "repository": "Helsinki-NLP/opus-mt-ja-en",
+    "aliases": ["Helsinki-NLP/opus-mt-ja-en"],
+    "languages": ["japanese"],
+    "profile": "opus-mt-ja-en",
+    "runtime": "pytorch",
+    "envPrefix": "SCAN_TRANSLATION_OPUS_JAEN",
+    "weights": {
+      "revision": "0770961a39ba6bd66305b149c3f4110bcafca2e6",
+      "filename": "pytorch_model.bin",
+      "bytes": 303294189,
+      "sha256": "ed649116c143fc2d7aea690246f4b2b7caa814e9e00a8d5bbe047822b18de022",
+      "extras": [
+        {
+          "filename": "config.json",
+          "bytes": 1381,
+          "sha256": "e289b397c417050d9be37049677abf8929c35b16397389ad591a8d008e6db340"
+        },
+        {
+          "filename": "generation_config.json",
+          "bytes": 293,
+          "sha256": "2a2ada2b87855613701872484737458add1c5d3a4330185e7fa4a3d1f6888f48"
+        },
+        {
+          "filename": "source.spm",
+          "bytes": 781853,
+          "sha256": "d0b5c3b10b5959f056ff2c86e2f2356129242ff1fc72d3a4a34d6a8c0eee4e57"
+        },
+        {
+          "filename": "target.spm",
+          "bytes": 801883,
+          "sha256": "35d89c704e270d441fade716a3931d49c43179400682edcca7f180694982a2f6"
+        },
+        {
+          "filename": "tokenizer_config.json",
+          "bytes": 42,
+          "sha256": "9db10a7f6e536bc53ecdd33bb23fa7ba610d20ee7959059a9deee5f33d636e54"
+        },
+        {
+          "filename": "vocab.json",
+          "bytes": 1501341,
+          "sha256": "0483c9c2b3deade6d6fbfe149eccf9cd3c44c77b348232030ae2d81400d65b61"
+        }
+      ]
+    }
+  },
+  {
+    "id": "shisa-v2.1-qwen3-8b-q4",
+    "label": "Shisa v2.1 Qwen3 8B Q4 · Japanese → English",
+    "repository": "mradermacher/shisa-v2.1-qwen3-8b-GGUF",
+    "aliases": ["shisa-ai/shisa-v2.1-qwen3-8b", "mradermacher/shisa-v2.1-qwen3-8b-GGUF"],
+    "languages": ["japanese"],
+    "profile": "shisa",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_SHISA",
+    "weights": {
+      "revision": "9b9187f69adca28b8e2b9490b2c151fcb85c0df6",
+      "filename": "shisa-v2.1-qwen3-8b.Q4_K_M.gguf",
+      "bytes": 5027784736,
+      "sha256": "d042f108a86d266bb8ed89b37cbad73dcf6d40abb624272eab062eb61114069e"
+    }
+  },
+  {
+    "id": "sugoi-v4-ja-en",
+    "label": "Sugoi v4 Ja→En · Japanese → English",
+    "repository": "entai2965/sugoi-v4-ja-en-ctranslate2",
+    "aliases": ["entai2965/sugoi-v4-ja-en-ctranslate2", "sugoi-translator"],
+    "languages": ["japanese"],
+    "profile": "sugoi-ja-en",
+    "runtime": "pytorch",
+    "envPrefix": "SCAN_TRANSLATION_SUGOI",
+    "weights": {
+      "revision": "71d67eb8e73ec2f5aaefc0689e03a4eb843d3a2b",
+      "filename": "model.bin",
+      "bytes": 1102425134,
+      "sha256": "de9bbeeb1b74716536c08a82e44d4ce1950b3cf690c4a426f6ce44a6c1c17a3d",
+      "extras": [
+        {
+          "filename": "config.json",
+          "bytes": 222,
+          "sha256": "3e732fbc16f7155d1354f96e746092f95f290d6b0a0cac56e9e4a1dd7ddb13d2"
+        },
+        {
+          "filename": "source_vocabulary.json",
+          "bytes": 701538,
+          "sha256": "1ae20a6f46611cfd6766fc9dd289747ec835aebbc27a161c1ab4bd311912af4c"
+        },
+        {
+          "filename": "target_vocabulary.json",
+          "bytes": 501642,
+          "sha256": "ad53ade1465d0752842772e1e1d5c5eb870afb9b42de99a8a23442008a4a35e8"
+        },
+        {
+          "filename": "spm/spm.ja.nopretok.model",
+          "bytes": 785276,
+          "sha256": "1bff3529a8e0bd898f00707a4e36dc16540d84112cc8a4a14462c0099e4aab9d"
+        },
+        {
+          "filename": "spm/spm.en.nopretok.model",
+          "bytes": 751435,
+          "sha256": "183aad11f5fa48b21fdbbb7a97082d160b86cbcc4f9dc5e61d0eebd48390d36a"
+        }
+      ]
+    }
+  },
+  {
+    "id": "translategemma-4b-q4",
+    "label": "TranslateGemma 4B Q4 · Japanese → English",
+    "repository": "mradermacher/translategemma-4b-it-GGUF",
+    "aliases": ["google/translategemma-4b-it", "mradermacher/translategemma-4b-it-GGUF"],
+    "languages": ["japanese"],
+    "profile": "translategemma",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_TG4",
+    "weights": {
+      "revision": "35a7486e128b19642cdc72d7b91b21ba388aaf42",
+      "filename": "translategemma-4b-it.Q4_K_M.gguf",
+      "bytes": 2489909760,
+      "sha256": "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"
+    }
+  },
+  {
+    "id": "translategemma-12b-q4",
+    "label": "TranslateGemma 12B Q4 · Japanese → English",
+    "repository": "mradermacher/translategemma-12b-it-GGUF",
+    "aliases": ["google/translategemma-12b-it", "mradermacher/translategemma-12b-it-GGUF"],
+    "languages": ["japanese"],
+    "profile": "translategemma",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_TG12",
+    "weights": {
+      "revision": "fdf84c9f6fe14e69d58814f14e7b5b63bb6a1b28",
+      "filename": "translategemma-12b-it.Q4_K_M.gguf",
+      "bytes": 7300794112,
+      "sha256": "b7aac4b4be7ab0c49b6556c29c4467e74313df7f1e95d9f9676bb2adf0afa528"
+    }
+  }
+]

@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "qwen3-vl-8b",
+  "name": "Qwen3-VL",
+  "revision": "1",
+  "model": "qwen3-vl-8b",
+  "access": "local_http",
+  "adapter": {
+    "id": "local-chat"
+  },
+  "config": {},
+  "service": {
+    "id": "qwen3-vl-8b"
+  },
+  "setup": {
+    "executable": "{root}/.venv-review/bin/python",
+    "args": [
+      "{root}/scripts/install-review-models.py",
+      "--model",
+      "qwen3-vl-8b"
+    ],
+    "executableEnv": "SCAN_REVIEW_PYTHON"
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_REVIEW_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/review",
+      "rootEnv": "SCAN_REVIEW_MODELS_DIR",
+      "subdirectory": "qwen3-vl-8b"
+    }
+  ]
+}

@@ -1,0 +1,384 @@
+.editor-workspace {
+	--ed-bg: var(--hud-bg);
+	--ed-panel: var(--hud-panel);
+	--ed-rail: var(--hud-bg-2);
+	--ed-line: var(--hud-line);
+	--ed-text: var(--hud-text);
+	--ed-muted: var(--hud-muted);
+	--ed-hover: var(--hud-teal-dim);
+	--ed-active: var(--hud-teal);
+	--ed-active-dim: var(--hud-teal-dim);
+	--ed-danger: var(--hud-danger);
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	width: 100%;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--ed-bg);
+	color: var(--ed-text);
+	font-family: Inter, system-ui, sans-serif;
+	letter-spacing: 0;
+}
+
+.ed-docbar {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-height: 36px;
+	padding: 0 0.55rem;
+	border-bottom: 1px solid var(--ed-line);
+	background: var(--ed-panel);
+	flex-shrink: 0;
+	flex-wrap: wrap;
+}
+
+.ed-docbar a,
+.ed-docbar button,
+.ed-docbar .ed-btn {
+	font-size: 0.78rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	font-family: Rajdhani, sans-serif;
+	font-weight: 600;
+}
+
+.ed-docbar a.ed-brand {
+	display: inline-flex;
+	align-items: center;
+	text-decoration: none;
+	line-height: 0;
+	padding: 0.2rem 0.45rem;
+}
+
+.ed-docbar a.ed-brand img {
+	display: block;
+	height: calc(0.82rem * 193 / 104);
+	width: auto;
+}
+
+.ed-back {
+	color: var(--ed-muted);
+	text-decoration: none;
+	padding: 0.2rem 0.4rem;
+	border-radius: 2px;
+	max-width: 14rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ed-back:hover {
+	color: var(--ed-text);
+	background: var(--ed-hover);
+}
+
+.ed-title {
+	font-weight: 600;
+	font-size: 0.85rem;
+}
+
+.ed-sep {
+	width: 1px;
+	height: 16px;
+	background: var(--ed-line);
+	flex-shrink: 0;
+}
+
+.ed-btn {
+	font-family: Inter, system-ui, sans-serif;
+	font-weight: 500;
+	letter-spacing: 0;
+	text-transform: none;
+	font-size: 12.5px;
+	border: 1px solid var(--ed-line);
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--ed-text);
+	padding: 5px 10px;
+	border-radius: 5px;
+	line-height: 1.3;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+}
+
+.ed-btn:hover:not(:disabled) {
+	background: var(--ed-hover);
+	color: var(--ed-active);
+	border-color: var(--ed-active);
+}
+
+.ed-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.ed-btn.active {
+	background: var(--ed-active-dim);
+	color: var(--ed-active);
+}
+
+.ed-btn.danger {
+	color: var(--ed-danger);
+}
+
+.ed-btn.danger:hover:not(:disabled) {
+	background: rgba(255, 93, 115, 0.14);
+	color: var(--ed-danger);
+}
+
+.ed-icon-btn {
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	justify-content: center;
+	font-size: 0.95rem;
+}
+
+.ed-zoom {
+	display: flex;
+	align-items: center;
+	gap: 0.15rem;
+	color: var(--ed-muted);
+	font-size: 0.72rem;
+	min-width: 4.4rem;
+	justify-content: center;
+}
+
+.ed-workspaces {
+	display: flex;
+	align-items: center;
+	gap: 1px;
+	margin-left: 0.25rem;
+}
+
+.page-caption {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 8;
+	border: 0;
+	background: rgba(0, 0, 0, 0.55);
+	color: var(--hud-text);
+	font-size: 0.72rem;
+	text-align: left;
+	padding: 0.25rem 0.4rem;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.page-caption.empty {
+	color: var(--hud-muted);
+	font-style: italic;
+}
+
+.strip-image.selected-page {
+	outline: 2px solid var(--ed-active);
+	outline-offset: -2px;
+}
+
+.ed-presence {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	color: var(--ed-muted);
+	font-size: 0.72rem;
+}
+
+.ed-menu {
+	position: relative;
+}
+
+.ed-menu-panel {
+	position: absolute;
+	top: calc(100% + 4px);
+	right: 0;
+	z-index: 40;
+	min-width: 168px;
+	padding: 0.25rem;
+	border: 1px solid var(--ed-line);
+	border-radius: 2px;
+	background: var(--hud-bg-2);
+	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+	display: flex;
+	flex-direction: column;
+}
+
+.ed-menu-panel button,
+.ed-menu-panel a,
+.ed-menu-panel label {
+	display: block;
+	width: 100%;
+	text-align: left;
+	border: 0;
+	background: transparent;
+	color: var(--ed-text);
+	padding: 0.38rem 0.55rem;
+	border-radius: 2px;
+	font-size: 0.78rem;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.ed-menu-panel button:hover,
+.ed-menu-panel a:hover,
+.ed-menu-panel label:hover {
+	background: var(--ed-hover);
+}
+
+.ed-menu-panel button:disabled {
+	opacity: 0.4;
+	cursor: default;
+	pointer-events: none;
+}
+
+.ed-menu-panel .danger {
+	color: var(--ed-danger);
+}
+
+.ed-import {
+	display: flex;
+	gap: 0.5rem;
+	align-items: flex-start;
+	padding: 0.45rem 0.55rem;
+	border-bottom: 1px solid var(--ed-line);
+	background: var(--ed-panel);
+}
+
+.ed-import textarea {
+	flex: 1;
+	min-height: 4.5rem;
+	font-size: 0.8rem;
+}
+
+.ed-body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+}
+
+.ed-rail {
+	width: 40px;
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+	padding: 0.35rem 0 0.5rem;
+	background: var(--ed-rail);
+	border-right: 1px solid var(--ed-line);
+}
+
+.ed-rail-btn {
+	width: 32px;
+	height: 32px;
+	border: 0;
+	border-radius: 2px;
+	background: transparent;
+	color: var(--ed-muted);
+	display: grid;
+	place-items: center;
+	font-size: 1.05rem;
+	padding: 0;
+}
+
+.ed-rail-btn:hover:not(:disabled) {
+	background: var(--ed-hover);
+	color: var(--ed-text);
+}
+
+.ed-rail-btn.active {
+	background: var(--ed-active-dim);
+	color: var(--ed-active);
+}
+
+.ed-rail-btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+
+.ed-rail-gap {
+	height: 6px;
+}
+
+.ed-main {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.ed-status {
+	color: var(--ed-muted);
+	font-size: 0.75rem;
+}
+
+.ed-status.danger {
+	color: var(--ed-danger);
+}
+
+.editor-workspace .editor {
+	flex: 1;
+	min-height: 0;
+}
+
+.editor-workspace .editor.hide-sidebar .editor-right {
+	display: none !important;
+}
+
+.editor-workspace .editor-left {
+	background: var(--hud-canvas);
+	border-right-color: var(--ed-line);
+}
+
+.editor-workspace .editor-right {
+	background: var(--ed-bg);
+}
+
+
+
+/* Compact editor controls use the same interaction colours as management pages. */
+.editor-workspace :is(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--hud-teal);
+  outline-offset: 1px;
+}
+
+.editor-workspace :is(input, select, textarea):focus {
+  border-color: var(--hud-teal);
+}
+
+.editor-workspace :is(input[type="checkbox"], input[type="range"]) {
+  accent-color: var(--hud-teal);
+}
+
+.editor-workspace .hud-kicker {
+  letter-spacing: 0.18em;
+}
+
+@media (max-width: 760px) {
+	.ed-docbar {
+		gap: 0.15rem;
+		padding: 0.15rem 0.3rem;
+	}
+	.ed-back {
+		max-width: 5.5rem;
+	}
+	.ed-title {
+		flex: 0 1 6rem;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.ed-sep,
+	.ed-zoom {
+		display: none;
+	}
+}

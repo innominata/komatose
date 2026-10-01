@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "hayai-ocr-v2",
+  "name": "Hayai OCR v2",
+  "revision": "1",
+  "model": "hayai-ocr-v2",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-ocr"
+  },
+  "config": {},
+  "service": {
+    "id": "hayai-ocr-v2"
+  },
+  "setup": {
+    "executable": "{root}/.venv-review/bin/python",
+    "args": [
+      "{root}/scripts/install-review-models.py",
+      "--model",
+      "hayai-ocr-v2"
+    ],
+    "executableEnv": "SCAN_REVIEW_PYTHON"
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_REVIEW_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/review",
+      "rootEnv": "SCAN_REVIEW_MODELS_DIR",
+      "subdirectory": "hayai-ocr-v2"
+    }
+  ]
+}

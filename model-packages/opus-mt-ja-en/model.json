@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "opus-mt-ja-en",
+  "name": "Opus-MT Ja\u2192En",
+  "revision": "1",
+  "model": "opus-mt-ja-en",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-translator"
+  },
+  "config": {},
+  "service": {
+    "id": "translation-worker"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-translation-models.py",
+      "--model",
+      "opus-mt-ja-en"
+    ]
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_TRANSLATION_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/translation",
+      "rootEnv": "SCAN_TRANSLATION_MODELS_DIR",
+      "subdirectory": "opus-mt-ja-en"
+    }
+  ]
+}

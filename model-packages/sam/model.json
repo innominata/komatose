@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "sam",
+  "name": "SAM bubble segmentation",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "workflow-image"
+  },
+  "config": {
+    "backend": "sam"
+  },
+  "service": {
+    "id": "cleaning-worker",
+    "resource": "native-image-workers"
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_WORKFLOW_MODELS_DIR",
+    "SCAN_SAM_CHECKPOINT",
+    "HF_HOME"
+  ],
+  "setup": {
+    "executable": "{root}/.venv-workflow/bin/python",
+    "executableEnv": "SCAN_WORKFLOW_PYTHON",
+    "args": [
+      "{root}/scripts/install-native-package.py",
+      "--model",
+      "sam"
+    ]
+  },
+  "artifactDirectories": [
+    {
+      "path": "{home}/.cache/huggingface",
+      "rootEnv": "HF_HOME",
+      "subdirectory": "hub/models--facebook--sam2.1-hiera-small"
+    }
+  ]
+}

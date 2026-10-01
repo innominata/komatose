@@ -1,0 +1,19 @@
+# Python side of the OCR/detection worker (see ocr/worker.py, ocr/detect.py).
+#
+#   uv venv --python 3.12 .venv-ocr
+#   uv pip install --python .venv-ocr/bin/python -r ocr/requirements.txt
+#
+# Detector weights are pulled from Hugging Face on first use and cached in
+# ~/.cache/huggingface; nothing needs to be vendored here.
+
+# Recognition: PaddleOCR korean PP-OCRv5.
+paddleocr==3.7.0
+paddlepaddle==3.2.0
+
+# Detection: runs the RT-DETR and comic-text-detector ONNX graphs.
+onnxruntime==1.29.0
+
+# Weight downloads.
+huggingface-hub==1.28.0
+
+numpy==2.3.5

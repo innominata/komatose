@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "imsbee-ko-en-translator",
+  "name": "Imsbee Ko\u2192En Translator",
+  "revision": "1",
+  "model": "imsbee-ko-en-translator",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-translator"
+  },
+  "config": {},
+  "service": {
+    "id": "translation-worker"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-translation-models.py",
+      "--model",
+      "imsbee-ko-en-translator"
+    ]
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_TRANSLATION_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/translation",
+      "rootEnv": "SCAN_TRANSLATION_MODELS_DIR",
+      "subdirectory": "imsbee-ko-en-translator"
+    }
+  ]
+}

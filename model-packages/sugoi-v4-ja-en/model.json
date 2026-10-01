@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "sugoi-v4-ja-en",
+  "name": "Sugoi v4 Ja\u2192En",
+  "revision": "1",
+  "model": "sugoi-v4-ja-en",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-translator"
+  },
+  "config": {},
+  "service": {
+    "id": "translation-worker"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-translation-models.py",
+      "--model",
+      "sugoi-v4-ja-en"
+    ]
+  },
+  "dependencies": [
+    "env-review"
+  ],
+  "environment": [
+    "SCAN_TRANSLATION_MODELS_DIR",
+    "SCAN_REVIEW_PYTHON",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/translation",
+      "rootEnv": "SCAN_TRANSLATION_MODELS_DIR",
+      "subdirectory": "sugoi-v4-ja-en"
+    }
+  ]
+}

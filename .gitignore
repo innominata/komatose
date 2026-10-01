@@ -1,0 +1,68 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# OCR sidecar
+.venv-ocr
+.venv-detect
+ocr/__pycache__
+**/__pycache__/
+*.pyc
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# App data (images + database)
+/data/**
+!/data/.gitkeep
+
+
+.venv-workflow
+.venv-review
+/test-results
+
+/tests/__pycache__
+/tests/fixtures/cleaning/*
+!/tests/fixtures/cleaning/.gitkeep
+
+# Copyrighted source pages, evaluation crops, and screenshots. These are
+# private working material and must never be committed or published.
+/07/
+/ix.png
+/komatose.png
+/komatose_green.png
+/image_*.png
+*sdtest*.tmp.mjs
+
+# Test fixtures derived from the private lettering/geometry evaluation pages.
+# The annotation JSON stays; the image data does not.
+/tests/fixtures/geometry/*.png
+/tests/fixtures/lettering/*.png
+
+# Local scratch and personal working notes
+*.ses
+/continue.txt
+
+# Companion browser extension is private; it is not part of this distribution.
+/chrome-extension/

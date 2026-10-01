@@ -1,0 +1,92 @@
+[
+  {
+    "page": "07/01.jpg",
+    "method": "lama",
+    "ok": true,
+    "backend": "CPU ONNX",
+    "seconds": 5.96301915391814,
+    "peakRSSKiB": 1048172,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  },
+  {
+    "page": "07/01.jpg",
+    "method": "big-lama",
+    "ok": true,
+    "backend": "cpu",
+    "seconds": 4.70952885504812,
+    "peakRSSKiB": 1015172,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  },
+  {
+    "page": "07/01.jpg",
+    "method": "aot",
+    "ok": true,
+    "backend": "cpu",
+    "seconds": 1.9748664409853518,
+    "peakRSSKiB": 584028,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  },
+  {
+    "page": "07/02.jpg",
+    "method": "lama",
+    "ok": true,
+    "backend": "CPU ONNX",
+    "seconds": 4.537777397083119,
+    "peakRSSKiB": 1029240,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  },
+  {
+    "page": "07/02.jpg",
+    "method": "big-lama",
+    "ok": true,
+    "backend": "cpu",
+    "seconds": 2.9284288419876248,
+    "peakRSSKiB": 1026876,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  },
+  {
+    "page": "07/02.jpg",
+    "method": "aot",
+    "ok": true,
+    "backend": "cpu",
+    "seconds": 1.3170173070393503,
+    "peakRSSKiB": 577612,
+    "visualReview": {
+      "letteringRemoval": null,
+      "bordersAndLines": null,
+      "screentoneContinuity": null,
+      "regressions": null
+    },
+    "changedOutsideMask": 0
+  }
+]

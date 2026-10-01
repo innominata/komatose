@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "aot",
+  "name": "AOT",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "workflow-image"
+  },
+  "config": {
+    "backend": "aot"
+  },
+  "service": {
+    "id": "cleaning-worker",
+    "resource": "native-image-workers"
+  },
+  "setup": {
+    "executable": "{root}/.venv-workflow/bin/python",
+    "args": [
+      "{root}/scripts/install-clean-models.py",
+      "--model",
+      "aot"
+    ],
+    "executableEnv": "SCAN_WORKFLOW_PYTHON"
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_WORKFLOW_MODELS_DIR",
+    "HF_HOME"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{home}/.cache/huggingface",
+      "rootEnv": "HF_HOME",
+      "subdirectory": "hub/models--ogkalu--aot-inpainting"
+    }
+  ]
+}

@@ -1,0 +1,504 @@
+{
+  "1": {
+    "boxes": [
+      [
+        47,
+        63,
+        146,
+        84
+      ],
+      [
+        47,
+        117,
+        109,
+        137
+      ],
+      [
+        47,
+        170,
+        130,
+        190
+      ],
+      [
+        46,
+        224,
+        149,
+        245
+      ],
+      [
+        46,
+        278,
+        207,
+        300
+      ]
+    ],
+    "required": "1-required.png",
+    "protected": "1-protected.png",
+    "note": "Manually selected lettering and protected areas. Required pixels extracted from source contrast within those areas, independent of model predictions. Page 1 heading excluded from targeted pixel metric.",
+    "sourceSha256": "5aec53cfd2408d22792a0c3587ab0687eed16b772a03373ab825dfb47331f5d7"
+  },
+  "2": {
+    "boxes": [
+      [
+        58,
+        77,
+        81,
+        163
+      ],
+      [
+        88,
+        77,
+        113,
+        195
+      ],
+      [
+        155,
+        34,
+        175,
+        120
+      ]
+    ],
+    "required": "2-required.png",
+    "protected": "2-protected.png",
+    "note": "Manually selected lettering and protected areas. Required pixels extracted from source contrast within those areas, independent of model predictions. Page 1 heading excluded from targeted pixel metric.",
+    "sourceSha256": "ed49b2772aac4564f96674c945d7a8f53cd7d22a6f5aac0d5160ad874f17ca42"
+  },
+  "3": {
+    "boxes": [
+      [
+        124,
+        92,
+        146,
+        132
+      ],
+      [
+        478,
+        116,
+        519,
+        220
+      ],
+      [
+        558,
+        60,
+        602,
+        153
+      ],
+      [
+        171,
+        300,
+        190,
+        338
+      ],
+      [
+        98,
+        365,
+        136,
+        437
+      ],
+      [
+        298,
+        271,
+        322,
+        331
+      ],
+      [
+        440,
+        320,
+        520,
+        437
+      ],
+      [
+        537,
+        297,
+        614,
+        420
+      ],
+      [
+        80,
+        496,
+        172,
+        738
+      ],
+      [
+        85,
+        865,
+        114,
+        897
+      ],
+      [
+        537,
+        733,
+        620,
+        879
+      ]
+    ],
+    "required": "3-required.png",
+    "protected": "3-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "85ff6120efa0c8de60718861a330b4d1cbb78ad4fbde4c0e92be80f52bb4ec4a"
+  },
+  "4": {
+    "boxes": [
+      [
+        327,
+        29,
+        420,
+        242
+      ],
+      [
+        345,
+        259,
+        447,
+        286
+      ],
+      [
+        611,
+        51,
+        642,
+        96
+      ],
+      [
+        726,
+        27,
+        757,
+        88
+      ],
+      [
+        849,
+        39,
+        875,
+        132
+      ],
+      [
+        736,
+        181,
+        803,
+        277
+      ],
+      [
+        535,
+        345,
+        583,
+        461
+      ],
+      [
+        610,
+        336,
+        646,
+        421
+      ],
+      [
+        838,
+        375,
+        899,
+        480
+      ],
+      [
+        882,
+        310,
+        920,
+        371
+      ],
+      [
+        334,
+        540,
+        429,
+        900
+      ],
+      [
+        551,
+        510,
+        690,
+        881
+      ],
+      [
+        856,
+        513,
+        904,
+        650
+      ],
+      [
+        807,
+        758,
+        820,
+        833
+      ]
+    ],
+    "required": "4-required.png",
+    "protected": "4-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "b550ddd404e55c922a08405b083e8c6aadca0e3e929f1dce4e6f5f6a9413cfa8"
+  },
+  "5": {
+    "boxes": [
+      [
+        226,
+        58,
+        334,
+        199
+      ],
+      [
+        309,
+        135,
+        386,
+        306
+      ],
+      [
+        104,
+        151,
+        161,
+        253
+      ],
+      [
+        552,
+        30,
+        613,
+        169
+      ],
+      [
+        37,
+        566,
+        100,
+        687
+      ],
+      [
+        378,
+        464,
+        495,
+        803
+      ],
+      [
+        544,
+        510,
+        601,
+        605
+      ],
+      [
+        344,
+        676,
+        416,
+        861
+      ]
+    ],
+    "required": "5-required.png",
+    "protected": "5-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "9d078c2bee5d5011657ce4e59a943e6063bf4fecc71f85b14267d433931e5d24"
+  },
+  "6": {
+    "boxes": [
+      [
+        451,
+        27,
+        485,
+        113
+      ],
+      [
+        374,
+        155,
+        462,
+        303
+      ],
+      [
+        757,
+        155,
+        857,
+        336
+      ],
+      [
+        621,
+        490,
+        680,
+        592
+      ],
+      [
+        582,
+        552,
+        601,
+        597
+      ],
+      [
+        764,
+        470,
+        825,
+        584
+      ],
+      [
+        499,
+        639,
+        517,
+        672
+      ],
+      [
+        635,
+        650,
+        717,
+        770
+      ],
+      [
+        848,
+        678,
+        868,
+        735
+      ],
+      [
+        747,
+        727,
+        832,
+        775
+      ],
+      [
+        354,
+        792,
+        393,
+        875
+      ]
+    ],
+    "required": "6-required.png",
+    "protected": "6-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "08bd6eadf3df03c82235256c6dafdddf3d2bebaaf2706844ea4c484c27ee5493"
+  },
+  "7": {
+    "boxes": [
+      [
+        190,
+        44,
+        208,
+        141
+      ],
+      [
+        536,
+        57,
+        571,
+        138
+      ],
+      [
+        94,
+        160,
+        110,
+        224
+      ],
+      [
+        245,
+        65,
+        478,
+        170
+      ],
+      [
+        518,
+        369,
+        587,
+        527
+      ],
+      [
+        18,
+        665,
+        467,
+        785
+      ],
+      [
+        522,
+        690,
+        585,
+        852
+      ],
+      [
+        33,
+        778,
+        63,
+        836
+      ]
+    ],
+    "required": "7-required.png",
+    "protected": "7-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "34d1b99f28e01608f6a3d90465cc5b7d649ce303331b32df4b5b9f6b0c98e3ea"
+  },
+  "8": {
+    "boxes": [
+      [
+        886,
+        43,
+        928,
+        61
+      ],
+      [
+        318,
+        128,
+        472,
+        215
+      ],
+      [
+        790,
+        124,
+        945,
+        199
+      ],
+      [
+        383,
+        420,
+        420,
+        501
+      ],
+      [
+        836,
+        434,
+        852,
+        503
+      ],
+      [
+        403,
+        618,
+        436,
+        730
+      ],
+      [
+        349,
+        702,
+        365,
+        770
+      ],
+      [
+        480,
+        637,
+        515,
+        730
+      ],
+      [
+        594,
+        630,
+        682,
+        772
+      ],
+      [
+        692,
+        603,
+        869,
+        713
+      ],
+      [
+        879,
+        617,
+        922,
+        766
+      ],
+      [
+        701,
+        713,
+        741,
+        813
+      ],
+      [
+        564,
+        816,
+        614,
+        909
+      ]
+    ],
+    "required": "8-required.png",
+    "protected": "8-protected.png",
+    "note": "Manually located lettering groups. Pixel coverage sampled from clearly separated black text in white balloons; protected rectangles sample faces and nearby art. Not an exhaustive pixel-perfect annotation.",
+    "sourceSha256": "b7dcbff036f91612ac91135a0c3095c1c0c0ba9d12b415c0274c2c31689b4083"
+  }
+}

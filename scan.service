@@ -1,0 +1,20 @@
+# Sample systemd unit. Copy to /etc/systemd/system/komatose.service and replace
+# the placeholders below (YOUR_USER and the install path) before enabling it.
+[Unit]
+Description=Komatose scanlation assistant
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_USER
+WorkingDirectory=/srv/komatose
+ExecStart=/usr/bin/env node /srv/komatose/node_modules/tsx/dist/cli.mjs --env-file=.env server.ts
+Restart=always
+RestartSec=3
+KillMode=process
+Environment=NODE_ENV=production
+Environment=BODY_SIZE_LIMIT=50M
+
+[Install]
+WantedBy=multi-user.target

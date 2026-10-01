@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "qwen-image-2.1",
+  "name": "Qwen Image 2.1",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "image-editor"
+  },
+  "config": {
+    "backend": "qwen-image-2.1",
+    "aliases": [
+      "qwen-image"
+    ]
+  },
+  "service": {
+    "id": "image-editor-service"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-image-model.py"
+    ]
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_IMAGE_MODELS_DIR",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/image",
+      "rootEnv": "SCAN_IMAGE_MODELS_DIR",
+      "subdirectory": "qwen-image-2.1"
+    }
+  ]
+}

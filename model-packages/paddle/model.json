@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "paddle",
+  "name": "PaddleOCR detector",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-detector"
+  },
+  "config": {
+    "backend": "paddle"
+  },
+  "service": {
+    "id": "ocr-worker",
+    "resource": "native-image-workers"
+  },
+  "environment": [
+    "PADDLEOCR_PYTHON",
+    "SCAN_OCR_MODELS_DIR",
+    "PADDLE_PDX_CACHE_HOME"
+  ],
+  "setup": {
+    "executable": "{root}/.venv-ocr/bin/python",
+    "executableEnv": "PADDLEOCR_PYTHON",
+    "args": [
+      "{root}/scripts/install-native-package.py",
+      "--model",
+      "paddle"
+    ]
+  },
+  "dependencies": [
+    "env-ocr"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{home}/.paddlex",
+      "rootEnv": "PADDLE_PDX_CACHE_HOME",
+      "subdirectory": "official_models"
+    }
+  ]
+}

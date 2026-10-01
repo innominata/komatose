@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "qwen-image-edit-2511",
+  "name": "Qwen Image Edit 2511",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "image-editor"
+  },
+  "config": {
+    "backend": "qwen-image-edit-2511",
+    "aliases": [
+      "qwen-image-edit"
+    ]
+  },
+  "service": {
+    "id": "image-editor-service"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-image-edit-model.py"
+    ]
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_IMAGE_MODELS_DIR",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/image",
+      "rootEnv": "SCAN_IMAGE_MODELS_DIR",
+      "subdirectory": "qwen-image-edit-2511"
+    }
+  ]
+}

@@ -1,0 +1,225 @@
+/* Shared editor form controls. Scope under .wf-ui so JobsPanel / ToolPalette
+   (also mounted inside the studio) keep their own button styles. */
+.wf-ui {
+  --wf-ink: var(--ink, var(--ed-text, var(--hud-text)));
+  --wf-accent: var(--accent, var(--ed-active, var(--hud-teal)));
+  --wf-line: var(--line, var(--ed-line, var(--hud-line)));
+}
+
+.wf-ui button:focus-visible,
+.wf-ui select:focus-visible,
+.wf-ui input:focus-visible,
+.wf-ui textarea:focus-visible {
+  outline: 2px solid var(--wf-accent);
+  outline-offset: 1px;
+}
+
+.wf-ui a {
+  color: var(--wf-accent);
+}
+
+.wf-ui button,
+.wf-ui input,
+.wf-ui select,
+.wf-ui textarea {
+  font: inherit;
+}
+
+.wf-ui button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  line-height: 1.3;
+  border: 1px solid rgba(244, 247, 251, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--hud-text);
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 12.5px;
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.wf-ui button:hover:not(:disabled) {
+  background: var(--hud-teal-dim);
+  color: var(--hud-teal);
+  border-color: var(--hud-teal);
+}
+
+.wf-ui button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.wf-ui button.primary {
+  background: var(--hud-teal);
+  color: #04201b;
+  border-color: var(--hud-teal);
+  font-weight: 600;
+}
+
+.wf-ui button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.wf-ui button.small {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.wf-ui input,
+.wf-ui textarea,
+.wf-ui select {
+  background: var(--hud-input-bg);
+  border: 1px solid rgba(244, 247, 251, 0.18);
+  border-radius: 4px;
+  color: var(--wf-ink);
+  padding: 5px 7px;
+  font-size: 12.5px;
+  width: 100%;
+}
+
+.wf-ui textarea {
+  resize: vertical;
+}
+
+.wf-ui input[type="checkbox"] {
+  width: auto;
+}
+
+.wf-ui input[type="color"] {
+  height: 34px;
+}
+
+.wf-ui label {
+  display: block;
+  color: var(--hud-muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.wf-ui label input,
+.wf-ui label textarea,
+.wf-ui label select {
+  display: block;
+  margin-top: 3px;
+}
+
+.wf-ui label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-ui .control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+.wf-ui .control-row select,
+.wf-ui .control-row input {
+  width: auto;
+  max-width: 210px;
+}
+
+.wf-ui .control-row label {
+  margin: 0;
+}
+
+.wf-ui .warning {
+  color: #ffc283;
+}
+
+.wf-ui .overflow-alert {
+  color: #ff9a9a;
+  background: #3a1518;
+  border: 1px solid #e24c4c;
+  padding: 6px 8px;
+  margin: 0 0 8px;
+  font: 700 11px Rajdhani, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wf-ui .empty {
+  padding: 35px;
+  color: var(--hud-muted);
+}
+
+.wf-ui .panel-hint {
+  font-size: 11px;
+  color: var(--ed-muted, var(--hud-muted));
+}
+
+.wf-ui details {
+  padding: 10px;
+  border: 1px solid var(--wf-line);
+  margin: 12px 0;
+}
+
+.wf-ui details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.wf-ui pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--hud-bg);
+  padding: 10px;
+  font-size: 12px;
+}
+
+.wf-ui h1 {
+  font-size: 26px;
+  margin: 0 0 8px;
+  letter-spacing: -0.5px;
+}
+
+.wf-ui h2 {
+  font-size: 15px;
+  margin: 20px 0 10px;
+}
+
+.wf-ui p {
+  color: var(--hud-muted);
+}
+
+.wf-ui .settings {
+  max-width: 700px;
+  padding: 16px 0;
+}
+
+.wf-ui button.primary:hover:not(:disabled) {
+  background: #5cf0d8;
+  color: #04201b;
+}
+
+.wf-ui button.danger {
+  color: var(--hud-danger);
+  border-color: var(--hud-danger);
+}
+
+.wf-ui button.danger:hover:not(:disabled) {
+  background: rgba(255, 93, 115, 0.14);
+}
+
+.wf-ui input:focus,
+.wf-ui select:focus,
+.wf-ui textarea:focus {
+  border-color: var(--hud-teal);
+  box-shadow: 0 0 0 0.15rem var(--hud-teal-dim);
+}
+
+.wf-ui input[type="checkbox"],
+.wf-ui input[type="range"] {
+  accent-color: var(--hud-teal);
+}
