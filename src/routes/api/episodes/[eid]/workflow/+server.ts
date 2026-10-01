@@ -60,7 +60,7 @@ import {
   saveSeriesRegionKinds,
   saveSeriesTypeSettings,
 } from "$lib/server/workflowService";
-import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
+import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
 import { cleaningDeviceLabel, localOperation, probeBackend } from "$lib/server/localWorker";
 import { gpuClientStatus } from "$lib/server/gpuMode";
 import { cleanWithCodex, probeCodexCleaning } from "$lib/server/codexClean";
@@ -365,6 +365,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     }
     if (action === "clear-finished") {
       return json({ ok: true, removed: clearFinishedJobs(episode.id) });
+    }
+    if (action === "clear-all") {
+      return json({ ok: true, removed: clearAllJobs(episode.id) });
     }
     if (action === "cancel" || action === "retry") {
       const job = listJobs(episode.id).find((j) => j.id === b.jobId);

@@ -55,6 +55,7 @@
     onretry,
     oncancel,
     onclear,
+    onclearall,
     onopencritique,
   }: {
     jobs?: Job[];
@@ -66,6 +67,7 @@
     onretry: (jobId: string) => void;
     oncancel: (jobId: string) => void;
     onclear: () => void;
+    onclearall: () => void;
     onopencritique: (jobId: string) => void;
   } = $props();
 
@@ -319,7 +321,19 @@
       {#if !jobs.length}<p class="empty">No jobs yet.</p>{/if}
       <div class="list-foot">
         <span class="muted">{jobs.length} logged{#if running} · {running} running{/if}</span>
-        <button type="button" class="small ghost" disabled={!finished} title="Remove finished jobs" onclick={() => onclear()}>Clear finished</button>
+        <span>
+          <button type="button" class="small ghost" disabled={!finished} title="Remove finished jobs" onclick={() => onclear()}>Clear finished</button>
+          <button
+            type="button"
+            class="small ghost"
+            disabled={!jobs.length}
+            title="Remove every job from the list"
+            onclick={() => {
+              if (running && !confirm(`${running} job(s) are still running. Remove them from the list too? They will not be stopped.`)) return;
+              onclearall();
+            }}
+          >Clear all</button>
+        </span>
       </div>
     </div>
   {/if}

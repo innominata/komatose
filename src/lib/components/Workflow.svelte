@@ -4312,6 +4312,7 @@
       onretry={(id) => act({ action: "retry", jobId: id })}
       oncancel={(id) => act({ action: "cancel", jobId: id })}
       onclear={() => act({ action: "clear-finished" })}
+      onclearall={() => act({ action: "clear-all" })}
       onopencritique={(id) => { proofreadJobId = id; }}
     />
     <StudioSettingsDrawer bind:section={settingsSection}>

@@ -483,6 +483,20 @@ export function listJobs(episodeId: string, scope: "full" | "summary" = "full") 
   });
 }
 
+/** Remove every job for the episode, including running/queued ones (their rows only; work is not aborted). */
+export function clearAllJobs(episodeId: string) {
+  const ids = (
+    sqlite.prepare("SELECT id FROM workflow_jobs WHERE episode_id=?").all(episodeId) as { id: string }[]
+  ).map((r) => r.id);
+  if (!ids.length) return 0;
+  const marks = ids.map(() => "?").join(",");
+  for (const id of ids) releaseModelJob(id);
+  sqlite.prepare(`DELETE FROM job_pages WHERE job_id IN (${marks})`).run(...ids);
+  sqlite.prepare(`DELETE FROM workflow_jobs WHERE id IN (${marks})`).run(...ids);
+  broadcast(episodeId, { type: "job:changed", id: ids[0] });
+  return ids.length;
+}
+
 export function clearFinishedJobs(episodeId: string) {
   const rows = sqlite
     .prepare("SELECT id,state FROM workflow_jobs WHERE episode_id=?")
