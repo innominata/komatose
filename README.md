@@ -7,7 +7,8 @@ Clean → Typeset → Export** — with live websocket sync and disk-stored,
 immutable page assets.
 
 The screenshots below use the bundled test series, *Give My Regards to Black
-Jack* (volume 1, pages 1–10), running on a real install.
+Jack* (volume 1, pages 1–10), running on a real install. That artwork is
+licensed separately; see [License](#license) for the required attribution.
 
 ![Series library](docs/images/01-library.png)
 
@@ -283,3 +284,24 @@ Paid model, GPU, and Python worker checks stay on their own scripts
 | [CLI_ADAPTERS.md](docs/CLI_ADAPTERS.md) · [HTTP_ENDPOINTS.md](docs/HTTP_ENDPOINTS.md) | Grok/Codex/Cursor adapters and OpenAI-compatible contracts |
 | [QWEN_IMAGE_EDIT_2511.md](docs/QWEN_IMAGE_EDIT_2511.md) | Image-edit cleaning |
 | [PROOFREADING_SERVICE.md](docs/PROOFREADING_SERVICE.md) | Optional page-image proofreader |
+
+## License
+
+**Application code** — [MIT License](LICENSE). Copyright (c) 2026 innominata.
+
+**Test series artwork** — Japanese pages in [`fixtures/test-pages/`](fixtures/test-pages/)
+and screenshots in [`docs/images/`](docs/images/) that show those pages are from
+*Give My Regards to Black Jack* (volume 1, pages 1–10). Shuho Sato and Sato Manga
+Works Ltd. permit reuse under [densho810.com/free](https://densho810.com/free/).
+**On every copy** of those pages or screenshots, show these four lines **unchanged**
+(do not alter the wording):
+
+```
+ブラックジャックによろしく
+佐藤秀峰
+Give My Regards to Black Jack
+SHUHO SATO
+```
+
+Full wording: [`fixtures/test-pages/ATTRIBUTION.txt`](fixtures/test-pages/ATTRIBUTION.txt)
+and [`docs/images/ATTRIBUTION.txt`](docs/images/ATTRIBUTION.txt).
