@@ -46,8 +46,11 @@ vite.config.ts.timestamp-*
 /tests/fixtures/cleaning/*
 !/tests/fixtures/cleaning/.gitkeep
 
-# Copyrighted source pages, evaluation crops, and screenshots. These are
-# private working material and must never be committed or published.
+# Private working material: unlicensed source pages, evaluation crops, and
+# scratch screenshots. Never commit or publish these paths.
+# Exception: the bundled test series (fixtures/test-pages, "Give My Regards to
+# Black Jack" vol. 1) is licensed for use, so docs/images/ screenshots of it
+# are allowed and tracked. See AGENTS.md.
 /07/
 /ix.png
 /komatose.png
