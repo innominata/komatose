@@ -93,7 +93,7 @@ Imsbee, the proofreading service, Komatose GPU mode.
    and [TRANSLATION_MODELS.md](./TRANSLATION_MODELS.md). The **Local models** tab
    on Setup offers the same installs as buttons (Hayai, Manga OCR, PaddleOCR-VL,
    Qwen3-VL, Hy-MT2, Imsbee, Opus-MT, RT-DETR, Comic Text Detector, Koharu, COO,
-   Qwen-Image, Big-LaMa, AOT, lama-Manga) — the docs remain the long form.
+   Qwen-Image-Edit 2511, Big-LaMa, AOT, lama-Manga) — the docs remain the long form.
 
 **Test** in a model panel is a billed native-path check. The free checks never run it.
 

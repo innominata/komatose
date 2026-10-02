@@ -1,5 +1,3 @@
-import { IMAGE_EDIT_MODELS } from "$lib/imageEdit";
-
 export type CleanBackend = {
   models?: Array<{ id: string; label: string; tasks: string[] }>;
   bigLama?: boolean;

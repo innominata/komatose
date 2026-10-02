@@ -124,7 +124,7 @@ evac_inference() {
   while read -r pid; do
     [[ -n "$pid" && "$pid" != "0" ]] || continue
     cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    if [[ "$cmd" == *llama-server* || "$cmd" == *hayai_review.py* ]]; then
+    if [[ "$cmd" == *llama-server* || "$cmd" == *hayai_review.py* || "$cmd" == *sd-server* ]]; then
       if echo "$pid" | sudo tee "$parent/cgroup.procs" >/dev/null 2>&1; then
         kept+="$pid "
       fi

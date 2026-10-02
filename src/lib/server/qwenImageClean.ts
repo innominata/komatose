@@ -1,11 +1,13 @@
+import { resolve } from 'node:path';
 import sharp from 'sharp';
 import {
   IMAGE_EDIT_ALIGN,
   IMAGE_EDIT_MODELS,
-  buildImageEditPrompt, imageEditModelOf, imageEditTuning,
-  normalizeImageEditPrompt, parseImageEditLoras, type ImageEditModelId,
+  buildImageEditPrompt, imageEditLoraList, imageEditModelOf, imageEditTuning,
+  normalizeImageEditPrompt, type ImageEditModelId,
 } from '../imageEdit';
 import { installedImageEdit, withImageEdit } from './imageEdit';
+import { imageEditLorasDir } from './gpuMode';
 
 // Same tiling as the Codex method so both reconstructions are composited alike.
 const CORE = 768;
@@ -13,10 +15,7 @@ const CONTEXT = 128;
 
 type Crop = { left: number; top: number; width: number; height: number };
 
-/**
- * The local editors want both crop sides divisible by 32, or the result blurs and drifts.
- * Every editor in IMAGE_EDIT_MODELS shares that requirement, so one helper covers both.
- */
+/** Qwen-Image-Edit wants both crop sides divisible by 32, or the result blurs and drifts. */
 const align = (value: number) => Math.max(IMAGE_EDIT_ALIGN, Math.ceil(value / IMAGE_EDIT_ALIGN) * IMAGE_EDIT_ALIGN);
 
 function minSide(id: ImageEditModelId) {
@@ -48,11 +47,14 @@ function sampleArgs(id: ImageEditModelId) {
   // Fixed seeds make cleaning runs reproducible for benchmarking; -1 varies each run.
   const seed = Number(process.env.SCAN_IMAGE_SEED);
   if (Number.isInteger(seed)) args.seed = seed;
-  // ComfyUI-style style LoRAs, resolved against --lora-model-dir by the server. A LoRA is
-  // bound to one architecture, so the edit model may name its own set.
-  const loras = parseImageEditLoras(
-    process.env[`${model.envPrefix}_LORAS`] ?? process.env.SCAN_IMAGE_LORAS,
-  );
+  // The OpenAI edits route stores this path as-is. It does not join --lora-model-dir,
+  // so a bare filename is opened from the process directory and the LoRA is skipped.
+  // Lightning's 8-step LoRA is part of that model; SCAN_IMAGE_EDIT_LIGHTNING_LORAS
+  // replaces it, and SCAN_IMAGE_LORAS stays on 2511.
+  const loras = imageEditLoraList(model, process.env).map((lora) => ({
+    path: resolve(imageEditLorasDir(), lora.path),
+    multiplier: lora.multiplier,
+  }));
   if (loras.length) args.lora = loras;
   return args;
 }

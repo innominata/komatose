@@ -10,7 +10,7 @@ import { LOCAL_REVIEW_MODELS, localReviewModel, type LocalReviewModelId } from '
 import type { OcrLang } from '../types';
 import {
   hipVisibleDevices, hipWorkerEnv, komatoseGpuEnabled, llamaServerBin, llmListenPort,
-  reviewListenPort, reviewVulkanDevice, vulkanLlamaEnv,
+  mmprojDeviceEnv, reviewListenPort, reviewVulkanDevice, vulkanLlamaEnv,
 } from './gpuMode';
 import {
   clearSavedToken, occupantOnPort, readSavedToken, reviewServiceVerdict, writeSavedToken,
@@ -196,7 +196,10 @@ function childEnv(id: LocalReviewModelId): NodeJS.ProcessEnv {
     HF_HOME: join(modelDir(), 'hf-cache'), HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1',
     PYTHONUNBUFFERED: '1', OMP_NUM_THREADS: threads, MKL_NUM_THREADS: threads,
   };
-  if (!pythonReviewModel(id)) return vulkanLlamaEnv(base);
+  if (!pythonReviewModel(id)) {
+    const device = reviewResolved(id);
+    return mmprojDeviceEnv(vulkanLlamaEnv(base), device.kind === 'gpu' ? device.name : undefined);
+  }
   if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(base);
   return torchDeviceEnv(reviewResolved(id), base);
 }

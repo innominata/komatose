@@ -237,14 +237,12 @@ export function imageEditVulkanDevice() {
 }
 
 export function imageEditListenPort(id?: string) {
-  // Each editor gets its own sd-server port so both can be resident at once.
-  if (id === 'qwen-image-edit-2511')
-    return Math.max(1, Number(process.env.SCAN_IMAGE_EDIT_PORT) || 18092);
-  return Math.max(1, Number(process.env.SCAN_IMAGE_PORT) || 18091);
+  void id;
+  return Math.max(1, Number(process.env.SCAN_IMAGE_EDIT_PORT || process.env.SCAN_IMAGE_PORT) || 18092);
 }
 
 export function imageEditListenPorts(): number[] {
-  return [imageEditListenPort('qwen-image-2.1'), imageEditListenPort('qwen-image-edit-2511')];
+  return [imageEditListenPort('qwen-image-edit-2511')];
 }
 
 export function sdServerBin() {
@@ -257,25 +255,14 @@ export function imageEditModelsDir() {
   return process.env.SCAN_IMAGE_MODELS_DIR || join(DATA_DIR, 'models/image');
 }
 
-/** One directory per editor model; see src/lib/server/imageEditModels.ts. */
+/** Directory for the Qwen-Image-Edit-2511 weights. */
 export function imageEditModelDir(id: string) {
-  if (id === 'qwen-image-edit-2511')
-    return process.env.SCAN_IMAGE_EDIT_MODEL_DIR || join(imageEditModelsDir(), id);
-  return process.env.SCAN_IMAGE_MODEL_DIR || join(imageEditModelsDir(), id);
+  return process.env.SCAN_IMAGE_EDIT_MODEL_DIR || join(imageEditModelsDir(), id);
 }
 
-/**
- * Text encoder directory for an editor. Qwen-Image-2.1 rides on the Qwen3-VL-8B copy the
- * review installer already writes; Qwen-Image-Edit-2511 needs Qwen2.5-VL and keeps it
- * beside its own weights because nothing else in this app uses that encoder.
- */
+/** Qwen-Image-Edit-2511 keeps Qwen2.5-VL beside its own weights. */
 export function imageEditTextEncoderDir(id: string) {
-  if (id === 'qwen-image-edit-2511')
-    return process.env.SCAN_IMAGE_EDIT_TEXT_ENCODER_DIR || imageEditModelDir(id);
-  return process.env.SCAN_IMAGE_TEXT_ENCODER_DIR || join(
-    process.env.SCAN_REVIEW_MODELS_DIR || join(DATA_DIR, 'models/review'),
-    'qwen3-vl-8b',
-  );
+  return process.env.SCAN_IMAGE_EDIT_TEXT_ENCODER_DIR || imageEditModelDir(id);
 }
 
 /** Optional ComfyUI-style LoRAs for the local editor, loaded by name from here. */
@@ -324,6 +311,19 @@ export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
 
 export function vulkanLlamaEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return { ...env, GGML_VK_ALLOW_GRAPHICS_QUEUE: '1' };
+}
+
+/**
+ * llama.cpp's CLIP loader ignores `-dev` and puts the projector on the first discrete GPU.
+ * `MTMD_BACKEND_DEVICE` is the name `--list-devices` prints (`Vulkan2`).
+ * Pass nothing for a CPU launch so a parent environment cannot pin a GPU while offload is off.
+ */
+export function mmprojDeviceEnv(env: NodeJS.ProcessEnv, deviceName: string | undefined): NodeJS.ProcessEnv {
+  const next = { ...env };
+  const name = (deviceName || '').trim();
+  if (name && name !== 'none' && name !== 'cpu') next.MTMD_BACKEND_DEVICE = name;
+  else delete next.MTMD_BACKEND_DEVICE;
+  return next;
 }
 
 export function hipWorkerEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

@@ -12,6 +12,9 @@ const groups = {
     "tests/detector-config.test.ts",
     "tests/remote-providers.test.ts",
     "tests/kana-chart.test.ts",
+    "tests/nvtop-usage.test.ts",
+    "tests/mmproj-device.test.ts",
+    "tests/gpu-names.test.ts",
   ],
   integration: [
     "tests/model-packages.test.ts",

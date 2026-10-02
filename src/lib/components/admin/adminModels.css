@@ -196,6 +196,8 @@
 .amodels .seg-chat { background: var(--teal); }
 .amodels .seg-edit { background: var(--violet); }
 .amodels .seg-ocr { background: #5aa9ff; }
+.amodels .seg-venv { background: var(--amber); }
+.amodels .seg-other { background: #4b5566; }
 .amodels .seg-foreign { background: repeating-linear-gradient(45deg, #3a4150 0 4px, #2b313c 4px 8px); }
 .amodels .seg-pending { background: repeating-linear-gradient(45deg, rgba(242, 181, 68, 0.6) 0 4px, rgba(242, 181, 68, 0.25) 4px 8px); }
 .amodels .seg-used { background: #4b5566; }
@@ -396,6 +398,8 @@ body.admin-dlg-open { overflow: hidden; }
 .amodels .testing-note { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--muted); }
 .amodels .matrix-legend .mx { width: 20px; height: 20px; font-size: 0.8rem; margin-right: 0.3rem; }
 .amodels .devices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+.amodels .resident { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.6rem; align-items: baseline; }
+.amodels .resident .mem { white-space: nowrap; text-align: right; }
 .amodels .device { display: grid; gap: 0.5rem; }
 .amodels .device h3 { font-size: 1rem; }
 .amodels .svc-table td .row { flex-wrap: nowrap; }

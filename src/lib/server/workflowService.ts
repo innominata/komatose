@@ -45,6 +45,7 @@ import { fitText, layoutKey, listFonts, validateStyle, regionPolygon } from "./t
 import { cleaningDeviceLabel, localOperation } from "./localWorker";
 import { detectorDefaults, resolveDetector } from "./detectorConfig";
 import { gpuClientStatus } from "./gpuMode";
+import { presentGpuStatus } from "./computeDevices";
 import { broadcast } from "./realtime";
 import { storePageThumbnail } from "./pageThumbnail";
 
@@ -642,7 +643,7 @@ export async function workflowState(series: Series, episode: Episode) {
       .all(episode.id),
     issues: await readiness(series, episode, imgs, lns),
     previewToken: await getEpisodePreviewToken(episode.id),
-    gpu: gpuClientStatus(cleaningDeviceLabel()),
+    gpu: presentGpuStatus(gpuClientStatus(cleaningDeviceLabel())),
     credits: series.credits ?? {},
     /** What "use the default" means in Chapter Settings, and which setups can run here. */
     detectorDefaults: detectorDefaults(),

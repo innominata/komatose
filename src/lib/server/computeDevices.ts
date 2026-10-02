@@ -3,11 +3,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { cpus, freemem, totalmem } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
+	assignTorchPdevs,
 	ggmlBackend,
+	gpuTitles,
 	isAutoChoice,
 	isCpuChoice,
 	looksIntegrated,
 	MIB,
+	pciKey,
 	type DeviceRuntime,
 	type GgmlDevice,
 	type GpuUsage,
@@ -16,6 +19,7 @@ import {
 	type TorchEnvironment,
 } from '../computeDevices';
 import { llamaServerBin, llamaServerEnv, sdServerBin } from './gpuMode';
+import { nvtopUsage, readRenderNodes } from './nvtopSnapshot';
 import { ROOT } from './paths';
 
 /**
@@ -86,6 +90,13 @@ export function parseGgmlDevices(text: string): GgmlDevice[] {
 	return devices;
 }
 
+/** RADV lists Vulkan0, Vulkan1, … in DRM render-node order, which is how the PCI address is known. */
+function attachGgmlPdevs(devices: GgmlDevice[]): GgmlDevice[] {
+	const renders = readRenderNodes().sort((a, b) => a.minor - b.minor);
+	if (!renders.length || renders.length !== devices.length) return devices;
+	return devices.map((device, index) => ({ ...device, pdev: pciKey(renders[index].pdev) || device.pdev }));
+}
+
 /** Cached, synchronous: launch paths need an answer before they spawn. */
 export function ggmlDevices(maxAgeMs = GGML_TTL_MS): { bin: string; devices: GgmlDevice[]; error?: string } {
 	const bin = llamaServerBin();
@@ -102,7 +113,7 @@ export function ggmlDevices(maxAgeMs = GGML_TTL_MS): { bin: string; devices: Ggm
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 	const text = `${result.stdout || ''}\n${result.stderr || ''}`;
-	const devices = parseGgmlDevices(text);
+	const devices = attachGgmlPdevs(parseGgmlDevices(text));
 	store.ggml = {
 		at: Date.now(),
 		bin,
@@ -145,7 +156,9 @@ try:
             "memory": p.total_memory,
             "integrated": bool(getattr(p, "is_integrated", 0)),
             "arch": getattr(p, "gcnArchName", None) or f"sm_{p.major}{p.minor}",
+            "domain": getattr(p, "pci_domain_id", None),
             "bus": getattr(p, "pci_bus_id", None),
+            "slot": getattr(p, "pci_device_id", None),
         })
 except Exception as error:
     out["error"] = str(error)
@@ -194,7 +207,7 @@ export function parseTorchProbe(env: string, path: string, stdout: string): Torc
 		version?: string;
 		cuda?: string | null;
 		hip?: string | null;
-		devices?: { index: number; name: string; memory: number; integrated: boolean; arch?: string; bus?: number }[];
+		devices?: { index: number; name: string; memory: number; integrated: boolean; arch?: string; domain?: number; bus?: number; slot?: number }[];
 	};
 	if (raw.missing) return { ...base, backend: 'missing', error: raw.error };
 	const backend = raw.hip ? 'rocm' : raw.cuda ? 'cuda' : 'cpu';
@@ -209,13 +222,15 @@ export function parseTorchProbe(env: string, path: string, stdout: string): Torc
 			const tail = [generic(item.name) && item.arch ? item.arch : '', item.bus != null && generic(item.name) ? `bus ${item.bus}` : '']
 				.filter(Boolean)
 				.join(', ');
+			const integrated = item.integrated || looksIntegrated(item.name, totalMiB);
 			return {
 				name: `cuda:${item.index}`,
 				index: item.index,
 				label: tail ? `${item.name} (${tail})` : item.name,
 				backend: backend === 'rocm' ? 'rocm' : 'cuda',
 				totalMiB,
-				integrated: item.integrated || looksIntegrated(item.name, totalMiB),
+				integrated,
+				pdev: item.bus == null ? undefined : pciKey({ domain: item.domain, bus: item.bus, device: item.slot }),
 			};
 		}),
 	};
@@ -300,9 +315,17 @@ function nvidiaUsage(): GpuUsage[] {
 		.map(([, name, total, used]) => ({ name, totalMiB: Number(total), usedMiB: Number(used), source: 'nvidia-smi' as const }));
 }
 
-/** Live VRAM use: nvidia-smi on NVIDIA, otherwise ggml's own free-memory report. */
+/**
+ * Live memory: one nvtop snapshot when the patched binary is installed,
+ * otherwise nvidia-smi, otherwise ggml's own free-memory report.
+ */
 export function gpuUsage(): GpuUsage[] {
 	if (store.usage && Date.now() - store.usage.at < USAGE_TTL_MS) return store.usage.value;
+	const nvtop = nvtopUsage(ggmlDevices(USAGE_TTL_MS * 2).devices);
+	if (nvtop.length) {
+		store.usage = { at: Date.now(), value: nvtop };
+		return nvtop;
+	}
 	const nvidia = nvidiaUsage();
 	const ggml = ggmlDevices(USAGE_TTL_MS * 2).devices.filter((device) => !device.integrated);
 	const value: GpuUsage[] = ggml.map((device) => {
@@ -331,12 +354,13 @@ export function hardwareSnapshot({ refresh = false } = {}): HardwareSnapshot {
 	);
 	const discrete = ggml.devices.find((device) => !device.integrated);
 	const sd = sdServerBin();
+	const namedTorch = torch.map((env) => ({ ...env, devices: assignTorchPdevs(env.devices, ggml.devices) }));
 	return {
 		cpu: { model: cpus()[0]?.model?.trim() || 'CPU', cores: cpus().length },
 		ram: { totalMiB: Math.round(totalmem() / MIB), freeMiB: Math.round(freemem() / MIB) },
 		llama: { bin: ggml.bin, found: fileExists(ggml.bin), backend: discrete?.backend || ggml.devices[0]?.backend, devices: ggml.devices, error: ggml.error },
 		imageServer: { bin: sd, found: fileExists(sd) },
-		torch,
+		torch: namedTorch,
 		usage: gpuUsage(),
 		nvidia: Boolean(onPath('nvidia-smi')),
 		rocm: existsSync('/opt/rocm') || Boolean(onPath('rocminfo')),
@@ -431,6 +455,16 @@ function cpu(reason: string): ResolvedDevice {
 	return { kind: 'cpu', label: 'CPU', reason };
 }
 
+/** PCI slot name when this process can see the card's address, otherwise the runtime id. */
+function titled(name: string, card: string): string {
+	const ggml = ggmlDevices().devices;
+	const torch = TORCH_ENVIRONMENTS.flatMap((spec) => {
+		const env = torchEnvironment(spec.env);
+		return env ? [{ ...env, devices: assignTorchPdevs(env.devices, ggml) }] : [];
+	});
+	return gpuTitles({ llama: { devices: ggml }, torch }).get(name) || `${name} · ${card}`;
+}
+
 function resolveGgml(choice: string, needMiB: number, legacy?: string): ResolvedDevice {
 	const { devices } = ggmlDevices();
 	if (!isAutoChoice(choice)) {
@@ -440,7 +474,7 @@ function resolveGgml(choice: string, needMiB: number, legacy?: string): Resolved
 			runtime: 'llama',
 			name: choice,
 			backend: known?.backend || ggmlBackend(choice),
-			label: known ? `${known.name} · ${known.label}` : choice,
+			label: known ? titled(known.name, known.label) : choice,
 			reason: 'Chosen by hand',
 		};
 	}
@@ -450,7 +484,7 @@ function resolveGgml(choice: string, needMiB: number, legacy?: string): Resolved
 		if (isCpuChoice(legacy)) return cpu('Pinned to CPU by the host configuration');
 		const known = devices.find((device) => device.name === legacy);
 		if (known)
-			return { kind: 'gpu', runtime: 'llama', name: known.name, backend: known.backend, label: `${known.name} · ${known.label}`, reason: 'Host configuration' };
+			return { kind: 'gpu', runtime: 'llama', name: known.name, backend: known.backend, label: titled(known.name, known.label), reason: 'Host configuration' };
 	}
 	const discrete = devices.filter((device) => !device.integrated && device.totalMiB >= needMiB);
 	if (!discrete.length)
@@ -461,7 +495,7 @@ function resolveGgml(choice: string, needMiB: number, legacy?: string): Resolved
 		runtime: 'llama',
 		name: pick.name,
 		backend: pick.backend,
-		label: `${pick.name} · ${pick.label}`,
+		label: titled(pick.name, pick.label),
 		reason: pick.freeMiB >= needMiB ? 'Most free memory' : 'Fits once other models unload',
 	};
 }
@@ -477,7 +511,7 @@ function resolveTorch(choice: string, needMiB: number, env: string, legacy?: str
 			name: `cuda:${index}`,
 			index,
 			backend: known?.backend || (info?.backend === 'rocm' ? 'rocm' : 'cuda'),
-			label: known ? `GPU ${index} · ${known.label}` : `GPU ${index}`,
+			label: titled(`cuda:${index}`, known?.label || `GPU ${index}`),
 			reason,
 		};
 	};
@@ -523,4 +557,14 @@ export function torchDeviceEnv(device: ResolvedDevice, env: NodeJS.ProcessEnv = 
 		delete next.HIP_VISIBLE_DEVICES;
 	}
 	return next;
+}
+
+/** User-facing status lines say GPU 1, not Vulkan1 or HIP 2. Launch ids are unchanged. */
+export function presentGpuStatus<T extends { ocr: string; llm: string; cleaning: string }>(status: T): T {
+	const titles = gpuTitles(hardwareSnapshot());
+	const swap = (text: string) => text.replace(/\b(?:Vulkan|CUDA|ROCm)\d+\b|\bcuda:\d+\b|\bHIP \d+\b/g, (token) => {
+		if (token.startsWith('HIP ')) return titles.get(`cuda:${token.slice(4)}`) || token;
+		return titles.get(token) || token;
+	});
+	return { ...status, ocr: swap(status.ocr), llm: swap(status.llm), cleaning: swap(status.cleaning) };
 }

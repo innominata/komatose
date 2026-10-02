@@ -37,8 +37,8 @@ export const CODEX_CLEAN_DIALOG: CleanPromptDialogConfig = {
 };
 
 export const IMAGE_EDIT_DIALOG: CleanPromptDialogConfig = {
-  title: "Qwen-Image 2.1 reconstruction",
-  hint: "Add specifics before the local editor runs, for example rebuild the balloon tail. Mask and crop stay attached.",
+  title: "Qwen-Image-Edit 2511 edit",
+  hint: "Describe the edit for the instruction editor, for example remove the sign and continue the brick wall behind it. Mask and crop stay attached.",
   defaultInstructions: DEFAULT_IMAGE_EDIT_INSTRUCTIONS,
   maxPrompt: MAX_IMAGE_EDIT_PROMPT,
   storageKey: "scan.imageEditPrompt",
@@ -56,10 +56,8 @@ export const IMAGE_EDIT_2511_DIALOG: CleanPromptDialogConfig = {
   compose: composeImageEditInstructions,
 };
 
-/** Drafts are kept per editor, so tuning one prompt does not disturb the other. */
 export function imageEditDialog(method: unknown): CleanPromptDialogConfig | undefined {
-  if (method === IMAGE_EDIT_MODELS[0].method) return IMAGE_EDIT_DIALOG;
-  if (method === IMAGE_EDIT_MODELS[1].method) return IMAGE_EDIT_2511_DIALOG;
+  if (method === IMAGE_EDIT_MODELS[0]?.method) return IMAGE_EDIT_2511_DIALOG;
   return undefined;
 }
 

@@ -10,9 +10,11 @@ import {
   MAX_IMAGE_EDIT_PROMPT,
   buildImageEditPrompt,
   composeImageEditInstructions,
+  imageEditLoraList,
   imageEditModelForMethod,
   imageEditModelOf,
   imageEditTuning,
+  imageEditWeightHost,
   normalizeImageEditNotes,
   normalizeImageEditPrompt,
   parseImageEditLoras,
@@ -25,28 +27,48 @@ import {
 } from "../src/lib/cleanPromptDialog";
 import { composeCodexCleanInstructions } from "../src/lib/codexCleanPrompt";
 
-test("both local editors are registered as their own cleaning methods", () => {
-  assert.equal(IMAGE_EDIT_METHOD, "qwen-image");
-  assert.deepEqual(IMAGE_EDIT_MODELS.map((model) => model.method), ["qwen-image", "qwen-image-edit"]);
+test("the local editor is registered as its own cleaning method", () => {
+  assert.equal(IMAGE_EDIT_METHOD, "qwen-image-edit");
+  assert.deepEqual(IMAGE_EDIT_MODELS.map((model) => model.method), [
+    "qwen-image-edit",
+    "qwen-image-edit-lightning",
+  ]);
   assert.equal(imageEditModelForMethod("qwen-image-edit")?.label, "Qwen-Image-Edit 2511");
+  assert.equal(imageEditModelForMethod("qwen-image-edit-lightning")?.label, "Qwen-Image-Edit 2511 Lightning");
+  assert.equal(imageEditWeightHost("qwen-image-edit-2511-lightning"), "qwen-image-edit-2511");
+  assert.equal(imageEditModelForMethod("qwen-image"), undefined);
   assert.equal(imageEditModelForMethod("codex"), undefined);
   assert.equal(imageEditModelOf("qwen-image-edit-2511").envPrefix, "SCAN_IMAGE_EDIT");
 });
 
-test("each editor keeps the sampling defaults stable-diffusion.cpp documents", () => {
-  // 6.0 for 2.1; the edit family wants a low CFG and an explicit flow schedule.
-  assert.deepEqual(IMAGE_EDIT_MODELS[0].sampling, { steps: 20, cfg: 6, denoise: 1 });
-  assert.deepEqual(IMAGE_EDIT_MODELS[1].sampling, { steps: 20, cfg: 2.5, denoise: 1, flowShift: 3 });
+test("the editor keeps the sampling defaults stable-diffusion.cpp documents", () => {
+  assert.deepEqual(IMAGE_EDIT_MODELS[0].sampling, { steps: 20, cfg: 2.5, denoise: 1, flowShift: 3 });
+  assert.deepEqual(imageEditModelOf("qwen-image-edit-2511-lightning").sampling, {
+    steps: 8, cfg: 1, denoise: 1, flowShift: 3,
+  });
+});
+
+test("Lightning tuning stays on its own variables and keeps its LoRA unless replaced", () => {
+  const lightning = imageEditModelOf("qwen-image-edit-2511-lightning");
+  assert.equal(imageEditTuning(lightning, { SCAN_IMAGE_EDIT_CFG: "3.5" }, "CFG", lightning.sampling.cfg), 1);
+  assert.equal(imageEditTuning(lightning, { SCAN_IMAGE_EDIT_LIGHTNING_CFG: "1.5" }, "CFG", lightning.sampling.cfg), 1.5);
+  assert.deepEqual(imageEditLoraList(lightning, {}), [
+    { path: "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors", multiplier: 1 },
+  ]);
+  assert.deepEqual(imageEditLoraList(lightning, { SCAN_IMAGE_LORAS: "other.safetensors" }), [
+    { path: "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors", multiplier: 1 },
+  ]);
+  assert.deepEqual(imageEditLoraList(lightning, { SCAN_IMAGE_EDIT_LIGHTNING_LORAS: "custom.safetensors:0.5" }), [
+    { path: "custom.safetensors", multiplier: 0.5 },
+  ]);
+  assert.deepEqual(imageEditLoraList(imageEditModelOf("qwen-image-edit-2511"), {}), []);
 });
 
 test("tuning overrides prefer the model's own variable over the shared one", () => {
   const edit = imageEditModelOf("qwen-image-edit-2511");
-  const gen = imageEditModelOf("qwen-image-2.1");
   assert.equal(imageEditTuning(edit, {}, "CFG", edit.sampling.cfg), 2.5);
   assert.equal(imageEditTuning(edit, { SCAN_IMAGE_CFG: "9" }, "CFG", 2.5), 9);
   assert.equal(imageEditTuning(edit, { SCAN_IMAGE_CFG: "9", SCAN_IMAGE_EDIT_CFG: "3.5" }, "CFG", 2.5), 3.5);
-  assert.equal(imageEditTuning(gen, { SCAN_IMAGE_EDIT_CFG: "3.5" }, "CFG", 6), 6);
-  // Unparseable values fall through to the documented default instead of poisoning the run.
   assert.equal(imageEditTuning(edit, { SCAN_IMAGE_EDIT_CFG: "abc" }, "CFG", 2.5), 2.5);
 });
 
@@ -116,7 +138,7 @@ test("LoRA entries parse as name[:multiplier] lists", () => {
 test("crop geometry matches what stable-diffusion.cpp documents for the model", () => {
   assert.equal(IMAGE_EDIT_ALIGN, 32);
   assert.equal(DEFAULT_IMAGE_EDIT_MIN_SIDE, 512);
-  assert.equal(DEFAULT_IMAGE_EDIT_CFG, 6);
+  assert.equal(DEFAULT_IMAGE_EDIT_CFG, 2.5);
 });
 
 test("the shared cleaning dialog keeps per-method drafts apart", () => {
@@ -134,8 +156,8 @@ test("the shared cleaning dialog keeps per-method drafts apart", () => {
   );
 });
 
-test("each editor gets its own prompt dialog so drafts do not cross over", () => {
-  assert.equal(imageEditDialog("qwen-image"), IMAGE_EDIT_DIALOG);
+test("the editor gets its own prompt dialog", () => {
+  assert.equal(imageEditDialog("qwen-image"), undefined);
   assert.equal(imageEditDialog("qwen-image-edit"), IMAGE_EDIT_2511_DIALOG);
   assert.equal(imageEditDialog("codex"), undefined);
   assert.equal(imageEditDialog(undefined), undefined);

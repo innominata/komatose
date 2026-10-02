@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { hipVisibleDevices, hipWorkerEnv, komatoseGpuEnabled } from "./gpuMode";
-import { devicePref, resolveDevice, torchDeviceEnv } from "./computeDevices";
-import { isAutoChoice, type ResolvedDevice } from "../computeDevices";
+import { devicePref, hardwareSnapshot, resolveDevice, torchDeviceEnv } from "./computeDevices";
+import { isAutoChoice, shownDevice, type ResolvedDevice } from "../computeDevices";
 import { ROOT } from "./paths";
 
 export type BackendInfo = {
@@ -61,7 +61,7 @@ export function workflowResolved(): ResolvedDevice {
 export function cleaningDeviceLabel(): string {
   const resolved = workflowResolved();
   if (resolved.kind !== "gpu") return "CPU";
-  return resolved.index != null ? `GPU ${resolved.index}` : resolved.name;
+  return shownDevice(hardwareSnapshot(), resolved.name);
 }
 
 function workflowEnv() {

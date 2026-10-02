@@ -9,8 +9,37 @@
 		modelStatus,
 		openDrawer,
 	} from '$lib/components/admin/hub.svelte';
-	import { formatMiB, deviceOptions } from '$lib/computeDevices';
+	import { formatMiB, cardLabel, deviceOptions, shownDevice } from '$lib/computeDevices';
+	import { formatResidentMemory } from '$lib/gpuResidents';
+	import type { DeviceUser } from '$lib/components/admin/hub.svelte';
 	import ModelPackTransfer from '$lib/components/ModelPackTransfer.svelte';
+
+	const ENV_NOTE: Record<string, string> = {
+		'env-ocr': 'Detectors and the cleaning worker',
+		'env-review': 'Hayai, Manga OCR, and the other PyTorch reviewers',
+		'env-workflow': 'Masking, inpainting, and bubble geometry',
+	};
+
+	function swatch(kind: DeviceUser['kind']) {
+		if (kind === 'chat') return 'chat';
+		if (kind === 'edit') return 'edit';
+		if (kind === 'venv') return 'venv';
+		if (kind === 'other') return 'other';
+		return 'ocr';
+	}
+	/** Where a pid's bytes actually sit, from the nvtop snapshot. */
+	function residentPlace(pid?: number): string {
+		if (!pid) return '';
+		const parts: string[] = [];
+		for (const device of devices) {
+			for (const user of device.users) {
+				if (user.pid !== pid) continue;
+				const memory = formatResidentMemory(user);
+				if (memory) parts.push(`${device.name} ${memory}`);
+			}
+		}
+		return parts.join(', ');
+	}
 
 	const data = $derived($hub!);
 	const devices = $derived(deviceRows(data));
@@ -79,15 +108,16 @@
 <div class="devices">
 	{#each devices as device (device.name)}
 		<div class="card device">
-			<div class="spread"><h3>{device.name}</h3><span class="muted small">{device.label}{device.integrated ? ' · integrated' : ''}</span></div>
+			<div class="spread"><h3>{device.name}</h3><span class="muted small">{cardLabel(device.label)}{device.integrated ? ' · integrated' : ''}</span></div>
 			<div class="bar lg">
 				<span class="seg-used" style="width:{Math.min(100, (device.usedMiB / Math.max(1, device.totalMiB)) * 100)}%"></span>
 			</div>
-			<div class="small"><strong>{formatMiB(device.usedMiB)}</strong> / {formatMiB(device.totalMiB)} used</div>
+			<div class="small"><strong>{formatMiB(device.usedMiB)}</strong> / {formatMiB(device.totalMiB)} {device.integrated ? 'shared with RAM' : 'VRAM'}</div>
 			<div class="stack" style="gap:.25rem">
-				{#each device.users as user (user.label)}
-					<div class="spread small">
-						<span class="row"><i class="sw seg-{user.kind === 'chat' ? 'chat' : user.kind === 'edit' ? 'edit' : 'ocr'}" style="width:10px;height:10px;display:inline-block"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
+				{#each device.users as user (`${user.pid ?? user.label}:${user.vramMiB ?? 0}:${user.gttMiB ?? 0}`)}
+					<div class="resident small">
+						<span class="row"><i class="sw seg-{swatch(user.kind)}" style="width:10px;height:10px;display:inline-block"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
+						{#if formatResidentMemory(user)}<span class="muted mem">{formatResidentMemory(user)}</span>{/if}
 					</div>
 				{:else}
 					<span class="muted small">Nothing resident right now.</span>
@@ -99,10 +129,6 @@
 		<div class="spread"><h3>System memory</h3><span class="muted small">{data.hardware.cpu.model}</span></div>
 		<div class="bar lg"><span class="seg-used" style="width:{Math.min(100, ((data.hardware.ram.totalMiB - data.hardware.ram.freeMiB) / Math.max(1, data.hardware.ram.totalMiB)) * 100)}%"></span></div>
 		<div class="small"><strong>{formatMiB(data.hardware.ram.totalMiB - data.hardware.ram.freeMiB)}</strong> / {formatMiB(data.hardware.ram.totalMiB)} used · {data.hardware.cpu.cores} cores</div>
-		<div class="small muted" style="margin-top:.5rem">PyTorch environments:</div>
-		{#each data.hardware.torch as env (env.env)}
-			<div class="spread small"><span class="muted">{env.env}</span><span class="chip {env.backend === 'missing' ? 'muted' : env.backend === 'cpu' ? 'warn' : 'ok'}">{env.backend}{env.version ? ` · ${env.version}` : ''}</span></div>
-		{/each}
 	</div>
 </div>
 
@@ -120,7 +146,7 @@
 					{@const transition = state === 'starting' || state === 'stopping'}
 					<tr>
 						<td><button class="btn link" onclick={() => openDrawer(row.id)}>{row.name}</button></td>
-						<td class="muted">{row.managed?.device || 'auto'}</td>
+						<td class="muted">{residentPlace(row.managed?.pid) || shownDevice(data.hardware, row.managed?.device || row.managedLaunch?.device) || 'auto'}</td>
 						<td class="muted">{row.managed?.port || row.managedLaunch?.port || '—'}</td>
 						<td><span class="status tone-{status.tone}"><span class="dot {status.dot || status.tone}"></span>{status.label}</span></td>
 						<td>
@@ -137,7 +163,7 @@
 				{#each data.reviewServers as server (server.id)}
 					<tr>
 						<td><button class="btn link" onclick={() => openDrawer(server.id)}>{server.label}</button>{#if !server.installed} <span class="chip muted">not installed</span>{/if}</td>
-						<td class="muted">{server.device || '—'}</td>
+						<td class="muted">{residentPlace(server.pid) || shownDevice(data.hardware, server.device) || '—'}</td>
 						<td class="muted">{server.port || '—'}</td>
 						<td><span class="status tone-{server.state === 'running' ? 'ok' : server.state === 'error' ? 'bad' : 'idle'}"><span class="dot {server.state === 'running' ? 'ok' : server.state === 'error' ? 'bad' : 'idle'}"></span>{server.state}{server.served && server.served !== server.id ? ` · serving ${server.served}` : ''}</span></td>
 						<td>
@@ -160,7 +186,7 @@
 							<button class="btn link" onclick={() => openDrawer(editor.id)}>{editor.label}</button>
 							{#if !editor.installed}<span class="chip muted">not installed</span>{/if}
 						</td>
-						<td class="muted">{editor.device}</td>
+						<td class="muted">{residentPlace(editor.pid) || shownDevice(data.hardware, editor.device)}</td>
 						<td class="muted">{editor.port}</td>
 						<td>
 							<span class="status tone-{tone}">
@@ -171,7 +197,7 @@
 						</td>
 						<td>
 							<div class="row">
-								<button class="btn ghost sm" disabled={!!busy || transition} onclick={() => void lifecycle('/api/admin/image-model', { action: 'start', model: editor.id }, editor.label, 'start')}>Start</button>
+								<button class="btn ghost sm" disabled={!!busy || transition || !editor.installed} onclick={() => void lifecycle('/api/admin/image-model', { action: 'start', model: editor.id }, editor.label, 'start')}>Start</button>
 								<button class="btn ghost sm" disabled={!!busy || !running} onclick={() => void lifecycle('/api/admin/image-model', { action: 'stop', model: editor.id }, editor.label, 'stop')}>Stop</button>
 								<button class="btn ghost sm" disabled={!!busy || !running} onclick={() => void lifecycle('/api/admin/image-model', { action: 'restart', model: editor.id }, editor.label, 'restart')}>Restart</button>
 							</div>
@@ -182,7 +208,7 @@
 		</table>
 	</div>
 	<div class="muted small" style="margin-top:.5rem">
-		Each editor is its own service on its own port, so both can run at once when they fit on their device. Starting one unloads chat models on that device.
+		Qwen-Image-Edit 2511 and Lightning share one process and one port. Starting either unloads chat models on that device.
 	</div>
 </div>
 
@@ -193,9 +219,13 @@
 			<table class="mtable">
 				<tbody>
 					{#each data.environments as env (env.id)}
+						{@const torch = data.hardware.torch.find((item) => item.env === env.id)}
 						<tr>
-							<td><strong>{env.label}</strong><div class="muted small">used by the detectors, OCR reviewers and cleaners</div></td>
-							<td>{#if env.installed}<span class="status tone-ok"><span class="dot ok"></span>Installed</span>{:else}<span class="status tone-idle"><span class="dot idle"></span>Not installed</span>{/if}</td>
+							<td><strong>{env.label}</strong><div class="muted small">{ENV_NOTE[env.id] || 'Python environment'}</div></td>
+							<td>
+								{#if env.installed}<span class="status tone-ok"><span class="dot ok"></span>Installed</span>{:else}<span class="status tone-idle"><span class="dot idle"></span>Not installed</span>{/if}
+								{#if torch}<span class="chip {torch.backend === 'missing' ? 'muted' : torch.backend === 'cpu' ? 'warn' : 'ok'}">{torch.backend}{torch.version ? ` · ${torch.version}` : ''}</span>{/if}
+							</td>
 							<td style="text-align:right">{#if !env.installed}<button class="btn ghost sm" disabled={!!busy} onclick={() => void installEnv(env.id, env.label)}>Install</button>{/if}</td>
 						</tr>
 					{/each}

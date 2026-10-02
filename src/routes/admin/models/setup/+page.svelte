@@ -7,8 +7,13 @@
 		planSteps,
 	} from '$lib/components/admin/hub.svelte';
 	import { INSTALL_TARGETS, formatDisk } from '$lib/installCatalog';
+	import { cardLabel, shownDevice } from '$lib/computeDevices';
 
 	const data = $derived($hub!);
+	const cards = $derived([...data.hardware.llama.devices].sort((a, b) => {
+		const slot = (name: string) => Number(/^GPU (\d+)$/.exec(shownDevice(data.hardware, name))?.[1] || 999);
+		return slot(a.name) - slot(b.name);
+	}));
 	const steps = ['Translation', 'Reading pages', 'Cleaning', 'Review & install'];
 	let step = $state(0);
 
@@ -42,7 +47,7 @@
 		}
 		ids.push(...read);
 		if (clean === 'fill' || clean === 'local' || clean === 'codex') ids.push('lama-manga');
-		if (clean === 'local') ids.push('qwen-image-2.1');
+		if (clean === 'local') ids.push('qwen-image-edit-2511');
 		return ids.filter((id) => !installed(id));
 	});
 	const plan = $derived(planSteps(data, wanted));
@@ -66,7 +71,7 @@
 	<div class="kicker">Guided setup</div>
 	<h1>Set up Komatose on this machine</h1>
 	<div class="hw-strip" style="margin-top:.8rem">
-		<span><i class="bi bi-gpu-card"></i> {#each data.hardware.llama.devices as device (device.name)}<b>{device.name}</b> {device.label} · {formatDisk(device.totalMiB * 1024 * 1024)} &nbsp; {/each}{#if !data.hardware.llama.devices.length}no GPU reported · CPU only{/if}</span>
+		<span><i class="bi bi-gpu-card"></i> {#each cards as device (device.name)}<b>{shownDevice(data.hardware, device.name)}</b> {cardLabel(device.label)} · {formatDisk(device.totalMiB * 1024 * 1024)} &nbsp; {/each}{#if !cards.length}no GPU reported · CPU only{/if}</span>
 		<span><i class="bi bi-memory"></i> <b>{Math.round(data.hardware.ram.totalMiB / 1024)} GB</b> RAM</span>
 	</div>
 
@@ -147,7 +152,7 @@
 		<p class="muted">Masks come from the detector you picked. Choose how Komatose fills the art underneath.</p>
 		<div class="choice-grid">
 			<button class="choice {clean === 'fill' ? 'on' : ''}" onclick={() => (clean = 'fill')}><i class="bi bi-paint-bucket"></i><strong>Fill only</strong><span class="muted">lama-Manga inpainting · 206 MB. Great on balloons and flat art.</span></button>
-			<button class="choice {clean === 'local' ? 'on' : ''}" onclick={() => (clean = 'local')}><i class="bi bi-magic"></i><strong>Redraw locally</strong><span class="muted">Qwen-Image 2.1 · 8.4 GB. Redraws detailed art under lettering.</span></button>
+			<button class="choice {clean === 'local' ? 'on' : ''}" onclick={() => (clean = 'local')}><i class="bi bi-magic"></i><strong>Redraw locally</strong><span class="muted">Qwen-Image-Edit 2511 · 20 GB. Redraws detailed art under lettering.</span></button>
 			<button class="choice {clean === 'codex' ? 'on' : ''}" onclick={() => (clean = 'codex')}><i class="bi bi-terminal"></i><strong>Redraw with Codex</strong><span class="muted">{cliTools.some((tool) => tool.id === 'codex') ? 'Codex CLI is on this server. Billed per page.' : 'Codex CLI isn’t installed on this server.'}</span></button>
 			<button class="choice {clean === 'later' ? 'on' : ''}" onclick={() => (clean = 'later')}><i class="bi bi-clock"></i><strong>Decide later</strong><span class="muted">Built-in flat fill and Telea still work.</span></button>
 		</div>

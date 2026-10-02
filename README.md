@@ -210,7 +210,7 @@ and is gitignored. Back the two up together. `SCAN_DATA_DIR` and
 | Translate | Set per machine in **Jobs & defaults** (CAT-Translate 7B on the screenshot install); CAT-Translate 7B, Hy-MT2 (1.8B Manga v5, 7B), TranslateGemma, Shisa v2.1, Sugoi v4, Opus-MT Ja→En, Imsbee Ko→En, remote OpenAI-compatible APIs, Grok / Codex / Cursor |
 | Scene notes, AI review, proofread | Any image-capable chat model |
 | Text masks | Comic Text Detector, Koharu |
-| Clean artwork | LaMa Manga, Big-LaMa, AOT, Qwen-Image 2.1, Qwen-Image-Edit 2511, Codex reconstruction |
+| Clean artwork | LaMa Manga, Big-LaMa, AOT, Qwen-Image-Edit 2511, Codex reconstruction |
 
 Models are chosen per series under **Settings → AI models** and can be saved as
 named profiles. Defaults per job live in **Admin → Models → Jobs & defaults**.

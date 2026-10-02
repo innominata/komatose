@@ -66,17 +66,18 @@
     finally { busy = ''; }
   }
   const settled = $derived(!model || !['starting', 'stopping'].includes(model.state));
-  /** Installers write different weights, so each editor names its own script. */
   const installScript = (id: ImageEditModelId) =>
-    id === 'qwen-image-2.1' ? 'scripts/install-image-model.py' : 'scripts/install-image-edit-model.py';
+    id === 'qwen-image-edit-2511-lightning'
+      ? 'scripts/install-image-edit-model.py --lightning'
+      : 'scripts/install-image-edit-model.py';
 </script>
 
 <section class="image-edit mb-4" aria-label="Local image editor">
   <h3>Local image editor</h3>
   <p class="hud-muted">
     The local editors repaint masked lettering from a crop and a prompt, like Codex cleaning but local.
-    They share {model?.device || 'the chat card'} with the chat model, so only one of them is resident at a time:
-    starting one unloads the other, and starting the chat model unloads the editor.
+    Qwen-Image-Edit 2511 and its Lightning LoRA load the same weights in one process, and they share
+    {model?.device || 'the chat card'} with the chat model. Starting the chat model unloads that process.
     Start here to keep the chosen editor loaded; a cleaning run starts it on demand and releases the card after a few idle minutes.
   </p>
   {#if !ready}
@@ -142,7 +143,7 @@
       {/each}
     </ul>
     <p class="hud-muted">
-      Building stable-diffusion.cpp with <code>-DSD_VULKAN=ON</code> provides the server both editors run on.
+      Building stable-diffusion.cpp with <code>-DSD_VULKAN=ON</code> provides the server this editor runs on.
     </p>
     {#if model.evicted.length}
       <div class="row">

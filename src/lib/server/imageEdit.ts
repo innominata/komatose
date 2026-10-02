@@ -3,7 +3,7 @@ import { existsSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:f
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DEFAULT_IMAGE_EDIT_MODEL_ID, IMAGE_EDIT_MODELS, parseImageEditLoras, type ImageEditModelId } from '../imageEdit';
+import { DEFAULT_IMAGE_EDIT_MODEL_ID, IMAGE_EDIT_MODELS, imageEditLoraList, imageEditModelOf, imageEditWeightHost, type ImageEditModelId } from '../imageEdit';
 import {
   imageEditListenPort, imageEditLorasDir as lorasDir,
   imageEditVulkanDevice, komatoseGpuEnabled, sdServerBin, vulkanLlamaEnv,
@@ -57,9 +57,8 @@ type Recipe = { model: ImageEditModelFiles; quant: string; diffusion: string; va
 type Service = { child: ChildProcess; url: string; port: number; adopted?: boolean; model: ImageEditModelId };
 
 /**
- * Each editor is its own sd-server on its own port, so both can be resident at
- * once (on different cards, or together when they fit). Nothing here swaps one
- * editor for another any more.
+ * 2511 and Lightning share one sd-server. Each id still has its own bookkeeping
+ * so a clean can be busy on one method while the other stays idle.
  */
 type ModelState = {
   service?: Service;
@@ -80,8 +79,8 @@ const freshState = (): ModelState => ({ state: 'stopped', queue: Promise.resolve
 
 const globalState = globalThis as typeof globalThis & { __scanImageEditStates?: States };
 const states: States = (globalState.__scanImageEditStates ??= {
-  'qwen-image-2.1': freshState(),
   'qwen-image-edit-2511': freshState(),
+  'qwen-image-edit-2511-lightning': freshState(),
 });
 
 function modelState(id: ImageEditModelId): ModelState {
@@ -101,7 +100,7 @@ function needMiBFor(recipe: Recipe | null, id: ImageEditModelId): number {
   return recipe
     ? estimateNeedMiB([join(recipe.model.dir, recipe.diffusion), join(recipe.model.dir, recipe.vae),
       join(recipe.model.encoderDir, recipe.model.encoderFile), join(recipe.model.encoderDir, recipe.model.encoderVisionFile)], 2048)
-    : id === 'qwen-image-edit-2511' ? 21_000 : 18_000;
+    : 21_000;
 }
 
 /**
@@ -109,8 +108,8 @@ function needMiBFor(recipe: Recipe | null, id: ImageEditModelId): number {
  * Komatose GPU mode keeps SCAN_IMAGE_DEVICE (else the chat card) as its Auto answer.
  */
 export function imageEditResolved(id?: ImageEditModelId): ResolvedDevice {
-  const model = current(id);
-  const recipe = installedImageEdit(model);
+  const model = imageEditWeightHost(current(id));
+  const recipe = installedImageEdit(current(id));
   const need = needMiBFor(recipe, model);
   const pinned = komatoseGpuEnabled() ? imageEditVulkanDevice() : (process.env.SCAN_IMAGE_DEVICE || '').trim() || undefined;
   return resolveDevice('llama', devicePref(model), need, { legacy: pinned });
@@ -123,7 +122,7 @@ const device = (id?: ImageEditModelId) => {
 /** Readiness and status copy name the card only when the editor really uses one. */
 const deviceLabel = (id?: ImageEditModelId) => {
   const resolved = imageEditResolved(id);
-  return resolved.kind === 'gpu' ? resolved.name : 'CPU';
+  return resolved.kind === 'gpu' ? resolved.label : 'CPU';
 };
 const bin = () => process.env.SCAN_IMAGE_SD_SERVER || sdServerBin();
 
@@ -139,15 +138,16 @@ function idleMs() {
  */
 function scheduleIdleStop(id: ImageEditModelId) {
   const state = modelState(id);
-  if (state.explicit || !gpuOn(id)) return;
+  if (weightBusy(id) || !gpuOn(id)) return;
   const wait = idleMs();
   if (!wait) return;
   clearTimeout(state.idle);
   const timer = setTimeout(() => {
     state.idle = undefined;
-    if (state.activeRuns || state.explicit) return;
+    if (weightBusy(id)) return;
     // Never reap a hand-started sd-server we merely adopted.
-    if (!state.service || state.service.adopted) return;
+    const resident = liveService(id);
+    if (!resident || resident.adopted) return;
     void stopImageEditServer(id).catch(() => {});
   }, wait);
   timer.unref?.();
@@ -174,10 +174,40 @@ export function installedImageEdit(id: ImageEditModelId): Recipe | null {
     if (!existsSync(join(model.encoderDir, encoderFile))) return null;
     if (!existsSync(join(model.encoderDir, encoderVision))) return null;
     if (!existsSync(bin())) return null;
+    const editor = imageEditModelOf(id);
+    if (editor.lora) {
+      const names = imageEditLoraList(editor, process.env);
+      if (!names.length || names.some((lora) => !existsSync(join(lorasDir(), lora.path)))) return null;
+    }
     return { model, quant: String(marker.quant || 'q8'), diffusion, vae };
   } catch {
     return null;
   }
+}
+
+/** Editors that load one diffusion file share one sd-server. */
+function sameWeights(a: ImageEditModelId, b: ImageEditModelId): boolean {
+  return imageEditWeightHost(a) === imageEditWeightHost(b);
+}
+
+function siblingIds(id: ImageEditModelId): ImageEditModelId[] {
+  return IMAGE_EDIT_MODELS.map((entry) => entry.id).filter((other) => sameWeights(other, id));
+}
+
+/** The live process for this weight set, whichever editor started it. */
+function liveService(id: ImageEditModelId): Service | undefined {
+  for (const other of siblingIds(id)) {
+    const service = modelState(other).service;
+    if (service && service.child.exitCode === null && service.child.signalCode === null) return service;
+  }
+  return undefined;
+}
+
+function weightBusy(id: ImageEditModelId): boolean {
+  return siblingIds(id).some((other) => {
+    const state = modelState(other);
+    return state.explicit || state.activeRuns > 0;
+  });
 }
 
 /** Every editor and whether its own service is up, for the Admin panel and method picker. */
@@ -190,7 +220,7 @@ export function imageEditModelStatuses(): ImageEditModelStatus[] {
       method: entry.method,
       installed: Boolean(recipe),
       quant: recipe?.quant,
-      active: modelState(entry.id).state === 'running',
+      active: Boolean(installedImageEdit(entry.id) && liveService(entry.id)),
     };
   });
 }
@@ -315,9 +345,11 @@ function occupiedBy(occ: PortOccupant, listenPort: number) {
 /** sd-server has no API key, so ownership is proven by the weights in its argv. */
 function ownsPort(occ: PortOccupant, id?: ImageEditModelId): boolean {
   const args = processArgsOf(occ.pid);
-  const entries = id ? [imageEditModelFiles()[id]] : IMAGE_EDIT_MODELS.map((entry) => imageEditModelFiles()[entry.id]);
-  return entries.some((entry) => {
-    const recipe = installedImageEdit(entry.id);
+  const hosts = id
+    ? [imageEditWeightHost(id)]
+    : [...new Set(IMAGE_EDIT_MODELS.map((entry) => imageEditWeightHost(entry.id)))];
+  return hosts.some((host) => {
+    const recipe = installedImageEdit(host);
     return recipe ? args.some((arg) => arg.includes(recipe.diffusion)) : false;
   });
 }
@@ -379,9 +411,9 @@ async function awaitServing(
 const modelFiles = (id: ImageEditModelId) => imageEditModelFiles()[id];
 
 /** The install instruction for whichever editor was asked for. */
-function missingModelError(id: ImageEditModelId) {
-  const script = id === 'qwen-image-2.1'
-    ? 'scripts/install-image-model.py'
+export function missingImageEditError(id: ImageEditModelId) {
+  const script = id === 'qwen-image-edit-2511-lightning'
+    ? 'scripts/install-image-edit-model.py --lightning'
     : 'scripts/install-image-edit-model.py';
   return failure(
     `${modelFiles(id).label} is not installed. Run ${script} and build stable-diffusion.cpp (${bin()}).`,
@@ -397,7 +429,7 @@ function editorConflictFor(id: ImageEditModelId): { label: string; device: strin
   const resolved = imageEditResolved(id);
   if (resolved.kind !== 'gpu') return undefined;
   for (const entry of IMAGE_EDIT_MODELS) {
-    if (entry.id === id) continue;
+    if (entry.id === id || sameWeights(entry.id, id)) continue;
     const other = modelState(entry.id);
     if (other.state !== 'running' && other.state !== 'starting') continue;
     const otherResolved = imageEditResolved(entry.id);
@@ -412,18 +444,20 @@ function editorConflictFor(id: ImageEditModelId): { label: string; device: strin
 
 async function start(abort: AbortSignal, id: ImageEditModelId): Promise<Service> {
   const recipe = installedImageEdit(id);
-  if (!recipe) throw missingModelError(id);
+  if (!recipe) throw missingImageEditError(id);
   const state = modelState(id);
-  const existing = state.service;
+  const existing = liveService(id);
   if (existing) {
     // Reuse the process already on the port, ours or adopted, rather than starting a
     // second copy that cannot bind; a dead or hung one is dropped below.
     if (existing.child.exitCode === null && existing.child.signalCode === null) {
       if (await serving(existing.url, abort)) {
+        state.service = existing;
         state.state = 'running';
         return existing;
       }
       const ready = await awaitServing(id, existing, logPath(id), abort, () => undefined);
+      state.service = ready;
       state.state = 'running';
       return ready;
     }
@@ -516,12 +550,12 @@ export function imageEditStatus(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_
     installed: Boolean(recipe),
     quant: recipe?.quant,
     device: deviceLabel(id),
-    deviceChoice: devicePref(id),
+    deviceChoice: devicePref(imageEditWeightHost(id)),
     port: listenPort,
     displaced: displacedChatModels(id),
     evicted: state.evicted ?? [],
     foreign: foreignResidentsOnDevice(id),
-    loras: parseImageEditLoras(process.env.SCAN_IMAGE_LORAS).map((lora) => lora.path),
+    loras: imageEditLoraList(imageEditModelOf(id), process.env).map((lora) => lora.path),
     models,
     busy: state.activeRuns > 0,
   };
@@ -529,7 +563,9 @@ export function imageEditStatus(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_
     return { ...base, state: 'error', pid: occ.pid, error: occupiedBy(occ, listenPort) };
   if (state.state === 'starting' || state.state === 'stopping')
     return { ...base, state: state.state, pid: occ?.pid, error: state.error };
-  if (state.service && occ) return { ...base, state: 'running', pid: occ.pid };
+  const resident = liveService(id);
+  if (resident && occ && ownsPort(occ, id) && installedImageEdit(id))
+    return { ...base, state: 'running', pid: occ.pid };
   if (state.state === 'error') return { ...base, state: 'error', error: state.error };
   return { ...base, state: 'stopped' };
 }
@@ -540,12 +576,16 @@ export function imageEditStatuses(): ImageEditStatus[] {
 }
 
 export async function stopImageEditServer(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID): Promise<void> {
-  const state = modelState(id);
-  const instance = state.service;
+  const instance = liveService(id);
   const listenPort = port(id);
   const occ = occupantOnPort(listenPort);
   if (instance && !instance.adopted) instance.child.kill('SIGTERM');
-  drop(id);
+  for (const other of siblingIds(id)) {
+    drop(other);
+    const sibling = modelState(other);
+    sibling.explicit = false;
+    if (other !== id && (sibling.state === 'running' || sibling.state === 'error')) sibling.state = 'stopped';
+  }
   // A foreign service on this port is never touched; ownership comes from the weights.
   if (!occ || !ownsPort(occ, id)) return;
   try { process.kill(occ.pid, 'SIGTERM'); } catch { /* already gone */ }
@@ -566,18 +606,18 @@ export async function stopAllImageEditServers(): Promise<void> {
 }
 
 /**
- * Starts, stops, or restarts one editor's own service. The two editors are
- * independent: each has its own port, so starting one never replaces the other.
+ * Starts, stops, or restarts the shared artwork-editor service. Lightning and
+ * 2511 load the same weights, so either action applies to that one process.
  */
 export function operateImageEditServer(
   action: 'start' | 'stop' | 'restart',
   id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID,
 ): ImageEditStatus {
   const state = modelState(id);
-  if (action !== 'stop' && !installedImageEdit(id)) throw missingModelError(id);
+  if (action !== 'stop' && !installedImageEdit(id)) throw missingImageEditError(id);
   if (state.state === 'starting' || state.state === 'stopping')
     throw failure('A start or stop is already in progress', 409);
-  if ((action === 'stop' || action === 'restart') && state.activeRuns)
+  if ((action === 'stop' || action === 'restart') && siblingIds(id).some((other) => modelState(other).activeRuns))
     throw failure('A cleaning run is in progress. Finish or cancel it first.', 409);
   state.operationId = randomUUID();
   state.error = undefined;
@@ -585,7 +625,8 @@ export function operateImageEditServer(
   state.explicit = action !== 'stop';
   clearTimeout(state.idle);
   state.idle = undefined;
-  state.promise = (async () => {
+  const gate = modelState(imageEditWeightHost(id));
+  state.promise = gate.queue.then(async () => {
     try {
       if (action !== 'start') await stopImageEditServer(id);
       if (action !== 'stop') {
@@ -600,7 +641,8 @@ export function operateImageEditServer(
       state.state = 'error';
       state.error = error instanceof Error ? error.message : String(error);
     }
-  })();
+  });
+  gate.queue = state.promise.catch(() => {});
   return imageEditStatus(id);
 }
 
@@ -616,7 +658,8 @@ export async function withImageEdit<T>(
 ): Promise<T> {
   abort?.throwIfAborted();
   const state = modelState(id);
-  const queued = state.queue.then(async () => {
+  const gate = modelState(imageEditWeightHost(id));
+  const queued = gate.queue.then(async () => {
     abort?.throwIfAborted();
     const signal = AbortSignal.any([...(abort ? [abort] : []), AbortSignal.timeout(30 * 60_000)]);
     const host = await service(signal, id);
@@ -627,7 +670,7 @@ export async function withImageEdit<T>(
       scheduleIdleStop(id);
     }
   });
-  state.queue = queued.catch(() => {});
+  gate.queue = queued.catch(() => {});
   if (!abort) return queued;
   return new Promise<T>((resolve, reject) => {
     const cancel = () => reject(abort.reason ?? new Error('Cancelled'));
@@ -653,9 +696,9 @@ export async function probeImageEditCleaning(
       available: false,
       reason: `${conflict.label} is resident on ${conflict.device} and the two editors do not fit there together — move ${label} to another device in Admin → Models, or stop ${conflict.label}`,
     };
-  const state = modelState(id);
-  const resident = state.service && (await serving(state.service.url));
-  if (resident) return { available: true, reason: `${label} is resident on ${deviceLabel(id)}` };
+  const resident = liveService(id);
+  if (resident && (await serving(resident.url)))
+    return { available: true, reason: `${label} is resident on ${deviceLabel(id)}` };
   const displaced = displacedChatModels(id);
   if (displaced.length)
     return {

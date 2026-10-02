@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile, rm, access } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm, access, rename } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,25 +15,11 @@ process.env.SCAN_GPU_MODE = '';
 // side, so pin both editors to CPU for host-independent reason strings.
 process.env.SCAN_IMAGE_DEVICE = 'cpu';
 
-// The editor counts as installed once the marker, both weight files, the shared
-// review text encoder, and the sd-server executable are all present.
-const modelDir = join(root, 'models/image/qwen-image-2.1');
-const encoderDir = join(root, 'models/review/qwen3-vl-8b');
-// The second editor is self-contained: its Qwen2.5-VL encoder lives beside its own weights.
+// The editor counts as installed once the marker, weight files, text encoder, and
+// the sd-server executable are all present. Qwen2.5-VL lives beside the weights.
 const editDir = join(root, 'models/image/qwen-image-edit-2511');
-await mkdir(modelDir, { recursive: true });
-await mkdir(encoderDir, { recursive: true });
 await mkdir(join(editDir, 'VAE'), { recursive: true });
-process.env.SCAN_IMAGE_MODEL_DIR = modelDir;
-process.env.SCAN_IMAGE_TEXT_ENCODER_DIR = encoderDir;
 process.env.SCAN_IMAGE_EDIT_MODEL_DIR = editDir;
-await writeFile(join(modelDir, 'qwen_image_2.1-Q8_0.gguf'), 'diffusion');
-await writeFile(join(modelDir, 'vae.gguf'), 'vae');
-await writeFile(join(modelDir, 'installed.json'), JSON.stringify({
-  quant: 'q8', diffusion: { file: 'qwen_image_2.1-Q8_0.gguf' }, vae: { file: 'vae.gguf' },
-}));
-await writeFile(join(encoderDir, 'Qwen3-VL-8B-Instruct-Q8_0.gguf'), 'encoder');
-await writeFile(join(encoderDir, 'mmproj-F16.gguf'), 'mmproj');
 await writeFile(join(editDir, 'qwen-image-edit-2511-Q4_K_M.gguf'), 'diffusion');
 await writeFile(join(editDir, 'VAE', 'Qwen_Image-VAE.safetensors'), 'vae');
 await writeFile(join(editDir, 'Qwen2.5-VL-7B-Instruct.Q5_K_M.gguf'), 'encoder');
@@ -75,7 +61,7 @@ http.createServer((req, res) => {
   req.on('end', () => {
     if (req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ data: [{ id: 'qwen-image-2.1' }] }));
+      return res.end(JSON.stringify({ data: [{ id: 'qwen-image-edit-2511' }] }));
     }
     const body = Buffer.concat(chunks);
     fs.appendFileSync(root + '/requests.jsonl', JSON.stringify({
@@ -130,11 +116,11 @@ async function fixture(name: string, width: number, height: number, pixels: [num
 
 test('cleaning replaces marked lettering and keeps native page dimensions', async () => {
   assert.deepEqual(await probeImageEditCleaning(), {
-    available: true, reason: 'Starts Qwen-Image 2.1 on CPU when cleaning runs',
+    available: true, reason: 'Starts Qwen-Image-Edit 2511 on CPU when cleaning runs',
   });
   const opts = await fixture('small', 96, 80, [[40, 30], [41, 30], [42, 31]]);
   const result = await cleanWithQwenImage(opts);
-  assert.equal(result.method, 'qwen-image');
+  assert.equal(result.method, 'qwen-image-edit');
   assert.equal(result.patches, 1);
   const output = await sharp(opts.out).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   assert.equal(output.info.width, 96);
@@ -153,10 +139,9 @@ test('cleaning replaces marked lettering and keeps native page dimensions', asyn
   assert.match(request.body, /"sample_steps":20/);
   // stable-diffusion.cpp's JSON mirrors its C struct: a top-level cfg_scale is ignored and
   // text guidance has to arrive as sample_params.guidance.txt_cfg.
-  assert.match(request.body, /"guidance":\{"txt_cfg":6\}/);
+  assert.match(request.body, /"guidance":\{"txt_cfg":2\.5\}/);
   assert.doesNotMatch(request.body, /"cfg_scale"/);
-  // 2.1 picks its flow schedule from the crop size, so no explicit shift is sent.
-  assert.doesNotMatch(request.body, /"flow_shift"/);
+  assert.match(request.body, /"flow_shift":3/);
   // No LoRA is configured in this fixture, so the request must not ask for one.
   assert.doesNotMatch(request.body, /"lora"/);
 });
@@ -186,9 +171,11 @@ test('style LoRAs are offered to the sampler and loaded from the editor LoRA dir
     delete process.env.SCAN_IMAGE_LORAS;
   }
   const request = (await calls()).at(-1)!;
-  assert.match(request.body, /"lora":\[\{"path":"webtoon\.safetensors","multiplier":0\.7\},\{"path":"tidy\.safetensors","multiplier":1\}\]/);
-  // sd-server refuses a LoRA path when no directory is configured to resolve it in.
-  const args = JSON.parse(await readFile(join(root, `args-${process.env.SCAN_IMAGE_PORT}.json`), 'utf8')) as string[];
+  const { imageEditLorasDir } = await import('../src/lib/server/gpuMode');
+  const loraDir = imageEditLorasDir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(request.body, new RegExp(`"lora":\\[\\{"path":"${loraDir}/webtoon\\.safetensors","multiplier":0\\.7\\},\\{"path":"${loraDir}/tidy\\.safetensors","multiplier":1\\}\\]`));
+  // The native API still resolves names from this directory. The edits route does not.
+  const args = JSON.parse(await readFile(join(root, `args-${process.env.SCAN_IMAGE_EDIT_PORT}.json`), 'utf8')) as string[];
   const at = args.indexOf('--lora-model-dir');
   assert.ok(at > 0, 'the server is told where LoRAs live');
   assert.match(args[at + 1], /loras$/);
@@ -274,45 +261,143 @@ test('cancelling a running edit stops waiting and leaves no output', async () =>
   await writeFile(modePath, 'success');
 });
 
-test('each editor runs its own service, weights, encoder and sampling defaults', async () => {
-  // 2.1 is still resident from the earlier tests; the second editor starts beside
-  // it on its own port instead of swapping it out.
+test('the editor loads its own weights, encoder and sampling defaults', async () => {
   assert.deepEqual(await probeImageEditCleaning('qwen-image-edit-2511'), {
-    available: true, reason: 'Starts Qwen-Image-Edit 2511 on CPU when cleaning runs',
+    available: true, reason: 'Qwen-Image-Edit 2511 is resident on CPU',
   });
   const opts = await fixture('edit-2511', 64, 64, [[32, 32], [33, 32]]);
   const result = await cleanWithQwenImage({ ...opts, model: 'qwen-image-edit-2511' });
   assert.equal(result.method, 'qwen-image-edit');
   assert.equal(result.backend, 'Qwen-Image-Edit 2511 · stable-diffusion.cpp');
 
-  // Two processes on two ports: the 2.1 server is untouched by the 2511 run.
   const editStatus = imageEditStatus('qwen-image-edit-2511');
-  const mainStatus = imageEditStatus('qwen-image-2.1');
   assert.equal(editStatus.state, 'running');
-  assert.equal(mainStatus.state, 'running');
-  assert.notEqual(editStatus.port, mainStatus.port);
   const args = JSON.parse(await readFile(join(root, `args-${editStatus.port}.json`), 'utf8')) as string[];
   assert.match(args[args.indexOf('--diffusion-model') + 1], /qwen-image-edit-2511-Q4_K_M\.gguf$/);
   assert.match(args[args.indexOf('--llm') + 1], /Qwen2\.5-VL-7B-Instruct\.Q5_K_M\.gguf$/);
-  // Without this the 2511 edit quality degrades badly, per stable-diffusion.cpp's docs.
   assert.ok(args.includes('qwen_image_zero_cond_t=true'), 'zero_cond_t is passed through');
-  const mainArgs = JSON.parse(await readFile(join(root, `args-${mainStatus.port}.json`), 'utf8')) as string[];
-  assert.match(mainArgs[mainArgs.indexOf('--diffusion-model') + 1], /qwen_image_2\.1-Q8_0\.gguf$/);
 
   const request = (await calls()).at(-1)!;
-  // Documented for the edit family; 2.1's cfg of 6 would burn the whole crop.
   assert.match(request.body, /"guidance":\{"txt_cfg":2\.5\}/);
   assert.match(request.body, /"flow_shift":3/);
   assert.match(request.body, /"sample_method":"euler"/);
   assert.match(request.body, /"strength":1/);
 
-  // The panel reports both editors, each resident on its own service.
   assert.equal(editStatus.id, 'qwen-image-edit-2511');
   assert.deepEqual(editStatus.models.map((row) => [row.id, row.installed, row.active]), [
-    ['qwen-image-2.1', true, true],
     ['qwen-image-edit-2511', true, true],
+    ['qwen-image-edit-2511-lightning', false, false],
   ]);
   assert.equal(editStatus.quant, 'q4_k_m');
+});
+
+test('Lightning is installed only when the 2511 weights and the LoRA are both present', async () => {
+  const { IMAGE_EDIT_LIGHTNING_LORA } = await import('../src/lib/imageEdit');
+  const { imageEditLorasDir } = await import('../src/lib/server/gpuMode');
+  const { installTarget } = await import('../src/lib/installCatalog');
+  const { targetInstalled } = await import('../src/lib/server/modelInstall');
+  const loraDir = imageEditLorasDir();
+  const lora = join(loraDir, IMAGE_EDIT_LIGHTNING_LORA);
+  await mkdir(loraDir, { recursive: true });
+
+  assert.equal(targetInstalled(installTarget('qwen-image-edit-2511-lightning')!).installed, false);
+  assert.match(targetInstalled(installTarget('qwen-image-edit-2511-lightning')!).detail || '', /Lightning LoRA is not downloaded/);
+  assert.deepEqual(await probeImageEditCleaning('qwen-image-edit-2511-lightning'), {
+    available: false, reason: 'Qwen-Image-Edit 2511 Lightning is not installed',
+  });
+
+  await writeFile(lora, 'lora');
+  try {
+    const away = `${editDir}.away`;
+    await rename(editDir, away);
+    await mkdir(editDir);
+    try {
+      assert.equal(targetInstalled(installTarget('qwen-image-edit-2511-lightning')!).installed, false);
+      assert.match(targetInstalled(installTarget('qwen-image-edit-2511-lightning')!).detail || '', /weights are not installed/);
+      assert.deepEqual(await probeImageEditCleaning('qwen-image-edit-2511-lightning'), {
+        available: false, reason: 'Qwen-Image-Edit 2511 Lightning is not installed',
+      });
+    } finally {
+      await rm(editDir, { recursive: true, force: true });
+      await rename(away, editDir);
+    }
+    assert.equal(targetInstalled(installTarget('qwen-image-edit-2511-lightning')!).installed, true);
+  } finally {
+    await rm(lora);
+  }
+});
+
+test('a running 2511 server is reused for a Lightning clean', async () => {
+  const { IMAGE_EDIT_LIGHTNING_LORA } = await import('../src/lib/imageEdit');
+  const { imageEditLorasDir } = await import('../src/lib/server/gpuMode');
+  const lora = join(imageEditLorasDir(), IMAGE_EDIT_LIGHTNING_LORA);
+  await mkdir(imageEditLorasDir(), { recursive: true });
+  await writeFile(lora, 'lora');
+  try {
+    const opts = await fixture('lightning', 64, 64, [[20, 20]]);
+    const before = imageEditStatus('qwen-image-edit-2511');
+    assert.equal(before.state, 'running');
+    const result = await cleanWithQwenImage({ ...opts, model: 'qwen-image-edit-2511-lightning' });
+    assert.equal(result.method, 'qwen-image-edit-lightning');
+    const request = (await calls()).at(-1)!;
+    assert.match(request.body, /"sample_steps":8/);
+    assert.match(request.body, /"guidance":\{"txt_cfg":1\}/);
+    assert.match(request.body, /"flow_shift":3/);
+    assert.match(request.body, /"sample_method":"euler"/);
+    assert.match(request.body, /"strength":1/);
+    assert.match(request.body, new RegExp(`"path":"${lora.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+
+    const lightning = imageEditStatus('qwen-image-edit-2511-lightning');
+    const base = imageEditStatus('qwen-image-edit-2511');
+    assert.equal(lightning.state, 'running');
+    assert.equal(base.state, 'running');
+    assert.equal(lightning.port, base.port);
+    assert.deepEqual(lightning.models.map((row) => [row.id, row.installed, row.active]), [
+      ['qwen-image-edit-2511', true, true],
+      ['qwen-image-edit-2511-lightning', true, true],
+    ]);
+
+    process.env.SCAN_IMAGE_EDIT_LIGHTNING_CFG = '1.5';
+    try {
+      await cleanWithQwenImage({ ...opts, model: 'qwen-image-edit-2511-lightning' });
+    } finally {
+      delete process.env.SCAN_IMAGE_EDIT_LIGHTNING_CFG;
+    }
+    assert.match((await calls()).at(-1)!.body, /"txt_cfg":1\.5/);
+
+    await cleanWithQwenImage({ ...opts, model: 'qwen-image-edit-2511' });
+    const baseRequest = (await calls()).at(-1)!;
+    assert.match(baseRequest.body, /"sample_steps":20/);
+    assert.match(baseRequest.body, /"guidance":\{"txt_cfg":2\.5\}/);
+    assert.doesNotMatch(baseRequest.body, /"lora"/);
+  } finally {
+    await rm(lora, { force: true });
+  }
+});
+
+test('disabling one editor removes only that id from the clean method list', async () => {
+  const { listRegistryRows, saveProbeResult, updateRegistryRow } = await import('../src/lib/server/modelRegistryStore');
+  const { imageWorkflowChoices } = await import('../src/lib/server/modelImageWorkflow');
+  const ids = ['qwen-image-edit-2511', 'qwen-image-edit-2511-lightning'] as const;
+  for (const id of ids) {
+    const row = listRegistryRows(true).find((item) => item.id === id);
+    assert.ok(row?.taskFingerprints?.cleaning, `${id} has no cleaning fingerprint`);
+    saveProbeResult(id, {
+      operation: 'cleaning',
+      ok: true,
+      at: Date.now(),
+      fingerprint: row.taskFingerprints.cleaning,
+    });
+  }
+  const offered = () => imageWorkflowChoices()
+    .map((row) => row.id)
+    .filter((id) => (ids as readonly string[]).includes(id));
+  assert.deepEqual(offered().sort(), [...ids].sort());
+  updateRegistryRow('qwen-image-edit-2511-lightning', { disabled: true });
+  assert.deepEqual(offered(), ['qwen-image-edit-2511']);
+  updateRegistryRow('qwen-image-edit-2511', { disabled: true });
+  updateRegistryRow('qwen-image-edit-2511-lightning', { disabled: false });
+  assert.deepEqual(offered(), ['qwen-image-edit-2511-lightning']);
 });
 
 test('an editor with no weights installed is reported as unavailable', async () => {

@@ -7,7 +7,6 @@
     inpaintUnavailable,
     type CleanBackend,
   } from "$lib/cleanMethods";
-  import { imageEditModelForMethod } from "$lib/imageEdit";
   import { TYPESET_FOLLOWUP_LABEL, PAGE_PROOFREAD_LABEL } from "$lib/pageProofread";
   import { bubbleFitPoints } from "$lib/regionGeometry";
   import { maskDraftKey } from "$lib/draftKeys";

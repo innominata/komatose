@@ -1,0 +1,122 @@
+diff --git a/include/nvtop/extract_gpuinfo_common.h b/include/nvtop/extract_gpuinfo_common.h
+index d088a7a..c06d8bf 100644
+--- a/include/nvtop/extract_gpuinfo_common.h
++++ b/include/nvtop/extract_gpuinfo_common.h
+@@ -191,6 +191,7 @@ enum gpuinfo_process_info_valid {
+   gpuinfo_process_cpu_memory_res_valid,
+   gpuinfo_process_gpu_cycles_valid,
+   gpuinfo_process_sample_delta_valid,
++  gpuinfo_process_gpu_gtt_usage_valid,
+   gpuinfo_process_info_count
+ };
+ 
+@@ -208,7 +209,8 @@ struct gpu_process {
+   unsigned gpu_usage;                  // Percentage of GPU used by the process
+   unsigned encode_usage;               // Percentage of GPU encoder used by the process
+   unsigned decode_usage;               // Percentage of GPU decoder used by the process
+-  unsigned long long gpu_memory_usage; // Memory used by the process
++  unsigned long long gpu_memory_usage; // VRAM used by the process
++  unsigned long long gpu_gtt_usage;    // System memory mapped for the GPU (GTT), not part of gpu_memory_usage
+   unsigned gpu_memory_percentage;      // Percentage of the total device memory
+                                        // consumed by the process
+   unsigned cpu_usage;
+diff --git a/src/extract_gpuinfo_amdgpu.c b/src/extract_gpuinfo_amdgpu.c
+index ba47e31..9fb8bc2 100644
+--- a/src/extract_gpuinfo_amdgpu.c
++++ b/src/extract_gpuinfo_amdgpu.c
+@@ -1049,14 +1049,10 @@ static bool parse_drm_fdinfo_amd(struct gpu_info *info, FILE *fdinfo_file, struc
+       client_id_set = true;
+     } else if (!strcmp(key, drm_amdgpu_vram_old) || !strcmp(key, drm_amdgpu_vram) ||
+                !strcmp(key, drm_amdgpu_gtt_old) || !strcmp(key, drm_amdgpu_gtt)) {
+-      // On integrated GPUs, GTT is the primary GPU memory and the device-level
+-      // accounting (amdgpu_query_info above) sums it with VRAM, so count both.
+-      // On discrete GPUs the device-level accounting is VRAM-only: counting GTT
+-      // here would desync the per-process numerator from the device total,
+-      // skew gpu_memory_percentage, and can push gpu_memory_usage above
+-      // total_memory, causing the value to be dropped entirely.
+-      if ((!strcmp(key, drm_amdgpu_gtt_old) || !strcmp(key, drm_amdgpu_gtt)) && !static_info->integrated_graphics)
+-        continue;
++      // VRAM and GTT stay separate. Integrated devices fold GTT into the device
++      // total; discrete devices do not. Adding GTT into gpu_memory_usage on a
++      // discrete card pushes the process above total_memory and the value is dropped.
++      bool gtt = !strcmp(key, drm_amdgpu_gtt_old) || !strcmp(key, drm_amdgpu_gtt);
+ 
+       unsigned long mem_int;
+       char *endptr;
+@@ -1065,7 +1061,12 @@ static bool parse_drm_fdinfo_amd(struct gpu_info *info, FILE *fdinfo_file, struc
+       if (endptr == val || (strcmp(endptr, " kB") && strcmp(endptr, " KiB")))
+         continue;
+ 
+-      if (GPUINFO_PROCESS_FIELD_VALID(process_info, gpu_memory_usage))
++      if (gtt) {
++        if (GPUINFO_PROCESS_FIELD_VALID(process_info, gpu_gtt_usage))
++          SET_GPUINFO_PROCESS(process_info, gpu_gtt_usage, process_info->gpu_gtt_usage + mem_int * 1024);
++        else
++          SET_GPUINFO_PROCESS(process_info, gpu_gtt_usage, mem_int * 1024);
++      } else if (GPUINFO_PROCESS_FIELD_VALID(process_info, gpu_memory_usage))
+         SET_GPUINFO_PROCESS(process_info, gpu_memory_usage, process_info->gpu_memory_usage + mem_int * 1024);
+       else
+         SET_GPUINFO_PROCESS(process_info, gpu_memory_usage, mem_int * 1024);
+@@ -1208,10 +1209,11 @@ static bool parse_drm_fdinfo_amd(struct gpu_info *info, FILE *fdinfo_file, struc
+     struct amdgpu_process_info_cache *cache_entry_check;
+     HASH_FIND_CLIENT(gpu_info->current_update_process_cache, &cache_entry->client_id, cache_entry_check);
+     if (cache_entry_check) {
+-      // Already processed this client_id, free the entry if we allocated it
++      // Already processed this client_id. Returning true would add the same
++      // VRAM and GTT again for every duplicated DRM file descriptor.
+       if (cache_entry != cache_entry_check)
+         free(cache_entry);
+-      goto parse_fdinfo_exit;
++      return false;
+     }
+ 
+     // Store this measurement data
+diff --git a/src/extract_processinfo_fdinfo.c b/src/extract_processinfo_fdinfo.c
+index b8be7dc..701757d 100644
+--- a/src/extract_processinfo_fdinfo.c
++++ b/src/extract_processinfo_fdinfo.c
+@@ -245,6 +245,11 @@ void processinfo_sweep_fdinfos(void) {
+                             process_info->gpu_memory_usage + processes_info_local.gpu_memory_usage);
+       }
+ 
++      if (GPUINFO_PROCESS_FIELD_VALID(&processes_info_local, gpu_gtt_usage)) {
++        SET_GPUINFO_PROCESS(process_info, gpu_gtt_usage,
++                            process_info->gpu_gtt_usage + processes_info_local.gpu_gtt_usage);
++      }
++
+       if (GPUINFO_PROCESS_FIELD_VALID(&processes_info_local, gpu_usage)) {
+         SET_GPUINFO_PROCESS(process_info, gpu_usage, process_info->gpu_usage + processes_info_local.gpu_usage);
+       }
+diff --git a/src/interface.c b/src/interface.c
+index 9833f03..cd2aa70 100644
+--- a/src/interface.c
++++ b/src/interface.c
+@@ -2644,6 +2644,14 @@ void print_snapshot(struct list_head *devices, bool use_fahrenheit_option, bool
+     else
+       printf("%s\"%s\": null,\n", indent_level_four, device_name_field);
+ 
++    // PCI address (0000:07:00.0). Two cards often share a marketing name; this is how callers tell them apart.
++    if (device->pdev[0])
++      printf("%s\"pdev\": \"%s\",\n", indent_level_four, device->pdev);
++    else
++      printf("%s\"pdev\": null,\n", indent_level_four);
++
++    printf("%s\"integrated\": %s,\n", indent_level_four, device->static_info.integrated_graphics ? "true" : "false");
++
+     // Device Architecture
+     if (GPUINFO_STATIC_FIELD_VALID(&device->static_info, device_architecture))
+       printf("%s\"%s\": \"%s\",\n", indent_level_four, device_architecture_field, device->static_info.device_architecture);
+@@ -2841,6 +2849,13 @@ void print_snapshot(struct list_head *devices, bool use_fahrenheit_option, bool
+         else
+           printf("null,\n");
+ 
++        // System memory the GPU is holding (GTT). Not included in gpu_mem_bytes_alloc.
++        printf("%s\"gpu_gtt_bytes\": ", indent_level_eight);
++        if (GPUINFO_PROCESS_FIELD_VALID(proc, gpu_gtt_usage))
++          printf("\"%llu\",\n", proc->gpu_gtt_usage);
++        else
++          printf("\"0\",\n");
++
+         // GPU memory usage
+         printf("%s\"gpu_mem_usage\": ", indent_level_eight);
+         if (GPUINFO_PROCESS_FIELD_VALID(proc, gpu_memory_percentage))

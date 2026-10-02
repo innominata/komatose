@@ -34,7 +34,7 @@ import {
 import { launchPreset } from "./managedModelConfig";
 import { estimateNeedMiB, llamaDeviceArgs, resolveDevice } from "./computeDevices";
 import type { ResolvedDevice } from "../computeDevices";
-import { llmListenPort, llamaServerEnv, reservedImageEditPort, reservedReviewService } from "./gpuMode";
+import { llmListenPort, llamaServerEnv, mmprojDeviceEnv, reservedImageEditPort, reservedReviewService } from "./gpuMode";
 
 export { launchPreset };
 export type ManagedState =
@@ -410,10 +410,10 @@ async function startRow(row: ModelRow, e: Entry, signal: AbortSignal) {
       0o600,
     );
     const token = randomUUID();
-    const launchEnv: NodeJS.ProcessEnv = {
+    const launchEnv: NodeJS.ProcessEnv = mmprojDeviceEnv({
       ...llamaServerEnv(recipe.executable),
       SCAN_MANAGED_OWNER: token,
-    };
+    }, recipe.projectorPath && device.kind === 'gpu' ? device.name : undefined);
     for (const key of Object.keys(launchEnv))
       if (key.startsWith("LLAMA_ARG_")) delete launchEnv[key];
     if (row.requestPreset === "qwen-thinking")

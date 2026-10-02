@@ -42,6 +42,7 @@ const {
 	installCommand,
 	installStatus,
 	listInstallStatuses,
+	planInstallSteps,
 	startInstall,
 	targetInstalled,
 	uninstallPlan,
@@ -86,8 +87,8 @@ test('catalog ids are unique, grouped, and sized for decisions', () => {
 		'sugoi-v4-ja-en',
 		'translategemma-4b-q4',
 		'translategemma-12b-q4',
-		'qwen-image-2.1',
 		'qwen-image-edit-2511',
+		'qwen-image-edit-2511-lightning',
 		'big-lama',
 		'aot',
 		'lama-manga',
@@ -115,6 +116,11 @@ test('every command is a whitelisted script with fixed arguments', () => {
 	assert.ok(
 		installCommand(installTarget('qwen-image-edit-2511')!).command.includes('install-image-edit-model.py'),
 	);
+	const lightning = installTarget('qwen-image-edit-2511-lightning')!;
+	assert.ok(installCommand(lightning).command.includes('install-image-edit-model.py --lightning'));
+	assert.equal(lightning.diskBytes, 849_608_296);
+	assert.deepEqual(lightning.installsWith, ['qwen-image-edit-2511']);
+	assert.equal(lightning.requires?.includes('qwen-image-edit-2511'), false);
 	assert.ok(
 		installCommand(installTarget('rtdetr')!).command.includes('install-detect-models.py --model rtdetr'),
 	);
@@ -205,7 +211,23 @@ test('uninstall plans name the files each installer wrote, and never a dangerous
 	assert.ok(uninstallPlan('env-review').paths[0].path.endsWith('.venv-review'));
 	assert.ok(uninstallPlan('hayai-ocr-v2').paths.some((item) => item.kind === 'marker'));
 	assert.ok(uninstallPlan('qwen3-vl-8b').paths.some((item) => item.path.includes('models/review/qwen3-vl-8b')));
-	assert.ok(uninstallPlan('qwen-image-2.1').paths[0].path.includes('models/image'));
+	assert.ok(uninstallPlan('qwen-image-edit-2511').paths[0].path.includes('models/image'));
+	assert.match(uninstallPlan('qwen-image-edit-2511').warnings.join('\n'), /Lightning uses these weights/);
+	const lora = uninstallPlan('qwen-image-edit-2511-lightning');
+	assert.match(lora.paths[0].path, /Qwen-Image-Edit-2511-Lightning-8steps-V1\.0-bf16\.safetensors$/);
+	assert.equal(lora.paths.some((item) => item.path.endsWith('qwen-image-edit-2511')), false);
+});
+
+test('installing Lightning queues the 2511 weights first when they are missing', () => {
+	const { plan } = planInstallSteps(['qwen-image-edit-2511-lightning']);
+	const keys = plan.map((item) => item.key);
+	const base = keys.indexOf('qwen-image-edit-2511');
+	const fast = keys.indexOf('qwen-image-edit-2511-lightning');
+	assert.ok(base >= 0 && fast > base, keys.join(','));
+	assert.match(plan[base].neededBy || '', /Lightning/);
+	const state = targetInstalled(installTarget('qwen-image-edit-2511-lightning')!);
+	assert.equal(state.installed, false);
+	assert.match(state.detail || '', /weights are not installed/);
 });
 
 test('uninstalling an environment waits for the models that run in it', async () => {

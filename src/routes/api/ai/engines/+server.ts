@@ -2,6 +2,7 @@ import { listManagedStatuses } from '$lib/server/managedModels';
 import { engineReadiness } from '$lib/server/engineReadiness';
 import { json } from '@sveltejs/kit';
 import { gpuClientStatus } from '$lib/server/gpuMode';
+import { presentGpuStatus } from '$lib/server/computeDevices';
 import { cleaningDeviceLabel } from '$lib/server/localWorker';
 import { fail, messageOf, requireUser, statusOf } from '$lib/server/http';
 import type { RequestHandler } from './$types';
@@ -36,7 +37,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 		const transcription = transcriptionPickerRows(rows);
 		return json({
 			ok: true,
-			gpu: { ...gpuClientStatus(cleaningDeviceLabel()), models: listManagedStatuses() },
+			gpu: { ...presentGpuStatus(gpuClientStatus(cleaningDeviceLabel())), models: listManagedStatuses() },
 			engines: rows,
 			rows,
 			hosts,

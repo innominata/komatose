@@ -12,13 +12,14 @@ import { DEFAULT_IMAGE_EDIT_MODEL_ID, imageEditModelOf } from "$lib/imageEdit";
 import {
   imageEditStatus,
   imageEditStatuses,
+  missingImageEditError,
   operateImageEditServer,
   waitImageEditOperation,
 } from "$lib/server/imageEdit";
 
 /**
- * Each editor runs its own sd-server on its own port, so `model` picks which
- * service an action drives; omitting it addresses the default editor.
+ * 2511 and Lightning share one sd-server. `model` picks which editor an action
+ * addresses; omitting it addresses the default editor.
  */
 function requestedModel(body: Record<string, unknown>) {
   if (body.model == null || body.model === "") return undefined;
@@ -46,6 +47,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     if (!["start", "stop", "restart"].includes(body.action))
       return fail(400, "Choose Start, Stop, or Restart");
     const id = requestedModel(body) ?? DEFAULT_IMAGE_EDIT_MODEL_ID;
+    if (body.action !== "stop" && !imageEditStatus(id).installed) throw missingImageEditError(id);
     return json({ ok: true, model: startPackageOperation(id, body.action) }, { status: 202 });
   } catch (error) {
     return fail(statusOf(error), messageOf(error));
@@ -60,6 +62,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     if (!["start", "stop", "restart"].includes(body.action))
       return fail(400, "Choose Start, Stop, or Restart");
     const id = requestedModel(body) ?? DEFAULT_IMAGE_EDIT_MODEL_ID;
+    if (body.action !== "stop" && !imageEditStatus(id).installed) throw missingImageEditError(id);
     if (body.action === 'restart') await operatePackage(id, 'stop', request.signal);
     await operatePackage(id, body.action === 'restart' ? 'start' : body.action, request.signal);
     return json({ ok: true, model: imageEditStatus(id), models: imageEditStatuses() });

@@ -96,37 +96,25 @@ This option uses the installed Codex CLI, its existing sign-in and image generat
 
 ### Local artwork reconstruction and editing
 
-Two local editors are offered in **Clean → Method**, both crop-and-prompt like Codex cleaning without leaving the machine:
-
-| Method | Model | Character |
-| --- | --- | --- |
-| **Qwen-Image 2.1 · reconstruct artwork** | 7B Qwen-Image-2.1 + Qwen3-VL-8B encoder | Fast reconstruction that keeps the page style; weakest on dense line work. |
-| **Qwen-Image-Edit 2511 · edit artwork** | 20B Qwen-Image-Edit-2511 + Qwen2.5-VL-7B encoder | Instruction editor. Several times slower and heavier, follows the prompt more closely; strongest on cluttered balloons and background detail. |
-
-Measured on a 690×1500 webtoon window with the same detected mask, two crops, 20 steps, seed 42, on a 7900 XTX: 2.1 finished in 115s (1.7–3.7 s/step) and 2511 in 353s (≈10 s/step), so the edit model costs roughly 3× a run. Both flattened the marked lettering (edge energy inside the mask 138 → 13 for 2.1 and → 63 for 2511) and left the untouched page alone (0.5–1.1% of pixels outside the mask moved). 2.1 repaints more freely, which reads as smoother fill and slightly more drift outside the mask; 2511 keeps more of the original texture and invents less. `scripts/bench-image-editors.ts` reproduces the comparison on any page and writes both results plus per-model timings.
-
-Both take the same saved, approved removal mask, open the same prompt dialog, and send each bounded crop plus its mask to a resident `sd-server` from `stable-diffusion.cpp`. Prompts, sampling steps, and seed come from the dialog and the `SCAN_IMAGE_*` variables; results flow through the same approval, undo/redo, cleaning-pass, job-log, retry and cancellation path as Codex. Because the method is stored per cleaning run, the same page can be cleaned with either and compared in the cleaning passes.
-
-Install whichever you want to use — they are separate downloads and separate directories:
+**Clean → Method** offers **Qwen-Image-Edit 2511 · edit artwork**, a 20B instruction editor (Qwen-Image-Edit-2511 + Qwen2.5-VL-7B) that takes a crop and a prompt the same way Codex cleaning does, without leaving the machine. It follows the prompt closely and is the local editor the install bundles use.
 
 ```bash
-.venv-review/bin/python scripts/install-image-model.py            # Qwen-Image 2.1, Q8 default
 .venv-review/bin/python scripts/install-image-edit-model.py       # Qwen-Image-Edit 2511, Q4_K_M default
 cmake -S ~/stable-diffusion.cpp -B ~/stable-diffusion.cpp/build-vulkan -DSD_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build ~/stable-diffusion.cpp/build-vulkan --target sd-server -j
 ```
 
-`install-image-model.py` reuses the `qwen3-vl-8b` review text encoder and writes `data/models/image/qwen-image-2.1`. `install-image-edit-model.py` is self-contained: Qwen-Image-Edit is built on the older Qwen-Image family, so it needs Qwen2.5-VL and the original Qwen-Image VAE rather than 2.1's, and both land in `data/models/image/qwen-image-edit-2511`. `--quant`/`--encoder` choose the quantization; the 20B transformer plus its 7B encoder is the reason 2511 defaults to Q4_K_M and a Q5 encoder. Set `SCAN_IMAGE_SD_SERVER` if the built `sd-server` lives outside `~/stable-diffusion.cpp/build-vulkan/bin`.
+`install-image-edit-model.py` is self-contained: it needs Qwen2.5-VL and the original Qwen-Image VAE, and both land in `data/models/image/qwen-image-edit-2511`. `--quant`/`--encoder` choose the quantization; the 20B transformer plus its 7B encoder is why the default is Q4_K_M and a Q5 encoder. Set `SCAN_IMAGE_SD_SERVER` if the built `sd-server` lives outside `~/stable-diffusion.cpp/build-vulkan/bin`.
 
-Each editor is its own sd-server on its own port (18091 for Qwen-Image 2.1, 18092 for Qwen-Image-Edit 2511), so both can be resident at once — on different devices, or together when they fit on one. **Admin → Models → Hardware & services** shows one row per editor with its own Start/Stop/Restart, and each model panel carries its device picker. Editors still share a device with the resident chat model: starting an editor unloads the chat models on that device, and starting one of those unloads the editors there. When two editors want one device and do not fit together, the start is refused with the reason and the fix (move one to another device, or stop the other) instead of silently unloading it. A cleaning run starts the editor its method names on demand and releases it again after `SCAN_IMAGE_IDLE_SECONDS` (180 default) without a crop, so a batch of pages stays warm and the chat model is not displaced for good. A load from the Admin panel stays resident. Each method reports *unavailable* with the reason (its own weights not installed, no `sd-server`, port taken, GPU off) instead of silently falling back to another cleaner.
+The editor runs as its own `sd-server` on port 18092. **Admin → Models → Hardware & services** shows Start/Stop/Restart, and the model panel carries the device picker. It shares a device with the resident chat model: starting the editor unloads the chat models on that device, and starting one of those unloads the editor. A cleaning run starts it on demand and releases it after `SCAN_IMAGE_IDLE_SECONDS` (180 default) without a crop. A load from the Admin panel stays resident. The method reports *unavailable* with the reason (weights not installed, no `sd-server`, port taken, GPU off) instead of falling back to another cleaner.
 
-Each crop is sampled with `SCAN_IMAGE_STEPS` steps and `SCAN_IMAGE_DENOISE` strength, at each model's own documented guidance: 20 steps at CFG 6 for 2.1, 20 steps at CFG 2.5 with flow shift 3 for the 2511 edit family. `SCAN_IMAGE_<KEY>` overrides both editors and `SCAN_IMAGE_EDIT_<KEY>` overrides only 2511, so the two can be tuned apart during a comparison. Strength 1 repaints the whole marked area; lower values keep more of the original page and can leave marked lettering behind. `SCAN_IMAGE_SEED` makes a run reproducible for comparison, and `SCAN_IMAGE_OFFLOAD_TO_CPU=1` streams the diffusion weights from RAM for small cards. The 2511 recipe also passes `--vae-tiling`: its 20B transformer plus a 5.4GB encoder leave too little free VRAM to encode a crop's init image in one go, which fails the second crop on a 24GB card with `vae encode compute failed`.
+Each crop is sampled with `SCAN_IMAGE_STEPS` steps and `SCAN_IMAGE_DENOISE` strength, at the model's documented guidance: 20 steps at CFG 2.5 with flow shift 3. `SCAN_IMAGE_<KEY>` sets the shared value and `SCAN_IMAGE_EDIT_<KEY>` overrides it for this editor. Strength 1 repaints the whole marked area; lower values keep more of the original page and can leave marked lettering behind. `SCAN_IMAGE_SEED` makes a run reproducible, and `SCAN_IMAGE_OFFLOAD_TO_CPU=1` streams the diffusion weights from RAM for small cards. The recipe also passes `--vae-tiling`: the 20B transformer plus a 5.4GB encoder leave too little free VRAM to encode a crop's init image in one go, which fails the second crop on a 24GB card with `vae encode compute failed`.
 
-Crops grow past the marked bounds so the model can continue the surrounding line art, are padded by repeating the page's edge pixels rather than white, and are always rounded up to the /32 grid the models need — mismatched sides are what make a reconstruction blur and drift. `SCAN_IMAGE_MIN_SIDE` (512 default) sets the smallest working size for a crop; the models were trained near a megapixel, so raising it restores fine line work and shading at the cost of time per crop.
+Crops grow past the marked bounds so the model can continue the surrounding line art, are padded by repeating the page's edge pixels rather than white, and are always rounded up to the /32 grid the model needs. `SCAN_IMAGE_MIN_SIDE` (512 default) sets the smallest working size for a crop.
 
-Style LoRAs load through `SCAN_IMAGE_LORAS` (or `SCAN_IMAGE_EDIT_LORAS`) as `name[:multiplier]` entries resolved inside `SCAN_IMAGE_LORAS_DIR`. A LoRA is bound to one architecture: the comic and webtoon LoRAs published for the 20B Qwen-Image generate/edit models will not load into 2.1, and in any case a style LoRA works against cleaning, because the point is to keep the page's existing art style rather than impose a new one.
+Style LoRAs load through `SCAN_IMAGE_LORAS` (or `SCAN_IMAGE_EDIT_LORAS`) as `name[:multiplier]` entries resolved inside `SCAN_IMAGE_LORAS_DIR`.
 
-`npm run test:image-edit` covers the prompt contract and the crop/sampling behaviour of both editors against a fixture `sd-server`.
+`npm run test:image-edit` covers the prompt contract and the crop/sampling behaviour against a fixture `sd-server`.
 
 ### Local cleaners
 

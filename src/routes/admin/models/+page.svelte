@@ -13,7 +13,7 @@
 		refreshHub,
 	} from '$lib/components/admin/hub.svelte';
 	import { INSTALL_TARGETS } from '$lib/installCatalog';
-	import { formatMiB } from '$lib/computeDevices';
+	import { formatMiB, shownDevice } from '$lib/computeDevices';
 
 	const data = $derived($hub!);
 	const cov = $derived(Object.fromEntries(ADMIN_TASKS.map((task) => [task.id, coverageFor(data, task)])) as Record<string, ReturnType<typeof coverageFor>>);
@@ -190,7 +190,7 @@
 						<span class="dot ok"></span>
 						<div>
 							<button class="btn link" onclick={() => openDrawer(row.id)}>{row.name}</button>
-							<div class="muted small">{row.managed?.device || 'auto'}{row.managed?.port ? ` · port ${row.managed.port}` : ''}</div>
+							<div class="muted small">{shownDevice(data.hardware, row.managed?.device) || 'auto'}{row.managed?.port ? ` · port ${row.managed.port}` : ''}</div>
 						</div>
 					</div>
 				{/each}
@@ -199,7 +199,7 @@
 						<span class="dot ok"></span>
 						<div>
 							<strong>{server.label}</strong>
-							<div class="muted small">{server.device || ''}{server.port ? ` · port ${server.port}` : ''}</div>
+							<div class="muted small">{shownDevice(data.hardware, server.device) || ''}{server.port ? ` · port ${server.port}` : ''}</div>
 						</div>
 					</div>
 				{/each}
@@ -208,7 +208,7 @@
 						<span class="dot ok"></span>
 						<div>
 							<button class="btn link" onclick={() => openDrawer(editor.id)}>{editor.label}</button>
-							<div class="muted small">{editor.device}{editor.port ? ` · port ${editor.port}` : ''}</div>
+							<div class="muted small">{shownDevice(data.hardware, editor.device)}{editor.port ? ` · port ${editor.port}` : ''}</div>
 						</div>
 					</div>
 				{/each}

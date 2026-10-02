@@ -10,7 +10,7 @@
   import PageProofreadDialog from './PageProofreadDialog.svelte';
   import CleanPromptDialog from "./CleanPromptDialog.svelte";
   import RegionCompareDialog from "./workflow/RegionCompareDialog.svelte";
-  import { CODEX_CLEAN_DIALOG, imageEditDialog, modelImageEditDialog } from "$lib/cleanPromptDialog";
+  import { modelImageEditDialog } from "$lib/cleanPromptDialog";
   import type { TaskEngine } from "$lib/aiTasks";
   import type { DetectorDefaults, DetectorSetupConfig } from "$lib/detectorSetup";
   import { detectorSetupLabel } from "$lib/detectorSetup";

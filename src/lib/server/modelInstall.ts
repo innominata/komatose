@@ -11,7 +11,8 @@ import { ROLES } from '../types';
 import { QWEN3_VL_ID, QWEN_38_27B_ID, QWEN_38_27B_LABEL } from '../qwenModels';
 import { koharuInstalled } from './detect';
 import { envVar } from './envFile';
-import { imageEditModelDir } from './gpuMode';
+import { IMAGE_EDIT_LIGHTNING_LORA } from '../imageEdit';
+import { imageEditLorasDir, imageEditModelDir } from './gpuMode';
 import { invalidateTorchProbe, torchVariantPref } from './computeDevices';
 import { launchPreset } from './managedModelConfig';
 import { findRegistryRow, listRegistryRows, removeOverlayRow, upsertRegistryRow } from './modelRegistryStore';
@@ -149,13 +150,13 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			bin = pythonFor(['env-review', 'env-ocr', 'env-workflow']);
 			args = script('install-translation-models.py', ['--model', target.id]);
 			break;
-		case 'qwen-image-2.1':
-			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
-			args = script('install-image-model.py');
-			break;
 		case 'qwen-image-edit-2511':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-image-edit-model.py');
+			break;
+		case 'qwen-image-edit-2511-lightning':
+			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
+			args = script('install-image-edit-model.py', ['--lightning']);
 			break;
 		case 'big-lama':
 		case 'aot':
@@ -307,11 +308,18 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 			return reviewWeightsInstalled(target.id)
 				? { installed: true }
 				: { installed: false, detail: 'Weights not downloaded' };
-		case 'qwen-image-2.1':
 		case 'qwen-image-edit-2511':
 			return imageModelInstalled(target.id)
 				? { installed: true }
 				: { installed: false, detail: 'Weights not downloaded' };
+		case 'qwen-image-edit-2511-lightning': {
+			if (!imageModelInstalled('qwen-image-edit-2511'))
+				return { installed: false, detail: 'Qwen-Image-Edit 2511 weights are not installed' };
+			const lora = join(imageEditLorasDir(), IMAGE_EDIT_LIGHTNING_LORA);
+			return existsSync(lora)
+				? { installed: true }
+				: { installed: false, detail: 'Lightning LoRA is not downloaded' };
+		}
 		default: {
 			const model = translationModel(target.id);
 			if (model) {
@@ -525,11 +533,18 @@ export function planInstallSteps(ids: string[]): { plan: InstallQueueItem[]; ski
 			kind,
 			label: kind === 'env' ? `${target.label}` : target.label,
 			command,
-			neededBy: neededBy && kind === 'env' ? installTarget(neededBy)?.label : undefined,
+			neededBy: neededBy ? installTarget(neededBy)?.label : undefined,
 			state: 'queued',
 		});
 	};
 	for (const id of ids) {
+		const ahead = installTarget(id);
+		for (const depId of ahead?.installsWith || []) {
+			const dep = installTarget(depId);
+			if (!dep) continue;
+			for (const envId of dep.requires || []) add(envId, 'env', depId);
+			add(depId, 'model', id);
+		}
     const pkg = modelPackage(id);
     if (pkg) {
       if (!planned.has(id)) {
@@ -578,10 +593,11 @@ export function cancelInstallStep(key: string): InstallQueueItem | undefined {
 	const target = installTarget(key);
 	for (const other of queue.items) {
 		if (other.state !== 'queued') continue;
-		const needs = installTarget(other.key)?.requires || [];
-		if (target?.group === 'environment' && needs.includes(key)) {
+		const otherTarget = installTarget(other.key);
+		const needs = otherTarget?.requires || [];
+		if ((target?.group === 'environment' && needs.includes(key)) || otherTarget?.installsWith?.includes(key)) {
 			other.state = 'cancelled';
-			other.error = `Needs ${target.label}`;
+			other.error = `Needs ${target?.label ?? key}`;
 		}
 	}
 	return item;
@@ -823,9 +839,14 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		paths.push(describePath(join(translationModelsDir(), targetId), 'Translator weights'));
 		return { paths, alsoRemoves, warnings };
 	}
-	if (targetId === 'qwen-image-2.1' || targetId === 'qwen-image-edit-2511') {
+	if (targetId === 'qwen-image-edit-2511') {
 		paths.push(describePath(imageEditModelDir(targetId), 'Image editor weights'));
 		warnings.push('A running editor must be stopped first.');
+		warnings.push('Qwen-Image-Edit 2511 Lightning uses these weights.');
+		return { paths, alsoRemoves, warnings };
+	}
+	if (targetId === 'qwen-image-edit-2511-lightning') {
+		paths.push(describePath(join(imageEditLorasDir(), IMAGE_EDIT_LIGHTNING_LORA), 'Lightning LoRA'));
 		return { paths, alsoRemoves, warnings };
 	}
 	return { paths, alsoRemoves, warnings };

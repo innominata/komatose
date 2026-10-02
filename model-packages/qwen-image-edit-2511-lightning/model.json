@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "id": "qwen-image-2.1",
-  "name": "Qwen Image 2.1",
+  "id": "qwen-image-edit-2511-lightning",
+  "name": "Qwen Image Edit 2511 Lightning",
   "revision": "1",
   "access": "local_http",
   "adapter": {
     "id": "image-editor"
   },
   "config": {
-    "backend": "qwen-image-2.1",
+    "backend": "qwen-image-edit-2511-lightning",
     "aliases": [
-      "qwen-image"
+      "qwen-image-edit-lightning"
     ]
   },
   "service": {
@@ -19,21 +19,21 @@
   "setup": {
     "executable": "python3",
     "args": [
-      "{root}/scripts/install-image-model.py"
+      "{root}/scripts/install-image-edit-model.py",
+      "--lightning"
     ]
   },
   "dependencies": [
-    "env-workflow"
+    "qwen-image-edit-2511"
   ],
   "environment": [
     "SCAN_IMAGE_MODELS_DIR",
+    "SCAN_IMAGE_LORAS_DIR",
     "SCAN_REVIEW_LLAMA_SERVER"
   ],
   "artifactDirectories": [
     {
-      "path": "{root}/data/models/image",
-      "rootEnv": "SCAN_IMAGE_MODELS_DIR",
-      "subdirectory": "qwen-image-2.1"
+      "path": "{root}/data/models/image/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
     }
   ]
 }

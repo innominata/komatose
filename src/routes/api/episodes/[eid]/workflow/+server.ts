@@ -63,6 +63,7 @@ import {
 import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
 import { cleaningDeviceLabel, localOperation, probeBackend } from "$lib/server/localWorker";
 import { gpuClientStatus } from "$lib/server/gpuMode";
+import { presentGpuStatus } from "$lib/server/computeDevices";
 import { cleanWithCodex, probeCodexCleaning } from "$lib/server/codexClean";
 import { cleanWithQwenImage } from "$lib/server/qwenImageClean";
 import { probeImageEditCleaning } from "$lib/server/imageEdit";
@@ -277,7 +278,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
       const imageEdit = Object.fromEntries(
         IMAGE_EDIT_MODELS.map((model, index) => [model.method, editors[index]]),
       );
-      return json({ ...backend, models: imageWorkflowChoices(), codex, imageEdit, gpu: gpuClientStatus(cleaningDeviceLabel()) });
+      return json({ ...backend, models: imageWorkflowChoices(), codex, imageEdit, gpu: presentGpuStatus(gpuClientStatus(cleaningDeviceLabel())) });
     }
     if (url.searchParams.has("history")) {
       return json({

@@ -8,7 +8,8 @@ import {
 } from '$lib/modelRegistry';
 import type { ProviderOperation } from '$lib/providerCatalog';
 import { INSTALL_TARGETS, type InstallTarget } from '$lib/installCatalog';
-import type { GpuUsage, HardwareSnapshot, ResolvedDevice } from '$lib/computeDevices';
+import { shownDevice, type GpuUsage, type HardwareSnapshot, type ResolvedDevice } from '$lib/computeDevices';
+import { nameResidents, type KnownProcess } from '$lib/gpuResidents';
 import type { DetectorDefaults } from '$lib/detectorSetup';
 
 /**
@@ -23,7 +24,7 @@ export type PublicRow = ModelRow & {
   packageOperation?: { action: string; state: string; messages: string[]; error?: string };
 	group: string;
 	probes?: Partial<Record<ProviderOperation, ProbeSample & { medianMs?: number }>>;
-	managed?: { id: string; state: string; device?: string; deviceChoice?: string; port?: number; activeUses?: number; pendingChanges?: boolean; error?: string };
+	managed?: { id: string; state: string; device?: string; deviceChoice?: string; port?: number; pid?: number; activeUses?: number; pendingChanges?: boolean; error?: string };
 };
 
 export type InstallQueueItem = {
@@ -102,7 +103,7 @@ export type HubData = {
 	/** One record per editor model; each runs its own service. */
 	editors: ImageEditRow[];
 	environments: { id: string; label: string; installed: boolean }[];
-	/** Per-model device choices as saved (`cleaning-worker`, `qwen-image-2.1`, …). */
+	/** Per-model device choices as saved (`cleaning-worker`, `qwen-image-edit-2511`, …). */
 	devicePrefs?: Record<string, string>;
 	/** Komatose owns the GPUs; `source` says whether `.env` pins it. */
 	gpuMode?: { komatose: boolean; source: 'env' | 'setting' | 'default' };
@@ -480,11 +481,24 @@ export function planSteps(data: HubData | null, ids: string[]): PlanStep[] {
 		}
 		const target = INSTALL_TARGETS.find((item) => item.id === id);
 		if (!target || installFor(data, id)?.installed) return;
-		out.push({ id, kind, label: target.label, diskBytes: target.diskBytes, command: installFor(data, id)?.command || '' });
+		out.push({
+			id,
+			kind,
+			label: target.label,
+			diskBytes: target.diskBytes,
+			command: installFor(data, id)?.command || '',
+			neededBy,
+		});
 	};
 	for (const id of ids) {
 		const target = INSTALL_TARGETS.find((item) => item.id === id);
 		if (!target) continue;
+		for (const depId of target.installsWith || []) {
+			const dep = INSTALL_TARGETS.find((item) => item.id === depId);
+			if (!dep) continue;
+			for (const envId of dep.requires || []) add(envId, 'env', dep.label);
+			add(depId, 'model', target.label);
+		}
 		for (const envId of target.requires || []) add(envId, 'env', target.label);
 		add(id, 'model');
 	}
@@ -496,7 +510,14 @@ export function planSteps(data: HubData | null, ids: string[]): PlanStep[] {
 
 // ------------------------------------------------------------- devices
 
-export type DeviceUser = { label: string; kind: 'chat' | 'ocr' | 'edit' | 'foreign'; detail?: string };
+export type DeviceUser = {
+	label: string;
+	kind: 'chat' | 'ocr' | 'edit' | 'venv' | 'other' | 'foreign';
+	detail?: string;
+	pid?: number;
+	vramMiB?: number;
+	gttMiB?: number;
+};
 export type DeviceRow = {
 	name: string;
 	label: string;
@@ -510,16 +531,18 @@ export type DeviceRow = {
 export function deviceRows(data: HubData | null): DeviceRow[] {
 	if (!data) return [];
 	const ggml = data.hardware.llama.devices;
+	const title = (value: string | undefined) => shownDevice(data.hardware, value);
 	const usersByDevice = new Map<string, DeviceUser[]>();
 	const add = (device: string | undefined, user: DeviceUser) => {
-		if (!device) return;
-		const list = usersByDevice.get(device) || [];
+		const name = title(device);
+		if (!name) return;
+		const list = usersByDevice.get(name) || [];
 		list.push(user);
-		usersByDevice.set(device, list);
+		usersByDevice.set(name, list);
 	};
 	for (const row of data.rows) {
 		if (!row.managedLaunch || row.managed?.state !== 'running') continue;
-		add(row.managed.device || row.managedLaunch.device, {
+		add(title(row.managed.device || row.managedLaunch.device), {
 			label: row.name,
 			kind: 'chat',
 			detail: row.managed.port ? `port ${row.managed.port}` : undefined,
@@ -527,11 +550,22 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 	}
 	for (const server of data.reviewServers) {
 		if (server.state !== 'running') continue;
-		add(server.device?.split(' ')[0], { label: server.label, kind: 'ocr', detail: server.port ? `port ${server.port}` : undefined });
+		add(server.device, { label: server.label, kind: 'ocr', detail: server.port ? `port ${server.port}` : undefined });
 	}
 	for (const editor of data.editors) {
 		if (editor.state !== 'running') continue;
-		add(editor.device.split(' ')[0], { label: editor.label, kind: 'edit', detail: `port ${editor.port}` });
+		add(editor.device, { label: editor.label, kind: 'edit', detail: `port ${editor.port}` });
+	}
+
+	const knownProcesses: KnownProcess[] = [];
+	for (const row of data.rows) {
+		if (row.managed?.pid && row.managed.state === 'running') knownProcesses.push({ pid: row.managed.pid, label: row.name, kind: 'chat' });
+	}
+	for (const server of data.reviewServers) {
+		if (server.pid && server.state === 'running') knownProcesses.push({ pid: server.pid, label: server.label, kind: 'ocr' });
+	}
+	for (const editor of data.editors) {
+		if (editor.pid && editor.state === 'running') knownProcesses.push({ pid: editor.pid, label: editor.label, kind: 'edit' });
 	}
 
 	const rows: DeviceRow[] = [];
@@ -539,26 +573,29 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 	for (const usage of data.usage) {
 		const known = ggml.find((device) => device.name === usage.name);
 		seen.add(usage.name);
+		const residents = usage.residents ? nameResidents(usage.residents, knownProcesses) : undefined;
 		rows.push({
-			name: usage.name,
+			name: title(usage.name),
 			label: known?.label || usage.name,
 			totalMiB: usage.totalMiB,
 			usedMiB: usage.usedMiB,
-			integrated: known?.integrated ?? false,
-			users: usersByDevice.get(usage.name) || [],
+			integrated: usage.integrated ?? known?.integrated ?? false,
+			users: residents || usersByDevice.get(title(usage.name)) || [],
 		});
 	}
 	for (const device of ggml) {
 		if (seen.has(device.name)) continue;
 		rows.push({
-			name: device.name,
+			name: title(device.name),
 			label: device.label,
 			totalMiB: device.totalMiB,
 			usedMiB: Math.max(0, device.totalMiB - device.freeMiB),
 			integrated: device.integrated,
-			users: usersByDevice.get(device.name) || [],
+			users: usersByDevice.get(title(device.name)) || [],
 		});
 	}
+	const slot = (name: string) => Number(/^GPU (\d+)$/.exec(name)?.[1] || 999);
+	rows.sort((a, b) => slot(a.name) - slot(b.name) || a.name.localeCompare(b.name));
 	return rows;
 }
 
@@ -596,8 +633,8 @@ const TARGET_TASKS: Record<string, AdminTask['id'][]> = {
 	'sugoi-v4-ja-en': ['translate'],
 	'translategemma-4b-q4': ['translate'],
 	'translategemma-12b-q4': ['translate'],
-	'qwen-image-2.1': ['clean'],
 	'qwen-image-edit-2511': ['clean'],
+	'qwen-image-edit-2511-lightning': ['clean'],
 	'big-lama': ['clean'],
 	aot: ['clean'],
 	'lama-manga': ['clean'],

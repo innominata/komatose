@@ -1,6 +1,5 @@
 <script lang="ts">
   import "./studio-controls.css";
-  import { IMAGE_EDIT_MODELS } from "$lib/imageEdit";
   import { cleanModelChoices, canStartClean, inpaintUnavailable } from "$lib/cleanMethods";
   import type { PageData, WorkflowDoc } from "$lib/workflow";
 

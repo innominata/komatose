@@ -65,6 +65,18 @@ MMPROJ_FILE = ("Qwen2.5-VL-7B-Instruct.mmproj-f16.gguf", 1354162912,
 # stored under this subdirectory of the model dir, as it is in the source repo
 VAE_FILE = ("VAE/Qwen_Image-VAE.safetensors", 253806246,
             "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f", 0.3)
+# 8-step distillation. It sits in the LoRA directory and is loaded per request.
+LIGHTNING = {
+    "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+    "revision": "d74eba145674fd7e31b949324e148e21e7118abd",
+    "file": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+    "size": 849608296,
+    "sha256": "a9e81a58a78f260f67b337a6f615e8fa4cd3bc79847c77b7d61a581b789b1ba8",
+}
+
+
+def lora_dest():
+    return Path(os.environ.get("SCAN_IMAGE_LORAS_DIR") or (default_dest().parent / "loras"))
 
 
 def default_dest():
@@ -119,28 +131,37 @@ def main():
     parser.add_argument("--encoder", choices=sorted(ENCODERS), default="q5",
                         help="Qwen2.5-VL-7B text encoder quantization (default q5).")
     parser.add_argument("--dest", type=Path, default=default_dest())
+    parser.add_argument("--lightning", action="store_true",
+                        help="Also install the 8-step Lightning LoRA (downloads the base weights when they are missing).")
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
 
     dest = args.dest.expanduser().resolve()
     filename, size, sha256, gib = QUANTS[args.quant]
     encoder_file, encoder_size, encoder_sha, encoder_gib = ENCODERS[args.encoder]
+    base_files = (
+        (filename, (size, sha256)),
+        (VAE_FILE[0], (VAE_FILE[1], VAE_FILE[2])),
+        (encoder_file, (encoder_size, encoder_sha)),
+        (MMPROJ_FILE[0], (MMPROJ_FILE[1], MMPROJ_FILE[2])),
+    )
     if args.verify_only:
-        missing = [name for name, spec in (
-            (filename, (size, sha256)),
-            (VAE_FILE[0], (VAE_FILE[1], VAE_FILE[2])),
-            (encoder_file, (encoder_size, encoder_sha)),
-            (MMPROJ_FILE[0], (MMPROJ_FILE[1], MMPROJ_FILE[2])),
-        ) if not verified(dest / name, *spec)]
+        missing = [name for name, spec in base_files if not verified(dest / name, *spec)]
+        if args.lightning and not verified(
+            lora_dest() / LIGHTNING["file"], LIGHTNING["size"], LIGHTNING["sha256"],
+        ):
+            missing.append(LIGHTNING["file"])
         if missing:
             raise SystemExit("Not installed or checksum mismatch: " + ", ".join(missing))
         print(f"Verified {dest}", flush=True)
         return
 
-    need = gib + VAE_FILE[3] + encoder_gib + MMPROJ_FILE[3]
-    parent = dest.parent if dest.parent.is_dir() else dest.parent.parent
-    if shutil.disk_usage(parent).free < need * 1024**3:
-        raise SystemExit(f"At least {need:.1f} GiB free is required for Qwen-Image-Edit-2511 ({args.quant}).")
+    base_ready = all(verified(dest / name, *spec) for name, spec in base_files)
+    if not base_ready:
+        need = gib + VAE_FILE[3] + encoder_gib + MMPROJ_FILE[3]
+        parent = dest.parent if dest.parent.is_dir() else dest.parent.parent
+        if shutil.disk_usage(parent).free < need * 1024**3:
+            raise SystemExit(f"At least {need:.1f} GiB free is required for Qwen-Image-Edit-2511 ({args.quant}).")
 
     install_file(dest, DIFFUSION["repo"], DIFFUSION["revision"], filename, size, sha256)
     install_file(dest, VAE["repo"], VAE["revision"], VAE_FILE[0], VAE_FILE[1], VAE_FILE[2])
@@ -162,6 +183,10 @@ def main():
                         "vision": MMPROJ_FILE[0]},
     }, indent=2) + "\n")
     print(f"Installed and verified Qwen-Image-Edit-2511 {args.quant} in {dest}", flush=True)
+    if args.lightning:
+        install_file(lora_dest(), LIGHTNING["repo"], LIGHTNING["revision"],
+                     LIGHTNING["file"], LIGHTNING["size"], LIGHTNING["sha256"])
+        print(f"Installed Lightning LoRA in {lora_dest()}", flush=True)
 
 
 if __name__ == "__main__":

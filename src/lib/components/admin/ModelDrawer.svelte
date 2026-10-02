@@ -15,7 +15,7 @@
 		type ListEntry,
 		type PublicRow,
 	} from '$lib/components/admin/hub.svelte';
-	import { deviceOptions, formatMiB, BACKEND_LABEL, type DeviceRuntime } from '$lib/computeDevices';
+	import { deviceOptions, formatMiB, type DeviceRuntime } from '$lib/computeDevices';
 	import { INSTALL_TARGETS, formatDisk, formatMemory } from '$lib/installCatalog';
 	import { CHAT_AND_CLI_OPERATIONS } from '$lib/modelRegistry';
 	import type { ProviderOperation } from '$lib/providerCatalog';
@@ -45,7 +45,8 @@
 			return { runtime: 'llama', env: 'env-review', key: entry.id, label: 'Device' };
 		if (entry.id === 'imsbee-ko-en-translator' || entry.id === 'opus-mt-ja-en' || entry.id === 'sugoi-v4-ja-en')
 			return { runtime: 'torch', env: 'env-review', key: entry.id, label: 'GPU' };
-		if (entry.id.startsWith('qwen-image')) return { runtime: 'llama', env: 'env-review', key: entry.id, label: 'Device' };
+		if (entry.id.startsWith('qwen-image'))
+			return { runtime: 'llama', env: 'env-review', key: 'qwen-image-edit-2511', label: 'Device' };
 		if (['rtdetr', 'ctd', 'koharu', 'coo', 'big-lama', 'aot', 'lama-manga'].includes(entry.id))
 			return { runtime: 'torch', env: 'env-workflow', key: 'cleaning-worker', label: 'Cleaning worker GPU' };
 		return null;
@@ -296,8 +297,11 @@
 						</select>
 					</label>
 					<div class="muted small" style="margin-top:.4rem">
-						Auto picks the GPU with room and falls back to CPU. CUDA, ROCm, Vulkan and Metal builds all work — the device list comes from the installed {deviceKind.runtime === 'llama' ? 'llama.cpp' : 'PyTorch'} build.
+						Auto picks the GPU with room and falls back to CPU. GPU 1 is the lowest PCI address, and that number is the same card for every runtime.
 					</div>
+					{#if entry?.id === 'qwen-image-edit-2511-lightning'}
+						<div class="muted small" style="margin-top:.4rem">Lightning uses the Qwen-Image-Edit 2511 device. Both editors load the same weights.</div>
+					{/if}
 					{#if deviceKind.key === 'cleaning-worker' && data.cleaningWorker}
 						<div class="muted small" style="margin-top:.4rem">Now: {data.cleaningWorker.resolved.label} — {data.cleaningWorker.resolved.reason}.</div>
 					{/if}

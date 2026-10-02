@@ -92,8 +92,8 @@ try {
   // ------------------------------------------- hardware & services + transfer
   await page.goto(`${base}/admin/models/hardware`);
   await expect(page.getByRole("row", { name: /Hayai OCR v2/ })).toBeVisible();
-  await expect(page.getByRole("row", { name: /Qwen-Image 2\.1/ })).toContainText("18091");
-  await expect(page.getByRole("row", { name: /Qwen-Image-Edit 2511/ })).toContainText("18092");
+  await expect(page.getByRole("row", { name: /Qwen-Image-Edit 2511(?! Lightning)/ })).toContainText("18092");
+  await expect(page.getByRole("row", { name: /Qwen-Image-Edit 2511 Lightning/ })).toContainText("18092");
   await expect(page.getByRole("region", { name: "Transfer named models" })).toBeVisible();
   await expect(pageAlerts).toHaveCount(0);
 

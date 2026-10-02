@@ -65,6 +65,11 @@ export type InstallTarget = {
 	 * environment is present; the server picks that one to run the command.
 	 */
 	requires?: string[];
+	/**
+	 * Model weights downloaded first when they are missing. Unlike `requires`,
+	 * this does not hide Install: the dependency is queued ahead of this target.
+	 */
+	installsWith?: string[];
 	/** Capability this unlocks, shown as a small hint. */
 	unlocks?: string;
 };
@@ -201,7 +206,7 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		group: 'ocr',
 		label: 'Qwen3-VL 8B',
 		summary:
-			'8B vision model that reads images for transcription, vision tasks and AI review. Also the shared text encoder for Qwen-Image 2.1.',
+			'8B vision model that reads images for transcription, vision tasks and AI review.',
 		diskBytes: 9.9 * GB,
 		memoryBytes: 11 * GB,
 		requires: ['env-review'],
@@ -304,26 +309,27 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 
 	// --- Image editing --------------------------------------------------------
 	{
-		id: 'qwen-image-2.1',
-		group: 'image-edit',
-		label: 'Qwen-Image 2.1 · default editor',
-		summary:
-			'7B artwork reconstruction editor used by Clean. Shares the Qwen3-VL-8B text encoder with the review installer when that is installed.',
-		diskBytes: 8.4 * GB,
-		memoryBytes: 18 * GB,
-		requires: ['env-workflow'],
-		unlocks: 'artwork reconstruction in Clean',
-	},
-	{
 		id: 'qwen-image-edit-2511',
 		group: 'image-edit',
-		label: 'Qwen-Image-Edit 2511',
+		label: 'Qwen-Image-Edit 2511 · default editor',
 		summary:
-			'20B instruction editor. Follows edit prompts more closely than 2.1; heavier — plan on a ~24 GB card.',
+			'20B instruction editor used by Clean. Follows the edit prompt; plan on a ~24 GB card.',
 		diskBytes: 20.3 * GB,
 		memoryBytes: 21 * GB,
 		requires: ['env-workflow'],
-		unlocks: 'prompt-driven artwork editing',
+		unlocks: 'artwork editing in Clean',
+	},
+	{
+		id: 'qwen-image-edit-2511-lightning',
+		group: 'image-edit',
+		label: 'Qwen-Image-Edit 2511 Lightning',
+		summary:
+			'8-step Lightning LoRA on the 2511 weights. Same editor, fewer steps. Installing this also downloads 2511 when those weights are missing.',
+		diskBytes: 849_608_296,
+		memoryBytes: 21 * GB,
+		requires: ['env-workflow'],
+		installsWith: ['qwen-image-edit-2511'],
+		unlocks: 'faster artwork editing in Clean',
 	},
 
 	// --- Inpainting -----------------------------------------------------------

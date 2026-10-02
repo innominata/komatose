@@ -42,10 +42,10 @@ try {
   const status = async () =>
     (await (await context.request.get(`${base}/api/admin/image-model`)).json());
   const { model, models } = await status();
-  // Each editor is its own service: one record each, on its own port.
-  assert.equal(model.port, 18091);
+  // 2511 and Lightning share one process and one port.
+  assert.equal(model.port, 18092);
   assert.equal(models.length, 2);
-  assert.equal(models[0].port, 18091);
+  assert.equal(models[0].port, 18092);
   assert.equal(models[1].port, 18092);
   // A shared dev box may already run a real editor on these ports; the fixture cannot
   // bind them then, so the lifecycle cannot be exercised here.
@@ -55,15 +55,15 @@ try {
     process.exit(0);
   }
   assert.equal(model.state, "stopped");
-  assert.equal(model.id, "qwen-image-2.1");
-  assert.equal(model.label, "Qwen-Image 2.1");
+  assert.equal(model.id, "qwen-image-edit-2511");
+  assert.equal(model.label, "Qwen-Image-Edit 2511");
   assert.deepEqual(
     model.models.map((row) => [row.id, row.method, row.installed, row.active]),
     [
-      ["qwen-image-2.1", "qwen-image", false, false],
       ["qwen-image-edit-2511", "qwen-image-edit", false, false],
+      ["qwen-image-edit-2511-lightning", "qwen-image-edit-lightning", false, false],
     ],
-    "Both editors are offered, and the fixture data directory has no weights for either",
+    "Both editors are offered, and the fixture data directory has no weights",
   );
 
   assert.equal(
@@ -85,37 +85,37 @@ try {
   );
 
   await page.goto(`${base}/admin/models/hardware`);
-  const panel = page.locator("table").first();
-  const row21 = page.getByRole("row", { name: /Qwen-Image 2\.1/ });
-  const row2511 = page.getByRole("row", { name: /Qwen-Image-Edit 2511/ });
-  await expect(row21.getByText("Qwen-Image 2.1", { exact: true })).toBeVisible();
+  const row2511 = page.getByRole("row", { name: /Qwen-Image-Edit 2511(?! Lightning)/ });
+  const rowLightning = page.getByRole("row", { name: /Qwen-Image-Edit 2511 Lightning/ });
   await expect(row2511.getByText("Qwen-Image-Edit 2511", { exact: true })).toBeVisible();
-  await expect(row21).toContainText("18091");
+  await expect(rowLightning.getByText("Qwen-Image-Edit 2511 Lightning", { exact: true })).toBeVisible();
   await expect(row2511).toContainText("18092");
-  await expect(row21).toContainText("stopped");
+  await expect(rowLightning).toContainText("18092");
   await expect(row2511).toContainText("stopped");
-  // Neither editor can start until its own installer has run.
-  await expect(row21.getByRole("button", { name: "Start" })).toBeDisabled();
-  await expect(row2511.getByRole("button", { name: "Start" })).toBeDisabled();
-  // A start without weights is refused with the installer's command in the message.
-  for (const [model, script] of [["qwen-image-2.1", "install-image-model"], ["qwen-image-edit-2511", "install-image-edit-model"]]) {
+  await expect(rowLightning).toContainText("stopped");
+  await expect(row2511.getByRole("button", { name: "Start", exact: true })).toBeDisabled();
+  await expect(rowLightning.getByRole("button", { name: "Start", exact: true })).toBeDisabled();
+  for (const [model, script] of [
+    ["qwen-image-edit-2511", "install-image-edit-model\\.py"],
+    ["qwen-image-edit-2511-lightning", "install-image-edit-model\\.py --lightning"],
+  ]) {
     const refused = await context.request.post(`${base}/api/admin/image-model`, {
       data: { action: "start", model },
     });
     assert.equal(refused.status(), 400);
-    assert.match((await refused.json()).error ?? "", new RegExp(`${script}\\.py`));
+    assert.match((await refused.json()).error ?? "", new RegExp(script));
   }
 
   // Both cleaning methods are wired into the workflow even while nothing is installed.
   const workflow = `${base}/api/episodes/fixture-episode/workflow`;
   const backend = await (await context.request.get(`${workflow}?backend=1`)).json();
-  assert.equal(backend.imageEdit?.["qwen-image"]?.available, false, "The fixture has no image-editor weights");
-  assert.equal(backend.imageEdit?.["qwen-image-edit"]?.available, false, "Nor weights for the second editor");
-  assert.match(backend.imageEdit?.["qwen-image"]?.reason ?? "", /Qwen-Image 2\.1 is not installed/);
+  assert.equal(backend.imageEdit?.["qwen-image-edit"]?.available, false, "The fixture has no image-editor weights");
+  assert.equal(backend.imageEdit?.["qwen-image-edit-lightning"]?.available, false, "Nor the Lightning LoRA");
   assert.match(backend.imageEdit?.["qwen-image-edit"]?.reason ?? "", /Qwen-Image-Edit 2511 is not installed/);
+  assert.match(backend.imageEdit?.["qwen-image-edit-lightning"]?.reason ?? "", /Qwen-Image-Edit 2511 Lightning is not installed/);
   assert.equal(backend.codex?.available, true, "Codex stays offered alongside the local editors");
   const doc = (await (await context.request.get(workflow)).json()).pages["fixture-page-0"];
-  for (const method of ["qwen-image", "qwen-image-edit"]) {
+  for (const method of ["qwen-image-edit", "qwen-image-edit-lightning"]) {
     const refused = await context.request.post(workflow, {
       data: {
         action: "clean",
@@ -132,10 +132,20 @@ try {
     assert.doesNotMatch(message ?? "", /Invalid method/);
   }
 
+  await rowLightning.getByRole("button", { name: "Qwen-Image-Edit 2511 Lightning" }).click();
+  const drawer = page.getByRole("dialog", { name: "Qwen Image Edit 2511 Lightning" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText("Installing this also downloads 2511 when those weights are missing.")).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Who can pick it" })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Install", exact: true })).toBeVisible();
+
+  await page.goto(`${base}/admin/models/install`);
+  await expect(page.getByText("Qwen-Image-Edit 2511 Lightning").first()).toBeVisible();
+  await expect(page.getByRole("listitem").filter({ hasText: "Qwen-Image-Edit 2511 Lightning" })).toBeVisible();
+
   assert.deepEqual(errors, []);
   const { mkdir } = await import("node:fs/promises");
   await mkdir("/tmp/scan-acceptance", { recursive: true });
-  await panel.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "/tmp/scan-acceptance/image-edit-server.png", fullPage: true });
   console.log("Per-editor service rows, API contract, and clean-method wiring checks passed");
 } finally {
