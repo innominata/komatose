@@ -7,8 +7,8 @@ Clean → Typeset → Export** — with live websocket sync and disk-stored,
 immutable page assets.
 
 The screenshots below use the bundled test series, *Give My Regards to Black
-Jack* (volume 1, pages 1–10), running on a real install. That artwork is
-licensed separately; see [License](#license) for the required attribution.
+Jack* (volume 1, pages 1–10), running on a real install. See [License](#license)
+for artwork credit.
 
 ![Series library](docs/images/01-library.png)
 
@@ -289,20 +289,13 @@ Paid model, GPU, and Python worker checks stay on their own scripts
 
 **Application code** — [MIT License](LICENSE). Copyright (c) 2026 innominata.
 
-**Test series artwork** — Japanese pages in [`fixtures/test-pages/`](fixtures/test-pages/)
-and screenshots in [`docs/images/`](docs/images/) that show those pages are from
-*Give My Regards to Black Jack* (volume 1, pages 1–10). Shuho Sato and Sato Manga
-Works Ltd. permit reuse under [densho810.com/free](https://densho810.com/free/).
-
-When you **redistribute the page files or a work built from them**, credit must
-travel with that product (for example `attribution.txt` in an export ZIP, or
-[`fixtures/test-pages/ATTRIBUTION.txt`](fixtures/test-pages/ATTRIBUTION.txt) beside
-the JPEGs). **README and docs screenshots do not need the credit burned into each
-PNG**; this section and [`docs/images/ATTRIBUTION.txt`](docs/images/ATTRIBUTION.txt)
-are enough for the repo.
-
-Where credit is required, show these four lines **unchanged** (do not alter the
-wording):
+**Test series artwork** — Pages in [`fixtures/test-pages/`](fixtures/test-pages/)
+and screenshots in [`docs/images/`](docs/images/) are from *Give My Regards to Black
+Jack* (volume 1, pages 1–10). Shuho Sato and Sato Manga Works Ltd. permit reuse
+under [densho810.com/free](https://densho810.com/free/). Credit for this
+repository is here and in [`docs/images/ATTRIBUTION.txt`](docs/images/ATTRIBUTION.txt).
+Shipped exports include `attribution.txt` when the series applies; bundled page
+files include [`fixtures/test-pages/ATTRIBUTION.txt`](fixtures/test-pages/ATTRIBUTION.txt).
 
 ```
 ブラックジャックによろしく
@@ -310,6 +303,3 @@ wording):
 Give My Regards to Black Jack
 SHUHO SATO
 ```
-
-After you publish a new use of the artwork, [densho810](https://densho810.com/free/)
-asks for a one-time email to info@densho810.com within one month (a URL is fine).

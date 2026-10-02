@@ -8,21 +8,8 @@ in `fixtures/test-pages`), is **licensed for use** under
 showing those pages, including everything in `docs/images/`, may be committed
 and used in the README and docs.
 
-**Attribution (required):** When redistributing the test **page files** or a
-derivative **product** that includes them, credit must accompany that
-distribution — see `fixtures/test-pages/ATTRIBUTION.txt`. The four lines below
-must not be altered:
-
-```
-ブラックジャックによろしく
-佐藤秀峰
-Give My Regards to Black Jack
-SHUHO SATO
-```
-
-For **README/docs screenshots** (`docs/images/`), do not overlay credit on each
-PNG. Keep the block in the README License section (or link to it) and
-`docs/images/ATTRIBUTION.txt`.
+**Attribution:** See the README License section and `fixtures/test-pages/ATTRIBUTION.txt`
+(four lines, unchanged).
 
 Any other source pages, evaluation crops, or scratch screenshots (see the
 private paths in `.gitignore`) are still private working material and must not
