@@ -1,5 +1,12 @@
-These screenshots show pages from the bundled test series. The same attribution
-applies as for fixtures/test-pages/. See ../../fixtures/test-pages/ATTRIBUTION.txt.
+These screenshots show pages from the bundled test series. The same rules apply
+as for fixtures/test-pages/ (see ../../fixtures/test-pages/ATTRIBUTION.txt).
+
+You do not need to burn the credit into each PNG in this folder. For this repo,
+the README License section plus this file satisfy densho810’s credit requirement
+for documentation screenshots.
+
+When redistributing the actual page JPEGs or exports that contain them, include
+the four lines below unchanged:
 
 ブラックジャックによろしく
 佐藤秀峰
@@ -8,4 +15,3 @@ SHUHO SATO
 
 Volume 1, pages 1–10, for testing.
 Shuho Sato and Sato Manga Works Ltd. allow this reuse under https://densho810.com/free/
-Show the four lines above on every copy. Do not alter them.
