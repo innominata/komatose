@@ -316,7 +316,7 @@ function nvidiaUsage(): GpuUsage[] {
 }
 
 /**
- * Live memory: one nvtop snapshot when the patched binary is installed,
+ * Live memory: one snapshot from the nvtop this install built,
  * otherwise nvidia-smi, otherwise ggml's own free-memory report.
  */
 export function gpuUsage(): GpuUsage[] {

@@ -41,6 +41,7 @@ import { loadSetupReport } from '$lib/server/setupLive';
 import { readModelDefaults, setModelDefault, type DefaultJob } from '$lib/server/modelDefaultStore';
 import { INSTALL_GROUPS } from '$lib/installCatalog';
 import { detectorDefaults, saveDetectorDefaults } from '$lib/server/detectorConfig';
+import { nvtopStatus, startNvtopBuild } from '$lib/server/nvtopBuild';
 
 const DEFAULT_JOBS = new Set<string>([...PROVIDER_OPERATIONS, 'detect', 'transcribe']);
 
@@ -120,6 +121,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			defaults: readModelDefaults().defaults,
 			detector: detectorDefaults(),
 			report: await loadSetupReport(),
+			nvtop: nvtopStatus(),
 		});
 	} catch (e) {
 		return fail(statusOf(e), messageOf(e));
@@ -143,6 +145,7 @@ function deviceState() {
  *   { action: 'set-detector', setup, conf? }   text detector setup id (ctd+koharu, …) and confidence
  *   { action: 'set-torch-variant', variant }    auto | cpu | cuda | rocm
  *   { action: 'refresh-hardware' }              force a fresh device probe
+ *   { action: 'build-nvtop' }                   download, patch, and build nvtop into data/tools/nvtop
  */
 export const POST: RequestHandler = async ({ locals, request }) => {
 	try {
@@ -189,7 +192,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		}
 		if (action === 'refresh-hardware') {
 			invalidateTorchProbe();
-			return json({ ok: true, hardware: hardwareSnapshot({ refresh: true }), usage: gpuUsage() });
+			return json({ ok: true, hardware: hardwareSnapshot({ refresh: true }), usage: gpuUsage(), nvtop: nvtopStatus() });
+		}
+		if (action === 'build-nvtop') {
+			return json({ ok: true, nvtop: startNvtopBuild() });
 		}
 		return fail(400, 'Unknown action');
 	} catch (e) {

@@ -139,6 +139,42 @@
 .amodels .btn.busy { opacity: 1; border-color: var(--teal); color: var(--teal); }
 .amodels .icon-btn { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0.2rem 0.35rem; font-size: 1rem; }
 .amodels .icon-btn:hover { color: var(--text); }
+.amodels .nvtop-actions { position: relative; display: grid; justify-items: start; gap: 0.35rem; max-width: 36rem; }
+.amodels .nvtop-note { margin: 0; text-align: left; }
+.amodels .help-wrap { position: static; }
+.amodels .help-pop {
+	position: absolute;
+	left: 0;
+	top: calc(100% + 0.45rem);
+	width: min(32rem, calc(100vw - 8rem));
+	z-index: 30;
+	background: var(--bg-2);
+	border: 1px solid var(--line-2);
+	padding: 0.75rem 0.85rem;
+	text-align: left;
+	text-transform: none;
+	letter-spacing: 0;
+	font: 400 0.82rem/1.45 var(--body);
+	color: var(--text);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.amodels .page-head .help-pop p { max-width: none; margin: 0 0 0.6rem; color: var(--text); }
+.amodels .help-pop p:last-child { margin-bottom: 0; }
+.amodels .build-log {
+	margin: 0;
+	max-height: 9rem;
+	overflow: auto;
+	width: min(36rem, 78vw);
+	text-align: left;
+	white-space: pre-wrap;
+	font-family: var(--mono);
+	font-size: 0.72rem;
+	line-height: 1.4;
+	color: var(--muted);
+	background: rgba(8, 10, 14, 0.55);
+	border: 1px solid var(--line);
+	padding: 0.45rem 0.55rem;
+}
 .amodels input[type='text'], .amodels input[type='number'], .amodels input[type='search'], .amodels select, .amodels textarea {
 	font: inherit; color: var(--text);
 	background: rgba(8, 10, 14, 0.7);

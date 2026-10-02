@@ -9,6 +9,7 @@ import {
 import type { ProviderOperation } from '$lib/providerCatalog';
 import { INSTALL_TARGETS, type InstallTarget } from '$lib/installCatalog';
 import { shownDevice, type GpuUsage, type HardwareSnapshot, type ResolvedDevice } from '$lib/computeDevices';
+import type { NvtopStatus } from '$lib/nvtopStatus';
 import { nameResidents, type KnownProcess } from '$lib/gpuResidents';
 import type { DetectorDefaults } from '$lib/detectorSetup';
 
@@ -92,6 +93,8 @@ export type CliToolRow = {
 export type HubData = {
 	hardware: HardwareSnapshot;
 	usage: GpuUsage[];
+	/** The nvtop Komatose builds under data/tools/nvtop. */
+	nvtop?: NvtopStatus;
 	catalogs: Record<string, { adapter: string; at: number; models: { id: string; label: string }[] } | null>;
 	rows: PublicRow[];
 	cliTools: CliToolRow[];
@@ -182,6 +185,7 @@ export async function hubPost(body: Record<string, unknown>): Promise<HubData | 
 	if (json.defaults) hub.update((cur) => (cur ? { ...cur, defaults: json.defaults } : cur));
 	if (json.torchVariant) hub.update((cur) => (cur ? { ...cur, torchVariant: json.torchVariant } : cur));
 	if (json.hardware) hub.update((cur) => (cur ? { ...cur, hardware: json.hardware, usage: json.usage || cur.usage } : cur));
+	if (json.nvtop) hub.update((cur) => (cur ? { ...cur, nvtop: json.nvtop } : cur));
 	if (json.devicePrefs || json.gpuMode || json.cleaningWorker)
 		hub.update((cur) =>
 			cur

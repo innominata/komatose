@@ -13,6 +13,7 @@ const groups = {
     "tests/remote-providers.test.ts",
     "tests/kana-chart.test.ts",
     "tests/nvtop-usage.test.ts",
+    "tests/nvtop-build.test.ts",
     "tests/mmproj-device.test.ts",
     "tests/gpu-names.test.ts",
   ],

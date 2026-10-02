@@ -1,17 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { MIB, type GgmlDevice, type GpuUsage } from '../computeDevices';
 import { collectResidents, type GpuProcessSample } from '../gpuResidents';
+import { ownedNvtopPath, ownedNvtopReady } from './nvtopBuild';
 
 /**
  * One `nvtop -s` snapshot for every card.
  *
  * Stock nvtop 3.3.2 omits the PCI address and hides GTT, so two 7900 XTXs are
  * indistinguishable and a text encoder parked in system RAM disappears.
- * `scripts/patches/nvtop-snapshot-pdev-gtt.patch` adds `pdev` and `gpu_gtt_bytes`.
- * The binary is `SCAN_NVTOP`, otherwise `~/.local/bin/nvtop`.
+ * Komatose runs the binary it builds under data/tools/nvtop. SCAN_NVTOP overrides it.
  */
 
 type SnapshotProcess = { pid?: string | number; cmdline?: string | null; gpu_mem_bytes_alloc?: string | null; gpu_gtt_bytes?: string | null };
@@ -26,21 +25,11 @@ type SnapshotDevice = {
 
 export type RenderNode = { minor: number; pdev: string };
 
-function onPath(name: string): string | undefined {
-	for (const dir of (process.env.PATH || '').split(delimiter)) {
-		if (!dir) continue;
-		const path = join(dir, name);
-		if (existsSync(path)) return path;
-	}
-	return undefined;
-}
-
+/** SCAN_NVTOP when it points at a file, otherwise the binary this install built. */
 export function nvtopBin(): string | undefined {
 	const configured = (process.env.SCAN_NVTOP || '').trim();
-	for (const path of [configured, join(homedir(), '.local/bin/nvtop'), '/usr/local/bin/nvtop']) {
-		if (path && existsSync(path)) return path;
-	}
-	return onPath('nvtop');
+	if (configured && existsSync(configured)) return configured;
+	return ownedNvtopReady() ? ownedNvtopPath() : undefined;
 }
 
 function bytes(value: unknown): number {

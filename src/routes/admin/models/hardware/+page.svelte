@@ -45,6 +45,13 @@
 	const devices = $derived(deviceRows(data));
 	const managedRows = $derived(data.rows.filter((row) => row.managedLaunch));
 	let busy = $state('');
+	let nvtopHelp = $state(false);
+	let nvtopAnnounced = '';
+
+	const nvtop = $derived(data.nvtop);
+	const nvtopLabel = $derived(
+		nvtop?.state === 'running' ? 'Building…' : nvtop?.ready ? 'Rebuild nvtop' : 'Build nvtop',
+	);
 
 	async function lifecycle(url: string, body: Record<string, unknown>, label: string, action: string) {
 		busy = `${label}:${action}`;
@@ -83,6 +90,34 @@
 			toast(String((e as Error).message), 'bad');
 		}
 	}
+	function nvtopNote(): string {
+		const status = nvtop;
+		if (!status) return '';
+		if (status.state === 'running') return `Building nvtop ${status.version} into this install.`;
+		if (status.state === 'failed' && status.ready) return `Rebuild failed. Komatose is still using the previous build. ${status.error}`;
+		if (status.state === 'failed') return status.error;
+		if (status.override) return 'SCAN_NVTOP is set, so Komatose runs that binary. The build here is unused until the variable is cleared.';
+		if (status.ready) return 'Komatose runs the nvtop it built for this install.';
+		return 'Device memory is using a fallback until this install has its own nvtop.';
+	}
+	async function buildNvtop() {
+		try {
+			await hubPost({ action: 'build-nvtop' });
+			toast('Building nvtop');
+		} catch (e) {
+			toast(String((e as Error).message), 'bad');
+		}
+	}
+	$effect(() => {
+		const state = nvtop?.state || '';
+		if (typeof window === 'undefined') return;
+		if (nvtopAnnounced === 'running' && state === 'ready') toast('nvtop is ready');
+		if (nvtopAnnounced === 'running' && state === 'failed') toast(nvtop?.error || 'nvtop build failed', 'bad');
+		nvtopAnnounced = state;
+		if (state !== 'running') return;
+		const timer = setInterval(() => void refreshHub(), 2000);
+		return () => clearInterval(timer);
+	});
 	async function installEnv(id: string, label: string) {
 		try {
 			await apiPost('/api/admin/setup-install', { action: 'start', ids: [id] });
@@ -100,8 +135,32 @@
 		<h1>Hardware & services</h1>
 		<p>What is loaded where. Services load when a task needs them and unload after they go idle; starting one here keeps it resident. CUDA, ROCm, Vulkan and Metal builds are all supported — the device lists come from the installed llama.cpp and PyTorch builds.</p>
 	</div>
-	<div class="row">
-		<button class="btn ghost" onclick={() => void recheckDevices()}><i class="bi bi-arrow-repeat"></i> Recheck devices</button>
+	<div class="nvtop-actions">
+		<div class="row">
+			<button class="btn ghost" onclick={() => void recheckDevices()}><i class="bi bi-arrow-repeat"></i> Recheck devices</button>
+			<button class="btn ghost" disabled={nvtop?.state === 'running'} aria-busy={nvtop?.state === 'running'} onclick={() => void buildNvtop()}>{nvtopLabel}</button>
+			<div class="help-wrap">
+				<button
+					type="button"
+					class="icon-btn"
+					aria-label="What Build nvtop does"
+					aria-expanded={nvtopHelp}
+					onclick={() => (nvtopHelp = !nvtopHelp)}
+				><i class="bi bi-question-circle"></i></button>
+				{#if nvtopHelp}
+					<div class="help-pop" role="note">
+						<p>Downloads the nvtop revision this patch matches (3.3.2, commit ed4a572), applies it, and builds the binary under this install's <code>data/tools/nvtop</code>. Komatose then runs that file by its path.</p>
+						<p>The snapshot includes a PCI address for each card and reports GTT separately from VRAM, so identical cards can be told apart and a model parked in system memory stays visible. Until that build exists, this page uses nvidia-smi or ggml's free-memory figure.</p>
+						<p>Missing compiler and library packages are installed with this machine's package manager (dnf, apt, pacman, zypper, apk, or xbps). That covers a C++ compiler, CMake, and the ncurses, libdrm, and libudev headers. It needs permission to install packages. If that permission is missing, or the headers would upgrade packages already installed, the build stops and shows the command to run.</p>
+						<p>The build includes AMD, Intel, and NVIDIA. The nvtop already installed for a terminal stays where it is. <code>SCAN_NVTOP</code>, when set, is the binary Komatose runs instead. The build takes a minute or two. Recheck devices when it finishes.</p>
+					</div>
+				{/if}
+			</div>
+		</div>
+		{#if nvtopNote()}<p class="muted small nvtop-note">{nvtopNote()}</p>{/if}
+		{#if nvtop && (nvtop.state === 'running' || nvtop.state === 'failed') && nvtop.lines.length}
+			<pre class="build-log">{nvtop.lines.join('\n')}</pre>
+		{/if}
 	</div>
 </div>
 
