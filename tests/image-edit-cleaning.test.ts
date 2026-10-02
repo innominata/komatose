@@ -123,9 +123,19 @@ test('cleaning replaces marked lettering and keeps native page dimensions', asyn
   assert.equal(result.method, 'qwen-image-edit');
   assert.equal(result.patches, 1);
   const output = await sharp(opts.out).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const source = await sharp(opts.path).ensureAlpha().raw().toBuffer();
   assert.equal(output.info.width, 96);
   assert.equal(output.info.height, 80);
   assert.deepEqual(output.data.subarray((30 * 96 + 40) * 4, (30 * 96 + 40) * 4 + 4), Buffer.from([200, 50, 25, 255]));
+  // The editor returns a flat fill for the whole crop. Only the mask, plus a 4px falloff, is kept.
+  const at = (y: number, x: number) => (y * 96 + x) * 4;
+  assert.deepEqual(output.data.subarray(at(25, 40), at(25, 40) + 4), source.subarray(at(25, 40), at(25, 40) + 4));
+  assert.deepEqual(output.data.subarray(0, 4), source.subarray(0, 4));
+  const feather = at(28, 40);
+  const cover = Math.round(255 * (1 - 2 / 5)) / 255;
+  const blended = Buffer.from([0, 0, 0, 255]);
+  for (let c = 0; c < 3; c++) blended[c] = Math.round([200, 50, 25][c] * cover + source[feather + c] * (1 - cover));
+  assert.deepEqual(output.data.subarray(feather, feather + 4), blended);
 
   const request = (await calls()).at(-1)!;
   assert.equal(request.url, '/v1/images/edits');
@@ -189,12 +199,16 @@ test('long pages are cropped without changing native dimensions or missing tile 
   const result = await cleanWithQwenImage(opts);
   assert.equal(result.patches, 2);
   const output = await sharp(opts.out).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const source = await sharp(opts.path).ensureAlpha().raw().toBuffer();
   assert.equal(output.info.width, 800);
   assert.equal(output.info.height, 1800);
   assert.deepEqual(output.data.subarray((767 * 800 + 767) * 4, (767 * 800 + 767) * 4 + 4), Buffer.from([200, 50, 25, 255]));
   assert.deepEqual(output.data.subarray((1700 * 800 + 20) * 4, (1700 * 800 + 20) * 4 + 4), Buffer.from([200, 50, 25, 255]));
-  // Artwork outside every crop keeps its original pixels.
+  // Artwork outside every crop keeps its original pixels, and so does artwork inside a
+  // crop once it is past the mask falloff.
   assert.deepEqual(output.data.subarray(0, 4), Buffer.from([0, 0, 0, 255]));
+  const inside = (600 * 800 + 600) * 4;
+  assert.deepEqual(output.data.subarray(inside, inside + 4), source.subarray(inside, inside + 4));
   assert.equal((await calls()).length - count, 2);
   // Qwen-Image-2.1 blurs and drifts unless both crop sides are divisible by 32, and the
   // crop has to grow past the marked bounds so the model can continue the surrounding art.

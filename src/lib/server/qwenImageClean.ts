@@ -9,9 +9,13 @@ import {
 import { installedImageEdit, withImageEdit } from './imageEdit';
 import { imageEditLorasDir } from './gpuMode';
 
-// Same tiling as the Codex method so both reconstructions are composited alike.
+// Same tiling as the Codex method. Codex keeps each reconstructed crop; this editor
+// copies generated pixels only where the mask is set.
 const CORE = 768;
 const CONTEXT = 128;
+// The VAE decode softens the whole crop. Marked pixels stay fully generated, and this
+// many pixels outside the mask ramp back to the original so the seam does not show.
+const MASK_FEATHER = 4;
 
 type Crop = { left: number; top: number; width: number; height: number };
 
@@ -82,6 +86,45 @@ function cropRect(bounds: Crop, pageWidth: number, pageHeight: number, id: Image
     top: Math.round(want.top + (want.height - height) / 2),
     width, height,
   };
+}
+
+/**
+ * Coverage used when pasting a crop back: 255 on marked pixels, then a linear falloff
+ * over `radius` pixels outside the mask. Interior marks are left at full strength so a
+ * thin stroke is not blended back toward the lettering it was meant to remove.
+ */
+function maskCoverage(selection: Buffer, width: number, height: number, radius: number) {
+  const coverage = new Uint8Array(width * height);
+  const boundary: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = y * width + x;
+      if (!selection[index]) continue;
+      coverage[index] = 255;
+      const edge = x === 0 || y === 0 || x === width - 1 || y === height - 1
+        || !selection[index - 1] || !selection[index + 1]
+        || !selection[index - width] || !selection[index + width];
+      if (edge) boundary.push(index);
+    }
+  }
+  for (const index of boundary) {
+    const x = index % width;
+    const y = (index - x) / width;
+    for (let dy = -radius; dy <= radius; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= height) continue;
+      for (let dx = -radius; dx <= radius; dx++) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= width) continue;
+        const distance = Math.hypot(dx, dy);
+        if (distance > radius) continue;
+        const value = distance === 0 ? 255 : Math.round(255 * (1 - distance / (radius + 1)));
+        const at = yy * width + xx;
+        if (value > coverage[at]) coverage[at] = value;
+      }
+    }
+  }
+  return coverage;
 }
 
 /** Extracts the crop, repeating edge pixels wherever the rectangle leaves the page. */
@@ -216,17 +259,20 @@ async function cleanCrops(opts: {
       if (!meta.width || !meta.height || Math.abs(meta.width / meta.height - crop.width / crop.height) > .02)
         throw new Error('The local image editor returned a different image framing; retry cleaning');
       const fill = await sharp(generated).resize(crop.width, crop.height, { fit: 'fill' }).toColourspace('srgb').ensureAlpha().raw().toBuffer();
+      const coverage = maskCoverage(selection, crop.width, crop.height, MASK_FEATHER);
       for (let y = 0; y < crop.height; y++) {
         const sourceY = crop.top + y;
         if (sourceY < 0 || sourceY >= height) continue;
         for (let x = 0; x < crop.width; x++) {
           const sourceX = crop.left + x;
           if (sourceX < 0 || sourceX >= width) continue;
-          const from = (y * crop.width + x) * channels, to = (sourceY * width + sourceX) * channels;
-          // Keep the complete reconstruction, including changes outside the mask.
-          const alpha = fill[from + 3] / 255;
-          for (let c = 0; c < 3; c++) output[to + c] = Math.round(fill[from + c] * alpha + output[to + c] * (1 - alpha));
-          mask.data[sourceY * width + sourceX] = 0;
+          const local = y * crop.width + x;
+          const from = local * channels, to = (sourceY * width + sourceX) * channels;
+          if (selection[local]) mask.data[sourceY * width + sourceX] = 0;
+          // Unmarked pixels stay bit-exact. Only the mask, plus a short falloff, is replaced.
+          const weight = (coverage[local] / 255) * (fill[from + 3] / 255);
+          if (weight <= 0) continue;
+          for (let c = 0; c < 3; c++) output[to + c] = Math.round(fill[from + c] * weight + output[to + c] * (1 - weight));
         }
       }
     }

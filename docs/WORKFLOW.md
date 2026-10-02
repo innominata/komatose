@@ -110,7 +110,7 @@ The editor runs as its own `sd-server` on port 18092. **Admin → Models → Har
 
 Each crop is sampled with `SCAN_IMAGE_STEPS` steps and `SCAN_IMAGE_DENOISE` strength, at the model's documented guidance: 20 steps at CFG 2.5 with flow shift 3. `SCAN_IMAGE_<KEY>` sets the shared value and `SCAN_IMAGE_EDIT_<KEY>` overrides it for this editor. Strength 1 repaints the whole marked area; lower values keep more of the original page and can leave marked lettering behind. `SCAN_IMAGE_SEED` makes a run reproducible, and `SCAN_IMAGE_OFFLOAD_TO_CPU=1` streams the diffusion weights from RAM for small cards. The recipe also passes `--vae-tiling`: the 20B transformer plus a 5.4GB encoder leave too little free VRAM to encode a crop's init image in one go, which fails the second crop on a 24GB card with `vae encode compute failed`.
 
-Crops grow past the marked bounds so the model can continue the surrounding line art, are padded by repeating the page's edge pixels rather than white, and are always rounded up to the /32 grid the model needs. `SCAN_IMAGE_MIN_SIDE` (512 default) sets the smallest working size for a crop.
+Crops grow past the marked bounds so the model can continue the surrounding line art, are padded by repeating the page's edge pixels rather than white, and are always rounded up to the /32 grid the model needs. `SCAN_IMAGE_MIN_SIDE` (512 default) sets the smallest working size for a crop. The returned crop is copied back only where the mask is set, with a 4 px falloff outside it, so the VAE's reconstruction of the rest of the crop does not soften unmarked artwork.
 
 Style LoRAs load through `SCAN_IMAGE_LORAS` (or `SCAN_IMAGE_EDIT_LORAS`) as `name[:multiplier]` entries resolved inside `SCAN_IMAGE_LORAS_DIR`.
 

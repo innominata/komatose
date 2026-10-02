@@ -334,10 +334,11 @@ model was trained around **one megapixel**, so follow these rules.
 
 - Verify the returned image has the **same aspect ratio** as the crop (allow ~2%
   tolerance). If it does not, the framing drifted — retry rather than composite it.
-- Resize the result back to the exact crop dimensions with `fit: "fill"`, then **composite
-  the complete reconstruction**, including changes the model made *outside* the mask. The
-  model's context-aware repaint of nearby line art is desirable; only clamp to the crop
-  rectangle.
+- Resize the result back to the exact crop dimensions with `fit: "fill"`, then composite
+  **only the masked pixels** back onto the original page. Decoding the crop through the VAE
+  softens everything else; leaving those pixels untouched keeps unmarked line art and
+  screentone exact. Feather 4 px outside the mask so the inpaint meets the page without a
+  hard seam. Marked pixels stay fully generated — the falloff never eats into the mask.
 - Restore the page's original width/height in the final artifact. Never change page
   dimensions as a side effect of cleaning.
 
@@ -379,8 +380,8 @@ for each group:
              size   = "{crop.width}x{crop.height}"
 
     assert same_aspect(result, crop)                      # ≤2% tolerance
-    page = composite(page, fill(result, crop), crop)      # blend whole result, not just mask
-    clear mask under crop                                 # overlap uses latest reconstruction
+    page = composite_masked(page, fill(result, crop), mask, feather=4)
+    clear marked pixels                                   # overlap uses latest reconstruction
 
 save page at native W×H
 ```
