@@ -773,11 +773,12 @@ def _border_contrast(img, region):
 
 
 def _bridge_split_fill(img, region, reach=10):
-    """Pull back solid fill that lettering has split off, then close across that stroke.
+    """Pull a solid cap back onto a dark balloon, then close across the stroke.
 
-    A glyph drawn in the outline colour can separate a cap of the same fill and
-    still touch the border, so it is not a hole. The gap matches the outline.
-    A piece that runs out of the local window is the rest of the page.
+    A glyph in the outline colour can separate a cap of the same fill and still
+    touch the border, so it is not a hole. Only a compact cap qualifies. White
+    holes in screentone sit just outside a light balloon and match its fill;
+    closing across them paints the outline and the page.
     """
     if not np.any(region):
         return region
@@ -802,6 +803,15 @@ def _bridge_split_fill(img, region, reach=10):
     edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = 255
     parts = local.copy()
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach * 2 + 1, reach * 2 + 1))
+    contours, _ = cv2.findContours(local, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    hull_mask = np.zeros_like(local)
+    if contours:
+        cv2.drawContours(hull_mask, [cv2.convexHull(max(contours, key=cv2.contourArea))], -1, 255, cv2.FILLED)
+    # A light balloon's border is a dark stroke. White holes in the screentone sit
+    # just outside it and match the fill, so closing across them paints the stroke
+    # and the page. A dark balloon has no such stroke: a solid cap cut off by
+    # lettering is the piece worth joining.
+    light_fill = float(np.max(interior)) > 160
     for label in range(1, count):
         comp = labels == label
         if np.any(comp & (local > 0)):
@@ -810,6 +820,16 @@ def _bridge_split_fill(img, region, reach=10):
         if area < 8 or area > int(cv2.countNonZero(local)) * 8:
             continue
         if np.any(comp & (edge > 0)) or float(dist[comp].min()) > reach:
+            continue
+        inside_hull = float(np.count_nonzero(comp & (hull_mask > 0))) / area
+        if inside_hull >= 0.5 or light_fill or area < 80:
+            continue
+        piece_contours, _ = cv2.findContours(comp.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not piece_contours:
+            continue
+        piece_contour = max(piece_contours, key=cv2.contourArea)
+        piece_hull = cv2.contourArea(cv2.convexHull(piece_contour))
+        if piece_hull <= 0 or cv2.contourArea(piece_contour) / piece_hull < 0.9:
             continue
         piece = comp.astype(np.uint8)
         gap = (cv2.dilate(local, kernel) > 0) & (cv2.dilate(piece, kernel) > 0) & (local == 0) & ~comp

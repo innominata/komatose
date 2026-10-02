@@ -451,6 +451,25 @@ class Cleaning(unittest.TestCase):
         self.assertGreater(int(out[30, 30, 0]), 200)
         self.assertGreater(int(out[110, 78, 0]), 180)
 
+    def test_bubble_fill_does_not_cross_the_outline_to_reach_outside_white(self):
+        img = np.full((300, 400, 3), 150, np.uint8)
+        cv2.ellipse(img, (200, 150), (80, 60), 0, 0, 360, (250,)*3, -1)
+        cv2.ellipse(img, (200, 150), (80, 60), 0, 0, 360, (0,)*3, 3)
+        cv2.putText(img, 'HI', (170, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,)*3, 2)
+        # Screentone holes just outside the stroke. They match the fill, so a
+        # close that treats them as part of the balloon paints the outline.
+        for center in ((200, 78), (200, 222), (108, 150), (292, 150)):
+            cv2.circle(img, center, 4, (248,)*3, -1)
+        out = img.copy()
+        self.assertEqual(workflow.bubble_fill(out, {'px': .5, 'py': .5}), 'bubble')
+        self.assertGreater(int(out[150, 200, 0]), 240)
+        self.assertGreater(int(out[155, 185, 0]), 240)
+        self.assertLess(int(out[90, 200, 0]), 30)
+        self.assertLess(int(out[210, 200, 0]), 30)
+        np.testing.assert_array_equal(out[78, 200], img[78, 200])
+        np.testing.assert_array_equal(out[70, 200], img[70, 200])
+        np.testing.assert_array_equal(out[10, 10], img[10, 10])
+
     def test_mask_grow_expands_only_the_clicked_component(self):
         mask = np.zeros((80, 120), np.uint8)
         mask[10:20, 10:20] = 255
