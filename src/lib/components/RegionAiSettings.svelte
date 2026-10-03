@@ -2,7 +2,7 @@
   import { untrack } from "svelte";
   import AiModelPicker from "./AiModelPicker.svelte";
   import TranslationModelPicker from './TranslationModelPicker.svelte';
-  import { assistantDisplayName } from "$lib/modelRegistry";
+  import { assistantDisplayName, DEFAULT_TRANSCRIPTION_MODEL_IDS } from "$lib/modelRegistry";
   import { regionAiSettings, defaultReviseModels, enginesForRegionAiField, MAX_REVISE_MODELS, MAX_TRANSCRIPTION_MODELS, type RegionAiSettings } from "$lib/regionAi";
   import type { TaskEngine, EngineModelOption } from "$lib/aiTasks";
   import { isPageImageOnlyEngine, type TranslateEngine, type TranslateEngineInfo } from "$lib/types";
@@ -97,6 +97,14 @@
     if (Array.isArray(info.transcriptionModels)) {
       transcriptionOptions = info.transcriptionModels;
       const allowed = new Set(info.transcriptionModels.map((row) => row.id));
+      // Disabled and deleted models stay out of this list, but a saved selection
+      // can still name them. Drop those so they are not transcribed or counted
+      // toward the checkbox cap.
+      const kept = draft.transcriptionModels.filter((id) => allowed.has(id));
+      if (kept.length !== draft.transcriptionModels.length) {
+        const fallback = DEFAULT_TRANSCRIPTION_MODEL_IDS.filter((id) => allowed.has(id));
+        draft.transcriptionModels = kept.length ? kept : fallback;
+      }
     }
   }
   async function refreshLiveEngines() {

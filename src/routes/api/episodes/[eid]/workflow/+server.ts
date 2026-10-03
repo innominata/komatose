@@ -5,6 +5,7 @@ import { rowHasOperation } from '$lib/modelRegistry';
 import type { ProviderOperation } from '$lib/providerCatalog';
 import { MAX_SOURCE_REVIEWERS } from '$lib/localReviewModels';
 import { MAX_TRANSCRIPTION_MODELS, normalizeTranscriptionModels } from '$lib/regionAi';
+import { transcriptionModelIds } from '$lib/server/ocrConsensus';
 import { resolveLiveAssistant } from '$lib/server/assistantRoute';
 import { maskInputs } from "$lib/maskDiagnostics";
 import { automaticRegionPolygon, bubbleFitPoints } from "$lib/regionGeometry";
@@ -247,7 +248,7 @@ function assertPassedTask(
 function parseRegionAi(ai: any): NonNullable<Preferences["regionAi"]> {
   if (!Array.isArray(ai?.reviewers) || ai.reviewers.length > MAX_SOURCE_REVIEWERS)
     throw new WorkflowError("Choose up to five reviewers");
-  const transcriptionModels = normalizeTranscriptionModels(ai.transcriptionModels);
+  const transcriptionModels = transcriptionModelIds(normalizeTranscriptionModels(ai.transcriptionModels));
   if (!transcriptionModels.length) throw new WorkflowError('Choose a transcription model');
   const regionAi = {
     translate: validateModel(ai.translate),

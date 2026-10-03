@@ -3,6 +3,7 @@
 Three components: **RT-DETR** locates text and speech bubbles, **COO** proposes
 free-floating sound effects, and **Koharu** produces the mask used to remove
 lettering. Detection and masking are separate stages and use separate models.
+Chapter transcription cross-checks several detectors (see Cross-check fusion).
 
 ## Requirements
 
@@ -243,13 +244,52 @@ unsuitable for thresholding.
   against the merged line height.
 - Strength thresholds are 150 (strong) and 65 (weak).
 
-## Optional: Koharu region supplementation
+## Cross-check fusion
 
-Koharu can also contribute text region boxes to the detection stage when the
-detector setup includes `+koharu` (see Configuration). Its boxes supplement
-those from the base detector. Before an admin saves a setup, the fallback reads
-`SCAN_KOHARU_DETECT`: `auto` follows `SCAN_MASK_ENGINE`, `1` requires the
-weights, `0` disables it.
+No single detector is both sensitive and precise on comics, so chapter
+transcription runs several and lets them vote (`src/lib/server/detectFusion.ts`).
+The pipeline in `detectRegions` is:
+
+1. The setup's base detector runs.
+2. Its **cross-check partner** runs too (`rtdetr` is checked by `ctd` and `ctd`
+   by `rtdetr`), when installed. The partner gets `supplement=false` so RT-DETR
+   does not run CTD a second time internally.
+3. COO adds free-floating sound-effect polygons when the setup has `+coo`.
+4. Koharu's text mask supplies boxes when the setup has `+koharu`. Koharu boxes
+   are noisy, so they are **voter-only**: they confirm another detector's box
+   and never create a region unless no box detector ran.
+5. `fuseDetections` merges everything. Seeds are taken in the order COO,
+   RT-DETR, CTD, Paddle, Koharu. A candidate joins a seed when the boxes share a
+   class and overlap (IoU 0.4, or 0.6 across classes), when it is a fragment of
+   the seed (80% inside it, one column of a bubble), or when it is the same
+   lettering with a looser margin. Each region records the detectors that
+   found it in `provenance.sources`.
+6. A box found by only one detector survives only above its own threshold
+   (RT-DETR bubble 0.5, RT-DETR free 0.6, CTD 0.6). A Paddle or Koharu block
+   that swallows two or more other regions is a line-grouping artefact and is
+   dropped.
+7. The minimum region size scales with the page (1.2% of the short side, between
+   10 px and 30 px), so one-character lettering on a low-resolution scan is
+   kept and speckle on a large scan is not.
+
+Unknown regions are no longer typed as dialogue. The kind comes from the
+detector's own class (`text_free` and COO are free text), then from the reading
+(`looksLikeOnomatopoeia`, `looksLikeSentence` in `src/lib/sfx.ts`). Short
+hiragana in a bubble, such as a sigh, stays dialogue.
+
+`SCAN_DETECT_CROSSCHECK=0` turns the partner off and runs the base alone.
+
+The COO adapter in `modelImageAdapters.ts` must pass the polygon through;
+chapter transcription rejects a COO region without its contour.
+
+### Measuring changes
+
+`scripts/eval-detection.ts` scores setups against the gold boxes (recall,
+precision, F1, sound effects found, false alarms). `collect` runs the detectors
+once and caches the raw output; `score` replays the fusion on the cache, so
+tuning `FUSION` takes seconds instead of minutes. `--misses` lists what each
+setup missed or invented. Benchmark setups include the partner part, so the
+Models page scores the same pipeline production runs.
 
 ## Configuration
 
@@ -279,6 +319,7 @@ Read by the Python layer:
 | `SCAN_DETECT_DEVICE` | `auto` | `auto` prefers ROCm, MIGraphX or CUDA; `cpu` forces CPU |
 | `SCAN_DETECT_THREADS` | `0` | `0` lets onnxruntime choose |
 | `SCAN_DETECT_CTD_SUPPLEMENT` | `1` | `0` disables the CTD supplement |
+| `SCAN_DETECT_CROSSCHECK` | `1` | `0` disables the cross-check partner (host side) |
 | `SCAN_RTDETR_FILE` | `detector.onnx` | alternate ONNX filename |
 | `SCAN_COO` | `auto` | `auto` or `1` enables, `0` disables |
 | `SCAN_COO_THREADS` | `4` | torch intra-op threads |
@@ -316,3 +357,5 @@ python scripts/install-koharu.py [--gpu]           # Koharu weights + Hi-SAM sou
 | `ocr/lettering.py` | mask engine selection and mask post-processing |
 | `ocr/koharu_mask.py` | Koharu loading and inference |
 | `src/lib/server/detect.ts` | stage orchestration |
+| `src/lib/server/detectFusion.ts` | cross-check voting and merging |
+| `scripts/eval-detection.ts` | gold-box scoring harness |

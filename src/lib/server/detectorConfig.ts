@@ -38,12 +38,12 @@ function readStored(): StoredDetector | undefined {
 
 /**
  * The setup a fresh install ran before detection was configurable: the old
- * default detector, COO beside RT-DETR, and Koharu, each whenever installed.
+ * default detector, COO beside it, and Koharu, each whenever installed.
  */
 function legacySetup(base: Detector = parseDetector(modelDefaultFor('detect'))): DetectorSetupConfig {
 	return {
 		base,
-		coo: base === 'rtdetr' && cooEnabled(),
+		coo: base !== 'heuristic' && cooEnabled(),
 		koharu: base !== 'heuristic' && koharuDetectionMode() !== 'off' && koharuInstalled(),
 	};
 }

@@ -1,7 +1,8 @@
 import { compareOcrReadings, failedOcrConsensus, ocrComparableKey, type OcrConsensus, type OcrReading } from '../ocrConsensus';
+import { classifyRegionLineType, sfxClassificationSource, type RegionTypeHints } from '../sfx';
 import { collapseSuggestions } from '../regionAi';
 import { normalizeTranslation } from '../translationText';
-import { DEFAULT_TRANSCRIPTION_MODEL_IDS, resolveAssistant } from '../modelRegistry';
+import { DEFAULT_TRANSCRIPTION_MODEL_IDS, resolveAssistant, visionEligible } from '../modelRegistry';
 import type { LineRow, OcrLang } from '../types';
 import { sqlite } from './db';
 import { broadcast } from './realtime';
@@ -12,7 +13,7 @@ import { eq } from 'drizzle-orm';
 import { installedLocalReviewModels, imageMessage, localChat, localTranscription, withLocalReview } from './localReview';
 import { qwen3VlReviewId } from '../qwenModels';
 import { ocrSourceAttribution, ocrTranslatorLabel, translateOcrSource } from './ocrReview';
-import { suggest, WorkflowError } from './workflowStore';
+import { getDoc, suggest, WorkflowError } from './workflowStore';
 import { resolveLiveAssistant } from './assistantRoute';
 import { isOcrSpecialist } from '../modelRegistry';
 import { runVisionRead, type VisionReadHandlers } from './visionRead';
@@ -21,6 +22,8 @@ import { extractJsonObject, parseReadPayload, readBubble, readBubbleCopy, READ_S
 import { listRegistryRows } from './modelRegistryStore';
 
 const OCR_CONCURRENCY = 3;
+/** One model reading one region. A hung remote call must not hold the chapter. */
+export const TRANSCRIPTION_READ_MS = 30_000;
 
 const visionReadHandlers: VisionReadHandlers = {
   cli: (engine, opts) => readBubbleWithCli(engine, opts.jpeg, { lang: opts.lang, model: opts.model, abort: opts.abort }),
@@ -55,9 +58,21 @@ export type TranscriptionReader = (
   lang?: OcrLang,
 ) => Promise<string>;
 
+function selectableTranscriptionId(id: string, rows = listRegistryRows()) {
+  try {
+    return visionEligible(resolveAssistant(id, '', rows).row);
+  } catch {
+    return false;
+  }
+}
+
+/** Saved ids that are still enabled and allowed to read text. Disabled or deleted models are omitted. */
 export function transcriptionModelIds(value?: string[] | null): string[] {
   const ids = Array.isArray(value) && value.length ? value : [...DEFAULT_TRANSCRIPTION_MODEL_IDS];
-  return [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+  const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+  const rows = listRegistryRows();
+  const live = unique.filter((id) => selectableTranscriptionId(id, rows));
+  return live.length ? live : unique;
 }
 
 export function assertOcrConsensusInstalled(modelIds?: string[]) {
@@ -125,10 +140,15 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
   const run = async (signal: AbortSignal) => {
     const readings: OcrReading[] = await mapPool(ids, OCR_CONCURRENCY, async (id) => {
       signal.throwIfAborted();
-      try { return { model: id, source: (await read(id, crop, signal, lang)).trim() }; }
+      const timeout = AbortSignal.timeout(TRANSCRIPTION_READ_MS);
+      const readSignal = AbortSignal.any([signal, timeout]);
+      try { return { model: id, source: (await read(id, crop, readSignal, lang)).trim() }; }
       catch (error) {
         signal.throwIfAborted();
-        return { model: id, source: '', error: error instanceof Error ? error.message : String(error) };
+        const message = timeout.aborted
+          ? `Timed out after ${Math.round(TRANSCRIPTION_READ_MS / 1000)}s`
+          : (error instanceof Error ? error.message : String(error));
+        return { model: id, source: '', error: message };
       }
     });
     const result = compareOcrReadings(readings);
@@ -178,6 +198,37 @@ export function ocrReadingsToSuggest(result: OcrConsensus, applied: boolean): Oc
 }
 
 /**
+ * Dialogue, aside and SFX are the only types detection assigns. A dictionary hit
+ * promotes dialogue to SFX. A free-text box whose reading is speech is demoted to an
+ * aside, unless a person already chose the type.
+ */
+export function correctedRegionLineType(
+  current: string,
+  updatedBy: string | null,
+  source: string,
+  hints: RegionTypeHints = {},
+): string | null {
+  if (current !== '""' && current !== '::' && current !== '//') return null;
+  if (!source.trim()) return null;
+  const kind = hints.kind ?? (current === '""' ? 'bubble' : 'free');
+  const next = classifyRegionLineType(kind, source, hints);
+  if (next === current) return null;
+  if (next !== '::' && updatedBy !== 'ai-ocr') return null;
+  return next;
+}
+
+/** Whether the sound-effect detector, not just the box detector, found this region. */
+function sfxHints(lineId: string): RegionTypeHints {
+  const data = getDoc<{ detectionKind?: string; detectionProvenance?: { backend?: string } }>(`region:${lineId}`, {}).data;
+  const backend = data.detectionProvenance?.backend;
+  const kind = data.detectionKind;
+  return {
+    sfxDetector: typeof backend === 'string' && backend.startsWith('coo'),
+    ...(kind === 'bubble' || kind === 'free' || kind === 'unknown' ? { kind } : {}),
+  };
+}
+
+/**
  * One pending source suggestion on an empty line is the reading. Write it into
  * whichever of source and English is still empty, then drop the suggestion.
  */
@@ -197,10 +248,11 @@ export function applyLonePendingSource(episodeId: string, lineId: string): boole
   const card = cards[0];
   const english = !(row.body || '').trim() && card.translation?.trim() ? normalizeTranslation(card.translation.trim()) : (row.body || '');
   const status = english.trim() ? ((row.body || '').trim() ? row.status : 'needs_work') : 'none';
+  const lineType = correctedRegionLineType(row.lineType, row.updatedBy, card.body.trim(), sfxHints(lineId));
   const written = sqlite.prepare(
-    `UPDATE lines SET source=?,source_state='read',body=?,status=?,ocr_confidence=NULL,updated_at=?
+    `UPDATE lines SET source=?,source_state='read',body=?,status=?,ocr_confidence=NULL,line_type=COALESCE(?, line_type),updated_at=?
      WHERE id=? AND episode_id=? AND source_state!='ignored' AND (source IS NULL OR TRIM(source)='')`,
-  ).run(card.body.trim(), english, status, Date.now(), lineId, episodeId);
+  ).run(card.body.trim(), english, status, lineType, Date.now(), lineId, episodeId);
   if (!written.changes) return false;
   sqlite.prepare(`UPDATE suggestions SET state='rejected' WHERE id IN (${card.mergedIds.map(() => '?').join(',')}) AND state='pending'`)
     .run(...card.mergedIds);
@@ -226,9 +278,15 @@ export function saveOcrConsensus(
       const status = result.agreed
         ? (english ? 'needs_work' : (sameSource && (row.body || '').trim() ? (row.status || 'none') : 'none'))
         : 'needs_work';
-      sqlite.prepare(`UPDATE lines SET source=?,source_state=?,body=?,ocr_confidence=NULL,status=?,updated_at=?
+      const lineType = correctedRegionLineType(
+        row.lineType,
+        row.updatedBy,
+        sfxClassificationSource(result.source, result.readings),
+        sfxHints(row.id),
+      );
+      sqlite.prepare(`UPDATE lines SET source=?,source_state=?,body=?,ocr_confidence=NULL,status=?,line_type=COALESCE(?, line_type),updated_at=?
         WHERE id=? AND episode_id=? AND revision=?`).run(result.source, result.agreed ? 'read' : 'unreadable',
-        body, status, Date.now(), row.id, episodeId, row.revision);
+        body, status, lineType, Date.now(), row.id, episodeId, row.revision);
     }
     let saved = toLine(db.select().from(lines).where(eq(lines.id, line.id)).get()!);
     const winnerSaved = result.agreed && !!result.source.trim() && (saved.source || '') === result.source;

@@ -333,6 +333,7 @@ def do_detect(req: dict) -> dict:
             overlap=int(overlap) if overlap else None,
             ocr=_get_ocr(_paddle_lang(req)) if backend == "paddle" else None,
             progress=progress,
+            supplement=req.get("supplement") is not False,
         )
     h, w = img.shape[:2]
     payload = []

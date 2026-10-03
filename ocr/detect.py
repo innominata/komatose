@@ -211,6 +211,7 @@ def detect_rtdetr(
     overlap: int = 172,
     *,
     progress=None,
+    supplement: bool = True,
 ) -> list[dict]:
     if progress:
         progress("RT-DETR", "Detecting regions")
@@ -250,7 +251,7 @@ def detect_rtdetr(
     out = _dedupe(_clip(rows, W, H))
     # CTD contributes small lettering that RT-DETR sometimes misses. Keep the
     # RT-DETR classes and geometry wherever the models agree.
-    if os.environ.get("SCAN_DETECT_CTD_SUPPLEMENT", "1") != "0":
+    if supplement and os.environ.get("SCAN_DETECT_CTD_SUPPLEMENT", "1") != "0":
         try:
             if progress:
                 progress("Comic Text Detector", "Detecting regions")
@@ -441,12 +442,14 @@ def detect(
     ocr: Any = None,
     *,
     progress=None,
+    supplement: bool = True,
 ) -> list[dict]:
     backend = (backend or "rtdetr").lower()
     if backend == "rtdetr":
         t = tile or 690
         return detect_rtdetr(
-            img, conf if conf is not None else 0.20, t, overlap or int(t * 0.25), progress=progress)
+            img, conf if conf is not None else 0.20, t, overlap or int(t * 0.25), progress=progress,
+            supplement=supplement)
     if backend == "ctd":
         if progress:
             progress("Comic Text Detector", "Detecting regions")

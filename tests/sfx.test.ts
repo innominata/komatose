@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  classifyRegionLineType,
   findSfxInText,
+  looksLikeDialogue,
+  looksLikeOnomatopoeia,
   lookupStandaloneSfx,
+  sfxClassificationSource,
   sfxGlossaryPrompt,
   sfxTranslateHit,
   withSfxGlossary,
@@ -48,6 +52,68 @@ test('glossary addendum includes only SFX that appear in the current sources', (
 
 test('meanings keep internal slashes and only split on spaced delimiters', () => {
   assert.deepEqual(lookupStandaloneSfx('スラスラ')?.meanings, ['write/read fluently']);
+});
+
+test('region type follows the dictionary and the detector prior', () => {
+  assert.equal(classifyRegionLineType('bubble', 'ドキドキ'), '::');
+  assert.equal(classifyRegionLineType('unknown', 'どきどき！'), '::');
+  assert.equal(classifyRegionLineType('free', '待って！'), '//');
+  assert.equal(classifyRegionLineType('free', 'こんにちは'), '//');
+  assert.equal(classifyRegionLineType('free', 'ズギャーン'), '::');
+  assert.equal(classifyRegionLineType('bubble', 'ズギャーン'), '""');
+  assert.equal(classifyRegionLineType('free', ''), '::');
+  assert.equal(looksLikeDialogue('ふわっ'), false);
+  assert.equal(
+    sfxClassificationSource('', [
+      { source: 'ドーン' },
+      { source: 'ドンッ' },
+    ]),
+    'ドーン',
+  );
+  assert.equal(
+    sfxClassificationSource('', [
+      { source: 'ドーン' },
+      { source: '待って' },
+    ]),
+    '',
+  );
+});
+
+test('a detector that cannot place the text is judged by the shape of the reading', () => {
+  for (const sfx of ['ズバババ', 'ババババ', 'ちゅううううう', 'ちゅるるっ', 'ズバズバ', 'ハンハッ', 'チッ', 'バシャッ'])
+    assert.equal(classifyRegionLineType('unknown', sfx), '::', sfx);
+  for (const speech of ['はい！', 'ホラ斉藤！', 'えー？でもさっき出てないって言ってたよね？', 'そうだっ', 'ハーイ', 'ありがとう', ''])
+    assert.equal(classifyRegionLineType('unknown', speech), '""', speech);
+  assert.equal(looksLikeOnomatopoeia('待って待って'), false);
+  assert.equal(looksLikeOnomatopoeia('はいはい'), false);
+  // A hiragana sigh inside a bubble is speech; katakana lettering inside one is still SFX.
+  assert.equal(classifyRegionLineType('bubble', 'はあ……'), '""');
+  assert.equal(classifyRegionLineType('bubble', 'ドキドキ'), '::');
+  assert.equal(classifyRegionLineType('bubble', 'ちゅううううう'), '::');
+  // Inside a detected bubble only the dictionary decides.
+  assert.equal(classifyRegionLineType('bubble', 'ババババ'), '""');
+});
+
+test('the sound-effect detector outranks a misread that looks like a word, but not a sentence', () => {
+  assert.equal(classifyRegionLineType('free', '家族', { sfxDetector: true }), '::');
+  assert.equal(classifyRegionLineType('free', '', { sfxDetector: true }), '::');
+  assert.equal(classifyRegionLineType('bubble', 'ズバババ', { sfxDetector: true }), '::');
+  assert.equal(classifyRegionLineType('free', '眠そうだな斉藤……', { sfxDetector: true }), '//');
+  assert.equal(classifyRegionLineType('free', 'うんさっきまで当直だったから', { sfxDetector: true }), '//');
+});
+
+test('speech lettered outside a bubble is an aside, not dialogue and not SFX', () => {
+  // Free text that the box detector found, read as a sentence.
+  assert.equal(classifyRegionLineType('free', '昼休みにポストしてくれるなんて天使すぎる'), '//');
+  // A short spoken word in a margin that the SFX detector also fired on.
+  assert.equal(classifyRegionLineType('free', 'そう！', { sfxDetector: true }), '//');
+  assert.equal(classifyRegionLineType('free', 'はい', { sfxDetector: true }), '//');
+  // Inside a bubble the same words are dialogue.
+  assert.equal(classifyRegionLineType('bubble', 'そう！'), '""');
+  assert.equal(classifyRegionLineType('bubble', '昼休みにポストしてくれるなんて天使すぎる'), '""');
+  // Sounds stay SFX outside a bubble, including short hiragana ones.
+  for (const sfx of ['ザワッ', 'フン', 'ぐわ', 'かさ', 'ふわっ', 'ババババ'])
+    assert.equal(classifyRegionLineType('free', sfx, { sfxDetector: true }), '::', sfx);
 });
 
 test('standalone hits supply lettering-ready English without a model', () => {

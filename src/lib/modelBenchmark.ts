@@ -433,22 +433,30 @@ export type DetectorPart = 'rtdetr' | 'ctd' | 'paddle' | 'heuristic' | 'coo' | '
 
 export type DetectorSetup = { id: string; label: string; parts: DetectorPart[] };
 
+/** RT-DETR and Comic Text Detector cross-check each other, the way chapter transcription runs them. */
+const CROSS_CHECK: Partial<Record<DetectorPart, DetectorPart>> = { rtdetr: 'ctd', ctd: 'rtdetr' };
+
+function setup(id: string, label: string, parts: DetectorPart[]): DetectorSetup {
+	const partner = CROSS_CHECK[parts[0]];
+	return { id, label, parts: partner ? [parts[0], partner, ...parts.slice(1)] : parts };
+}
+
 export const DETECTOR_SETUPS: DetectorSetup[] = [
-	{ id: 'rtdetr+coo+koharu', label: 'RT-DETR + COO + Koharu', parts: ['rtdetr', 'coo', 'koharu'] },
-	{ id: 'rtdetr+coo', label: 'RT-DETR + COO', parts: ['rtdetr', 'coo'] },
-	{ id: 'rtdetr+koharu', label: 'RT-DETR + Koharu', parts: ['rtdetr', 'koharu'] },
-	{ id: 'rtdetr', label: 'RT-DETR', parts: ['rtdetr'] },
-	{ id: 'ctd+coo+koharu', label: 'Comic Text Detector + COO + Koharu', parts: ['ctd', 'coo', 'koharu'] },
-	{ id: 'ctd+coo', label: 'Comic Text Detector + COO', parts: ['ctd', 'coo'] },
-	{ id: 'ctd+koharu', label: 'Comic Text Detector + Koharu', parts: ['ctd', 'koharu'] },
-	{ id: 'ctd', label: 'Comic Text Detector', parts: ['ctd'] },
-	{ id: 'paddle+coo+koharu', label: 'PaddleOCR lines + COO + Koharu', parts: ['paddle', 'coo', 'koharu'] },
-	{ id: 'paddle+coo', label: 'PaddleOCR lines + COO', parts: ['paddle', 'coo'] },
-	{ id: 'paddle+koharu', label: 'PaddleOCR lines + Koharu', parts: ['paddle', 'koharu'] },
-	{ id: 'paddle', label: 'PaddleOCR lines', parts: ['paddle'] },
-	{ id: 'heuristic', label: 'Geometric bubbles', parts: ['heuristic'] },
-	{ id: 'coo', label: 'COO DBNet++ alone (SFX only)', parts: ['coo'] },
-	{ id: 'koharu', label: 'Koharu SAM-TS-L alone', parts: ['koharu'] },
+	setup('rtdetr+coo+koharu', 'RT-DETR + COO + Koharu', ['rtdetr', 'coo', 'koharu']),
+	setup('rtdetr+coo', 'RT-DETR + COO', ['rtdetr', 'coo']),
+	setup('rtdetr+koharu', 'RT-DETR + Koharu', ['rtdetr', 'koharu']),
+	setup('rtdetr', 'RT-DETR', ['rtdetr']),
+	setup('ctd+coo+koharu', 'Comic Text Detector + COO + Koharu', ['ctd', 'coo', 'koharu']),
+	setup('ctd+coo', 'Comic Text Detector + COO', ['ctd', 'coo']),
+	setup('ctd+koharu', 'Comic Text Detector + Koharu', ['ctd', 'koharu']),
+	setup('ctd', 'Comic Text Detector', ['ctd']),
+	setup('paddle+coo+koharu', 'PaddleOCR lines + COO + Koharu', ['paddle', 'coo', 'koharu']),
+	setup('paddle+coo', 'PaddleOCR lines + COO', ['paddle', 'coo']),
+	setup('paddle+koharu', 'PaddleOCR lines + Koharu', ['paddle', 'koharu']),
+	setup('paddle', 'PaddleOCR lines', ['paddle']),
+	setup('heuristic', 'Geometric bubbles', ['heuristic']),
+	setup('coo', 'COO DBNet++ alone (SFX only)', ['coo']),
+	setup('koharu', 'Koharu SAM-TS-L alone', ['koharu']),
 ];
 
 export const GOLD_SOURCE = 'gold';

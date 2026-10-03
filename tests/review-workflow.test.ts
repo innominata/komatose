@@ -221,6 +221,26 @@ test('one collapsed transcription suggestion fills empty source and English', as
   assert.equal((sqlite.prepare("SELECT count(*) n FROM suggestions WHERE line_id=? AND state='pending'").get(line.id) as { n: number }).n, 0);
 });
 
+test('transcription promotes dictionary SFX and demotes free-text dialogue to an aside', async () => {
+  const bubble = await addLine('class-bubble', { lineType: '""' });
+  saveOcrConsensus('e', bubble, pair('ドキドキ', 'ドキドキ'));
+  assert.equal((await current(bubble.id)).lineType, '::');
+
+  const sfx = await addLine('class-sfx', { lineType: '::' });
+  saveOcrConsensus('e', sfx, pair('待って！', '待って！'));
+  assert.equal((await current(sfx.id)).lineType, '//');
+
+  const spelled = await addLine('class-spelled', { lineType: '""' });
+  const disagreed = pair('ドーン', 'ドン');
+  saveOcrConsensus('e', spelled, disagreed);
+  assert.equal((await current(spelled.id)).source, '');
+  assert.equal((await current(spelled.id)).lineType, '::');
+
+  const chosen = await addLine('class-chosen', { lineType: '::', updatedBy: 'human' });
+  saveOcrConsensus('e', chosen, pair('こんにちは', 'こんにちは'));
+  assert.equal((await current(chosen.id)).lineType, '::');
+});
+
 test('disagreement clears machine drafts, keeps two translated source suggestions, and survives blank cleanup', async () => {
   const line = await addLine('disagree', { source: 'Old OCR', body: 'Old translation', sourceState: 'read' });
   const disagreed = pair('ドーン', 'ドン');

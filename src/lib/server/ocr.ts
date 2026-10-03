@@ -320,6 +320,8 @@ export async function rawDetectRegionsPy(
 		conf?: number;
 		tile?: number;
 		overlap?: number;
+		/** RT-DETR also runs Comic Text Detector by default. False when the caller cross-checks with it separately. */
+		supplement?: boolean;
 		lang?: OcrLang;
 		abort?: AbortSignal;
 		onProgress?: (update: DetectProgress) => void;
@@ -333,6 +335,7 @@ export async function rawDetectRegionsPy(
 			conf: opts.conf ?? null,
 			tile: opts.tile ?? null,
 			overlap: opts.overlap ?? null,
+			supplement: opts.supplement ?? true,
 			lang: opts.lang ?? parseOcrLang(undefined)
 		},
 		{ timeoutMs: DETECT_MS, abort: opts.abort, onProgress: opts.onProgress }

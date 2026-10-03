@@ -21,6 +21,7 @@ import {
   type SpeechBubble,
 } from "./bubbles";
 import { detectRegionsPy, parsePoly, type WorkerRegion } from "./ocr";
+import { fuseDetections, type DetectorSource } from "./detectFusion";
 import { clampDetectConf, type DetectorSetupConfig } from "../detectorSetup";
 
 export type { Detector };
@@ -43,20 +44,29 @@ export type DetectedRegion = {
   score: number;
   polygon?: Point[];
   geometryConfidence?: number;
-  provenance?: { crop?: number[]; truncated?: boolean; backend?: string };
+  provenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubble?: SpeechBubble;
 };
 
 const TEXT_CLASSES = new Set(["text", "text_bubble", "text_free"]);
 
-/** A detector box thinner than this on either axis is not saved as a region. */
+/** Ceiling for the smallest box saved as a region, in source pixels. */
 export const MIN_AUTO_REGION_PX = 30;
+
+/**
+ * A detector box thinner than this on either axis is not saved as a region. It
+ * follows the page: one fixed size drops real one-character lettering on a
+ * low-resolution scan and lets speckle through on a large one.
+ */
+export function minRegionPx(W: number, H: number): number {
+  return Math.min(MIN_AUTO_REGION_PX, Math.max(10, Math.round(Math.min(W, H) * 0.012)));
+}
 
 type Box = [number, number, number, number];
 
 type Candidate = {
   polygon?: Point[];
-  provenance?: { crop?: number[]; truncated?: boolean; backend?: string };
+  provenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   box: Box;
   kind: DetectedRegion["kind"];
   score: number;
@@ -156,7 +166,7 @@ export async function detectRegions(
   page: { path: string; bytes: Buffer; width: number; height: number },
   opts: {
     geometry?: boolean;
-    /** Box detector plus add-ons. Without it, `detector` alone runs, with COO beside RT-DETR when installed. */
+    /** Box detector plus add-ons. Without it, `detector` runs with COO beside it when installed. */
     setup?: DetectorSetupConfig;
     detector?: Detector;
     conf?: number;
@@ -168,7 +178,7 @@ export async function detectRegions(
   } = {},
 ): Promise<DetectedRegion[]> {
   const base = opts.detector ?? parseDetector(undefined);
-  const setup = opts.setup ?? { base, coo: base === "rtdetr" && cooEnabled(), koharu: false };
+  const setup = opts.setup ?? { base, coo: base !== "heuristic" && cooEnabled(), koharu: false };
   const detector = setup.base;
 
   // Detection and OCR must see the same working image, including page edits.
@@ -183,64 +193,87 @@ export async function detectRegions(
         engine: detector,
       });
     }
-    const detection =
-      detector === "heuristic"
-        ? null
-        : await detectRegionsPy(path, {
-            backend: detector,
-            conf: opts.conf ?? envNumber("SCAN_DETECT_CONF"),
-            tile: opts.tile ?? envNumber("SCAN_DETECT_TILE"),
-            lang: opts.lang,
-            abort: opts.abort,
-            onProgress: (update) => opts.onStep?.({
-              step: update.step || "Detecting regions",
-              model: update.model,
-              engine: DETECT_ENGINES[update.model] || update.model,
-            }),
+    const width = page.width;
+    const height = page.height;
+    let detected: DetectedRegion[];
+    if (detector === "heuristic") {
+      detected = (await detectHeuristic(page.bytes)).filter(
+        (region) => region.place.width >= minRegionPx(width, height) && region.place.height >= minRegionPx(width, height),
+      );
+    } else {
+      const conf = opts.conf ?? envNumber("SCAN_DETECT_CONF");
+      const run = (backend: Detector, step: string, overrides: { conf?: number; supplement?: boolean } = {}) =>
+        detectRegionsPy(path, {
+          backend,
+          conf: overrides.conf ?? conf,
+          tile: opts.tile ?? envNumber("SCAN_DETECT_TILE"),
+          supplement: overrides.supplement,
+          lang: opts.lang,
+          abort: opts.abort,
+          onProgress: (update) => opts.onStep?.({
+            step: update.step || step,
+            model: update.model,
+            engine: DETECT_ENGINES[update.model] || update.model,
+          }),
+        });
+      const partners = crossCheckDetectors(detector);
+      const outputs: Partial<Record<DetectorSource, WorkerRegion[]>> = {};
+      let size = { width: 0, height: 0 };
+      const detection = await run(detector, "Detecting regions", { supplement: partners.length ? false : undefined });
+      size = { width: detection.width, height: detection.height };
+      outputs[detector as DetectorSource] = detection.regions;
+      for (const partner of partners) {
+        opts.onStep?.({
+          step: "Cross-checking regions",
+          model: detectorModelName(partner),
+          engine: partner,
+        });
+        try {
+          const found = await run(partner, "Cross-checking regions", {
+            conf: Math.max(conf ?? 0, CROSSCHECK_MIN_CONF),
+            supplement: false,
           });
-    if (detection && setup.coo) {
-      // The workflow environment already owns torch/torchvision. Keep the OCR
-      // environment and its persistent Paddle process independent of COO.
-      opts.onStep?.({ step: "Detecting sound effects", model: COO_MODEL, engine: "coo" });
-      const sfx = await localOperation({ cmd: "detect-sfx", path,
-        confidence: envNumber("SCAN_COO_CONF") ?? .6 }, opts.abort);
-      detection.regions.push(...parseSfxRegions(sfx.regions));
+          outputs[partner as DetectorSource] = found.regions;
+        } catch (error) {
+          opts.abort?.throwIfAborted();
+          console.warn(
+            `[detect] ${detectorModelName(partner)} cross-check unavailable:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      if (setup.coo) {
+        // The workflow environment already owns torch/torchvision. Keep the OCR
+        // environment and its persistent Paddle process independent of COO.
+        opts.onStep?.({ step: "Detecting sound effects", model: COO_MODEL, engine: "coo" });
+        const sfx = await localOperation({ cmd: "detect-sfx", path,
+          confidence: envNumber("SCAN_COO_CONF") ?? .6 }, opts.abort);
+        outputs.coo = parseSfxRegions(sfx.regions);
+      }
+      if (setup.koharu) {
+        // Say where it really runs: the cleaner's device, not the GPU-mode flag.
+        const koharuDevice = cleaningDeviceLabel();
+        opts.onStep?.({
+          step: "Detecting text regions",
+          model: `${KOHARU_MODEL} · ${koharuDevice}`,
+          engine: "koharu",
+        });
+        const out = join(dir, "koharu-mask.png");
+        const found = await localOperation({
+          cmd: "detect-text", path, out, maskExpansion: 3,
+        }, opts.abort);
+        outputs.koharu = parseKoharuRegions(found.regions);
+        const mask = typeof found.mask === "string" && found.mask.includes(",")
+          ? Buffer.from(found.mask.split(",")[1], "base64")
+          : await readFile(out);
+        opts.onTextMask?.(mask, {
+          engine: String(found.engine || "koharu"),
+          model: String(found.model || KOHARU_MODEL),
+          backend: String(found.backend || ""),
+        });
+      }
+      detected = composeDetections(outputs, size.width || width, size.height || height);
     }
-    if (detection && setup.koharu) {
-      // Say where it really runs: the cleaner's device, not the GPU-mode flag.
-      const koharuDevice = cleaningDeviceLabel();
-      opts.onStep?.({
-        step: "Detecting text regions",
-        model: `${KOHARU_MODEL} · ${koharuDevice}`,
-        engine: "koharu",
-      });
-      const out = join(dir, "koharu-mask.png");
-      const found = await localOperation({
-        cmd: "detect-text", path, out, maskExpansion: 3,
-      }, opts.abort);
-      detection.regions = supplementTextRegions(detection.regions, parseKoharuRegions(found.regions));
-      const mask = typeof found.mask === "string" && found.mask.includes(",")
-        ? Buffer.from(found.mask.split(",")[1], "base64")
-        : await readFile(out);
-      opts.onTextMask?.(mask, {
-        engine: String(found.engine || "koharu"),
-        model: String(found.model || KOHARU_MODEL),
-        backend: String(found.backend || ""),
-      });
-    }
-    const detected = (
-      detection
-        ? regionsFromDetection(
-            detection.regions,
-            detection.width || page.width,
-            detection.height || page.height,
-          )
-        : await detectHeuristic(page.bytes)
-    ).filter(
-      (region) =>
-        region.place.width >= MIN_AUTO_REGION_PX &&
-        region.place.height >= MIN_AUTO_REGION_PX,
-    );
     if (opts.geometry && detected.length) {
       opts.onStep?.({ step: "Fitting bubble geometry", model: "OpenCV", engine: "opencv" });
       let result: Record<string, any> = {};
@@ -283,7 +316,16 @@ export function regionsFromDetection(
   regions: WorkerRegion[],
   W: number,
   H: number,
+  opts: {
+    /** Read bubbles the detector found no text in. Off when several detectors agreed there is none. */
+    bubbleFallback?: boolean;
+    /** Smallest box saved as a region. Defaults to the fixed ceiling. */
+    minPx?: number;
+    /** Boxes already merged by `fuseDetections`; overlap between them is deliberate. */
+    fused?: boolean;
+  } = {},
 ): DetectedRegion[] {
+  const minPx = opts.minPx ?? MIN_AUTO_REGION_PX;
   const bubbles = regions.filter((r) => r.cls === "bubble");
   const texts = regions.filter((r) => TEXT_CLASSES.has(r.cls));
 
@@ -295,7 +337,12 @@ export function regionsFromDetection(
       .map((t) => ({
         box: t.box,
         polygon: t.polygon,
-        provenance: { crop: t.crop, truncated: t.truncated, backend: t.backend },
+        provenance: {
+          crop: t.crop,
+          truncated: t.truncated,
+          backend: t.backend,
+          ...((t as { sources?: string[] }).sources?.length ? { sources: (t as { sources?: string[] }).sources } : {}),
+        },
         // Only rtdetr separates in-bubble text from free-floating text;
         // `text` from the other backends carries no such claim.
         kind: (t.cls === "text_free"
@@ -307,7 +354,7 @@ export function regionsFromDetection(
         text: true,
       }))
       .sort((a, b) => b.score - a.score),
-    ...bubbles
+    ...(opts.bubbleFallback === false ? [] : bubbles)
       .map((b) => ({
         box: b.box,
         kind: "bubble" as const,
@@ -321,10 +368,11 @@ export function regionsFromDetection(
   const taken: [number, number, number, number][] = [];
   for (const c of candidates) {
     const [spanW, spanH] = clippedSpan(c.box, W, H);
-    if (spanW < MIN_AUTO_REGION_PX || spanH < MIN_AUTO_REGION_PX) continue;
+    if (spanW < minPx || spanH < minPx) continue;
     // Bubble and text boxes for the same balloon overlap heavily; keeping
     // both would OCR and translate the same line twice.
     if (
+      !opts.fused &&
       taken.some(
         (t) =>
           overlapFrac(c.box, t) > 0.5 &&
@@ -355,6 +403,45 @@ export function regionsFromDetection(
 
   out.sort((a, b) => a.place.y - b.place.y || a.place.x - b.place.x);
   return out;
+}
+
+/**
+ * Detectors that vouch for a base detector's boxes. RT-DETR is the only one that
+ * tells bubble text from free lettering and Comic Text Detector is the tightest
+ * on small lettering, so each cross-checks the other. A partner that is not
+ * installed is skipped. `SCAN_DETECT_CROSSCHECK=0` runs the base alone.
+ */
+export const CROSSCHECK_PARTNERS: Record<string, Detector[]> = { rtdetr: ["ctd"], ctd: ["rtdetr"] };
+/** A partner only has to propose candidates; weak ones need the base to agree. */
+export const CROSSCHECK_MIN_CONF = 0.22;
+
+export function crossCheckDetectors(base: Detector): Detector[] {
+  if (["0", "off", "false"].includes(String(process.env.SCAN_DETECT_CROSSCHECK ?? "").toLowerCase())) return [];
+  return (CROSSCHECK_PARTNERS[base] ?? []).filter((id) => {
+    const row = findRegistryRow(id);
+    return Boolean(row && !row.disabled && rowHasOperation(row, "detect"));
+  });
+}
+
+/**
+ * Raw output of every detector that ran, merged into saved-region candidates.
+ * Used by chapter transcription and by the benchmark, so both score the same
+ * thing. A key may hold an empty list: the detector ran and found nothing.
+ */
+export function composeDetections(
+  outputs: Partial<Record<DetectorSource, WorkerRegion[]>>,
+  W: number,
+  H: number,
+): DetectedRegion[] {
+  const tagged: WorkerRegion[] = [];
+  for (const [part, regions] of Object.entries(outputs) as [DetectorSource, WorkerRegion[]][]) {
+    for (const region of regions) tagged.push({ ...region, backend: region.backend && part === "coo" ? region.backend : part });
+  }
+  const fused = fuseDetections(tagged, { ran: Object.keys(outputs) as DetectorSource[] });
+  const minPx = minRegionPx(W, H);
+  return regionsFromDetection(fused, W, H, { bubbleFallback: false, fused: true, minPx }).filter(
+    (region) => region.place.width >= minPx && region.place.height >= minPx,
+  );
 }
 
 export function cooEnabled(): boolean {
@@ -405,44 +492,6 @@ export function maskModelName(engine?: string): string {
   if (["ctd", "comic-text-detector"].includes(mode)) return CTD_MODEL;
   if (["koharu", "koharu-sam-ts-l", "sam-ts-l"].includes(mode)) return KOHARU_MODEL;
   return koharuInstalled() ? KOHARU_MODEL : CTD_MODEL;
-}
-
-function unionBox(a: Box, b: Box): Box {
-  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
-}
-
-/**
- * Keep detector boxes, grow one when Koharu shows the same text continuing
- * outside it, and add a region for text no detector boxed.
- */
-export function supplementTextRegions(existing: WorkerRegion[], extra: WorkerRegion[]): WorkerRegion[] {
-  const out = existing.map((r) => ({ ...r, box: [...r.box] as Box }));
-  const texts = () => out.filter((r) => TEXT_CLASSES.has(r.cls));
-  for (const candidate of extra) {
-    const box = candidate.box;
-    if (![box[0], box[1], box[2], box[3]].every(Number.isFinite) || box[2] <= box[0] || box[3] <= box[1])
-      continue;
-    const expandable = texts().filter((region) => !region.polygon);
-    const grow = expandable
-      .map((region) => ({ region, cover: coverage(box, region.box), united: unionBox(region.box, box) }))
-      .filter((item) => item.cover >= 0.45 && areaOf(item.united) <= areaOf(item.region.box) * 1.8)
-      .sort((a, b) => b.cover - a.cover)[0];
-    if (grow) {
-      grow.region.box = grow.united;
-      continue;
-    }
-    if (texts().some((region) => coverage(box, region.box) >= 0.75)) continue;
-    const host = expandable
-      .map((region) => ({ region, inside: coverage(region.box, box) }))
-      .filter((item) => item.inside >= 0.75)
-      .sort((a, b) => areaOf(a.region.box) - areaOf(b.region.box))[0];
-    if (host && areaOf(unionBox(host.region.box, box)) <= areaOf(host.region.box) * 3) {
-      host.region.box = unionBox(host.region.box, box);
-      continue;
-    }
-    out.push({ ...candidate, cls: candidate.cls || "text", backend: candidate.backend || "koharu", box: [...box] });
-  }
-  return out;
 }
 
 export function parseKoharuRegions(raw: unknown): WorkerRegion[] {

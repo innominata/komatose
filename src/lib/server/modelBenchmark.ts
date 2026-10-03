@@ -56,10 +56,11 @@ import {
 	parseKoharuRegions,
 	parseSfxRegions,
 	regionsFromDetection,
-	supplementTextRegions,
+	composeDetections,
 	type DetectedRegion,
 } from './detect';
 import { detectRegionsPy, type WorkerRegion } from './ocr';
+import type { DetectorSource } from './detectFusion';
 import { localOperation } from './localWorker';
 import { findSpeechBubbles, bubbleFromNorm, type SpeechBubble } from './bubbles';
 import { detectLetteringMask, transcribeBubbleCrop } from './reviewMask';
@@ -283,21 +284,23 @@ async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: stri
 		backend: part,
 		conf: envNumber('SCAN_DETECT_CONF'),
 		tile: envNumber('SCAN_DETECT_TILE'),
+		// Comic Text Detector is its own part when a setup cross-checks with it.
+		supplement: false,
 		lang: GOLD_LANG,
 		abort,
 	});
 }
 
-/** Same merge order as detectRegions: base boxes, COO sound effects, then Koharu fills the gaps. */
+/** Same merge as detectRegions: every part's boxes are cross-checked, then COO and Koharu add their evidence. */
 export function composeSetup(setup: DetectorSetup, outputs: Map<DetectorPart, PartOutput>, width: number, height: number): DetectedRegion[] {
-	let regions: WorkerRegion[] = [];
+	const heuristic = outputs.get('heuristic');
+	if (setup.parts.includes('heuristic')) return heuristic ? regionsFromDetection(heuristic.regions, width, height) : [];
+	const parts: Partial<Record<DetectorSource, WorkerRegion[]>> = {};
 	for (const part of setup.parts) {
 		const out = outputs.get(part);
-		if (!out) continue;
-		if (part === 'koharu') regions = supplementTextRegions(regions, out.regions);
-		else regions = [...regions, ...out.regions];
+		if (out) parts[part as DetectorSource] = out.regions;
 	}
-	return regionsFromDetection(regions, width, height);
+	return composeDetections(parts, width, height);
 }
 
 function boxOf(bubble: SpeechBubble): GoldBox {

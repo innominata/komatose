@@ -76,7 +76,7 @@ import {
 } from "./ocr";
 import { shouldInvertText } from "./stickyInvert";
 import { glossaryPrompt } from "../glossary";
-import { lookupStandaloneSfx } from "../sfx";
+import { classifyRegionLineType, lookupStandaloneSfx, sfxClassificationSource } from "../sfx";
 import {
   getEpisode,
   getSeries,
@@ -1136,7 +1136,11 @@ async function runTranscribeJob(
               y: place.y,
               w: place.w,
               h: place.h,
-              lineType: item.region.kind === "free" ? "::" : '""',
+              lineType: classifyRegionLineType(
+                item.region.kind,
+                sfxClassificationSource(item.consensus.source, item.consensus.readings),
+                { sfxDetector: item.region.provenance?.backend?.startsWith("coo") },
+              ),
               source: "",
               literal: "",
               translation: "",
@@ -1745,13 +1749,16 @@ export async function translateRegion(opts: {
   }, visionReadHandlers);
 
 
+  const readType = read.lineType === '::' || read.lineType === '""' || read.lineType === 'plain'
+    ? classifyRegionLineType(read.lineType === '::' ? 'free' : 'bubble', read.source)
+    : read.lineType;
   const located: DetectedBox[] = [
     {
       x: bubble.x,
       y: bubble.y,
       w: bubble.w,
       h: bubble.h,
-      lineType: read.lineType,
+      lineType: readType,
       source: read.source,
       ocrConfidence:
         "ocrConfidence" in read ? (read.ocrConfidence as number) : undefined,

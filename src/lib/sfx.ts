@@ -697,3 +697,105 @@ export function sfxTranslateHit(source: string): SfxHit | null {
 export function sfxEntries() {
 	return [...new Set(byNorm.values())];
 }
+
+export type RegionDetectionKind = 'bubble' | 'free' | 'unknown';
+
+/**
+ * A reading is dialogue when it is not itself a dictionary SFX and it contains
+ * kanji, or enough hiragana to be a spoken line. Katakana lettering stays eligible.
+ */
+export function looksLikeDialogue(source: string) {
+	const text = source.normalize('NFKC').trim();
+	if (!text || lookupStandaloneSfx(text)) return false;
+	if (/[\u4e00-\u9fff]/.test(text)) return true;
+	const hiragana = text.match(/[\u3041-\u3096]/g)?.length ?? 0;
+	const katakana = text.match(/[\u30a1-\u30fa]/g)?.length ?? 0;
+	return hiragana >= 4 && hiragana > katakana;
+}
+
+/** A reading that is plainly a sentence: three kanji, six hiragana, or kanji with okurigana. */
+function looksLikeSentence(text: string) {
+	const kanji = text.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
+	const hiragana = text.match(/[\u3041-\u3096]/g)?.length ?? 0;
+	return kanji >= 3 || hiragana >= 6 || (kanji >= 1 && hiragana >= 3);
+}
+
+/**
+ * The shape of an onomatopoeia that is not in the dictionary: kana only, short,
+ * and either one sound stretched or repeated (ババババ, ちゅううう, ズバズバ) or a
+ * katakana burst cut off by a small tsu (ドキッ, チッ).
+ */
+export function looksLikeOnomatopoeia(source: string) {
+	const text = source.normalize('NFKC').replace(/[\s…・。、！？!?.,'"「」『』()（）~〜♪♡]/g, '');
+	if (text.length < 2 || text.length > 12) return false;
+	if (!/^[\u3041-\u3096\u30a1-\u30fc]+$/.test(text)) return false;
+	// A repeated word is still a word: "yeah yeah", "no no".
+	if (/^(はい|いや|うん|ええ|そう|だめ|まって|ねえ)+$/.test(text)) return false;
+	if (/(.)\1{2,}/.test(text)) return true;
+	if (text.length >= 4 && /(.{2,3})\1/.test(text)) return true;
+	const katakana = text.match(/[\u30a1-\u30fa]/g)?.length ?? 0;
+	if (katakana === text.length && /ッ$/.test(text)) return true;
+	return /(.)\1.{0,2}っ$/.test(text);
+}
+
+export type RegionTypeHints = {
+	/** A sound-effect detector (COO) found this lettering, so a dialogue-looking misread does not outvote it. */
+	sfxDetector?: boolean;
+	/** Where the detector put the lettering, when the caller only has a line type to go on. */
+	kind?: RegionDetectionKind;
+};
+
+/** Short hiragana that is plainly something said: an interjection or a line ending in a spoken particle. */
+const SPOKEN_WORD = /(そう|はい|うん|ええ|いや|まって|だめ|です|ます|ない|よね|かな)[！？!?…。、]*$/;
+const SPOKEN_PARTICLE = /(よ|ね|だ|ぞ|ぜ|か|な|わ)[！？!?…。、]*$/;
+
+/** Hiragana-only and not a sound: "そう！" in a margin is speech even though the sound-effect detector fired. */
+function looksSpoken(text: string) {
+	const plain = text.replace(/[\s…・。、！？!?.,'"「」『』()（）~〜♪♡]/g, '');
+	if (plain.length < 2 || plain.length > 8) return false;
+	if (!/^[\u3041-\u3096ー]+$/.test(plain)) return false;
+	if (looksLikeOnomatopoeia(plain)) return false;
+	// One particle after a single mora is as likely a sound (ぐわ, かさ) as a word, so it needs a stem.
+	return SPOKEN_WORD.test(text) || (plain.length >= 3 && SPOKEN_PARTICLE.test(text));
+}
+
+/**
+ * Detector class is the prior. A standalone dictionary hit is SFX even inside a
+ * bubble, unless it is a plain hiragana word there. A free-text box whose reading is
+ * dialogue is not SFX: it is an aside ('//'), speech or narration lettered outside a
+ * bubble. A detector that cannot tell bubble text from free lettering (`unknown`)
+ * is judged by the shape of what was read.
+ */
+export function classifyRegionLineType(
+	kind: RegionDetectionKind,
+	source: string,
+	hints: RegionTypeHints = {}
+): '::' | '""' | '//' {
+	const text = source.trim();
+	if (text && lookupStandaloneSfx(text)) {
+		// A short hiragana word that is not known to be free lettering is a sigh or a murmur (はあ……), not lettering.
+		const spoken =
+			kind !== 'free' &&
+			!hints.sfxDetector &&
+			!/[\u30a1-\u30fa]/.test(text.normalize('NFKC')) &&
+			!looksLikeOnomatopoeia(text);
+		return spoken ? '""' : '::';
+	}
+	const speech = text && (looksLikeSentence(text.normalize('NFKC')) || looksSpoken(text.normalize('NFKC')));
+	if (hints.sfxDetector && !speech) return '::';
+	if (kind === 'free') return looksLikeDialogue(text) || speech ? '//' : '::';
+	if (kind === 'unknown' && text && looksLikeOnomatopoeia(text)) return '::';
+	return '""';
+}
+
+/** Agreed source, or any reading when every reading is a dictionary SFX. */
+export function sfxClassificationSource(
+	agreedSource: string,
+	readings: { source: string; error?: string }[],
+) {
+	const agreed = agreedSource.trim();
+	if (agreed) return agreed;
+	const texts = readings.filter((reading) => reading.source.trim() && !reading.error).map((reading) => reading.source.trim());
+	if (texts.length && texts.every((text) => lookupStandaloneSfx(text))) return texts[0];
+	return '';
+}

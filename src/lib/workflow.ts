@@ -216,7 +216,7 @@ export type FittedLayout = {
   font: { id: string; hash: string; postscriptName: string };
 };
 export type RegionData = {
-  detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string };
+  detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubbleBounds?: { x: number; y: number; w: number; h: number };
   detectionKind?: "bubble" | "free" | "unknown";
   polygon?: Point[];

@@ -212,7 +212,8 @@ test('OCR run: every detector setup is scored per page, and crop models read gol
 	});
 	const { ocr } = await waitBenchmark();
 	assert.equal(ocr?.state, 'done');
-	assert.deepEqual(calls.sort(), ['coo:006', 'coo:007', 'koharu:006', 'koharu:007', 'rtdetr:006', 'rtdetr:007']);
+	// RT-DETR is always cross-checked by Comic Text Detector, so its setups run both.
+	assert.deepEqual(calls.sort(), ['coo:006', 'coo:007', 'ctd:006', 'ctd:007', 'koharu:006', 'koharu:007', 'rtdetr:006', 'rtdetr:007']);
 	const rt = ocr!.detectors.find((item) => item.id === 'rtdetr')!;
 	const rtCoo = ocr!.detectors.find((item) => item.id === 'rtdetr+coo')!;
 	const koharu = ocr!.detectors.find((item) => item.id === 'koharu')!;
