@@ -251,26 +251,10 @@ test('failed installation cannot report completion and invalid packages block li
  await assert.rejects(operatePackage('failed-installer','start'), /Invalid model package/);
 });
 
-test('bundled independent inpainters expose the Inpaint task and installer', async () => {
+test('removed inpainters are absent from bundled packages', async () => {
+  const { existsSync } = await import('node:fs');
   const { fileURLToPath } = await import('node:url');
   for (const id of ['migan', 'manga-inpainting']) {
-    const source = fileURLToPath(new URL(`../model-packages/${id}/model.json`, import.meta.url));
-    const manifest = JSON.parse(await readFile(source, 'utf8'));
-    packages.validatePackage(manifest);
-    assert.equal(manifest.adapter.id, 'workflow-image');
-    assert.equal(manifest.config.backend, id);
-    assert.equal(manifest.setup.args.at(-1), id);
-    assert.ok(manifest.environment.includes('SCAN_WORKFLOW_MODELS_DIR'));
-    const directory = join(root, 'model-packages', id);
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, 'model.json'), JSON.stringify(manifest));
-  }
-  packages.discoverModelPackages(true);
-  const rows = packages.packageRows([]);
-  for (const id of ['migan', 'manga-inpainting']) {
-    const row = rows.find(row => row.id === id)!;
-    assert.deepEqual(row.implementedTasks, ['inpaint']);
-    assert.equal(rowHasOperation(row, 'inpaint'), false, 'download alone never fabricates a passing task test');
-    assert.equal(typeof row.taskFingerprints?.inpaint, 'string');
+    assert.equal(existsSync(fileURLToPath(new URL(`../model-packages/${id}/model.json`, import.meta.url))), false);
   }
 });

@@ -1,3 +1,4 @@
+import { pythonRuntimePath, withPythonRuntime } from './pythonRuntimeMaintenance';
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -19,7 +20,6 @@ export type BackendInfo = {
   bigLama: boolean;
   bigLamaDevice?: string | null;
   lamaDevice?: string | null;
-  inpaintDevices?: Record<string, string>;
   koharu: boolean;
   cpu: boolean;
 };
@@ -42,6 +42,7 @@ type Pending = {
 };
 
 type Persistent = {
+  runtimePath?: string;
   proc: ChildProcess;
   buf: string;
   current: Pending | null;
@@ -70,7 +71,7 @@ function workflowEnv() {
   const env = { ...process.env, SAM2_BUILD_CUDA: "0" };
   const persistent = komatoseGpuEnabled() ? { SCAN_WORKFLOW_PERSISTENT: "1" } : {};
   if (komatoseGpuEnabled() && isAutoChoice(devicePref(WORKFLOW_DEVICE_KEY)))
-    return { ...hipWorkerEnv(env), ...persistent };
+    return { ...hipWorkerEnv(env, python()), ...persistent };
   return { ...torchDeviceEnv(workflowResolved(), env), ...persistent };
 }
 
@@ -79,6 +80,17 @@ export function restartWorkflowWorker() {
   const existing = global.__scanWorkflowWorker;
   if (existing && existing.proc.exitCode === null) existing.proc.kill("SIGTERM");
   global.__scanWorkflowWorker = null;
+}
+
+/** Accepted requests have drained before this is called by environment maintenance. */
+export async function retireWorkflowWorker() {
+  const existing = global.__scanWorkflowWorker;
+  restartWorkflowWorker();
+  if (!existing || existing.proc.exitCode !== null || existing.proc.signalCode !== null) return;
+  await new Promise<void>(resolve => {
+    const force = setTimeout(() => existing.proc.kill('SIGKILL'), 2000);
+    existing.proc.once('exit', () => { clearTimeout(force); resolve(); });
+  });
 }
 
 function settle(pending: Pending, error: Error | null, value?: Record<string, any>) {
@@ -129,7 +141,7 @@ function startPersistent(): Persistent {
     env: { ...workflowEnv(), SCAN_WORKFLOW_PERSISTENT: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const worker: Persistent = { proc, buf: "", current: null, queue: [] };
+  const worker: Persistent = { runtimePath: pythonRuntimePath(python()), proc, buf: "", current: null, queue: [] };
   proc.stdout.on("data", (chunk: Buffer) => {
     worker.buf += chunk.toString();
     let nl: number;
@@ -160,7 +172,10 @@ function startPersistent(): Persistent {
 
 function persistentWorker() {
   const existing = global.__scanWorkflowWorker;
-  if (existing && existing.proc.exitCode === null && !existing.proc.killed) return existing;
+  if (existing && existing.proc.exitCode === null && !existing.proc.killed) {
+    if (existing.runtimePath === pythonRuntimePath(python()) || existing.current || existing.queue.length) return existing;
+    restartWorkflowWorker();
+  }
   const worker = startPersistent();
   global.__scanWorkflowWorker = worker;
   return worker;
@@ -253,7 +268,7 @@ function execute(
   signal?: AbortSignal,
 ): Promise<Record<string, any>> {
   const gpu = typeof payload.device === 'string' && payload.device.startsWith('cuda:');
-  return komatoseGpuEnabled() || gpu || workflowWorkerRunning() ? persistentExecute(payload, signal) : oneShot(payload, signal);
+  return withPythonRuntime('env-workflow', () => komatoseGpuEnabled() || gpu || workflowWorkerRunning() ? persistentExecute(payload, signal) : oneShot(payload, signal));
 }
 
 async function rawProbe(): Promise<BackendInfo> {
@@ -287,7 +302,7 @@ export async function probeBackend(): Promise<BackendInfo> {
 }
 
 export async function startWorkflowWorker(signal?: AbortSignal) {
-  await persistentExecute({ cmd: 'ping' }, signal);
+  await withPythonRuntime('env-workflow', () => persistentExecute({ cmd: 'ping' }, signal));
 }
 
 export function workflowWorkerRunning() {
@@ -319,7 +334,6 @@ export async function warmupWorkflow() {
 /** Resident LaMa models already own their weights; keep using their GPU. */
 export function eligibleCleaningDevices(info: BackendInfo | null, method: unknown) {
   return info?.devices.filter(d => d.free > 2 * 1024 ** 3 ||
-    (typeof method === "string" && d.id === info.inpaintDevices?.[method]) ||
     (method === "lama" && d.id === info.lamaDevice) ||
     ((method === "big-lama" || method === "auto") && d.id === info.bigLamaDevice)) ?? [];
 }
@@ -343,8 +357,6 @@ export async function rawLocalOperation(
     payload.method === "sam" ||
     payload.method === "big-lama" ||
     payload.method === "aot" ||
-    payload.method === "migan" ||
-    payload.method === "manga-inpainting" ||
     (payload.method === "auto" && (komatoseGpuEnabled() || workflowResolved().kind === "gpu"));
   const info =
     requestedDevice !== "cpu" && (mightUseKoharu || cleanGpu || nativeDetect)

@@ -1,6 +1,7 @@
+import { maintainPythonRuntime } from './pythonRuntimeMaintenance';
 import { modelPackage } from './modelPackages';
 import { operatePackage } from './modelSupervisor';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -55,8 +56,38 @@ export type InstallStatus = {
 	uninstallBlocked?: string;
 	uninstallWarnings?: string[];
 	alsoRemoves?: string[];
+	runtime?: PythonRuntimeStatus;
 	job?: InstallJob;
 };
+
+export type PythonRuntimeStatus = {
+  schemaVersion: number;
+  environment: string;
+  plan?: { profile: string; architectures: string[]; reasons: string[]; hardwareVerified: boolean };
+  receipt?: { plan?: { profile: string; architectures: string[] }; installedBytes?: number; validation?: { passed: boolean; completeModelsValidated: boolean } };
+  installedBytes?: number;
+  legacyReceipt: boolean;
+  externalTarget: boolean;
+  configuredInterpreter?: string;
+  upgradeAvailable: boolean;
+  reasons: string[];
+};
+const runtimePlans = new Map<string, { at: number; value?: PythonRuntimeStatus }>();
+export function pythonRuntimeStatus(id: string): PythonRuntimeStatus | undefined {
+  if (!['env-workflow', 'env-review'].includes(id)) return undefined;
+  const key = `${id}:${torchVariantPref()}:${envVar('SCAN_TORCH_INDEX') || ''}:${envVar('SCAN_TORCH_ARCHES') || ''}`;
+  const cached = runtimePlans.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.value;
+  const result = spawnSync('python3', [join(ROOT, 'scripts/setup-python-env.py'), '--env', id.slice(4), '--torch', torchVariantPref(), '--plan-json'], {
+    cwd: ROOT, env: process.env, encoding: 'utf8', timeout: 20_000, maxBuffer: 256 * 1024,
+  });
+  let value: PythonRuntimeStatus | undefined;
+  if (result.status === 0) {
+    try { value = JSON.parse(result.stdout); } catch { /* Report installation status without a plan. */ }
+  }
+  runtimePlans.set(key, { at: Date.now(), value });
+  return value;
+}
 
 type EnvSpec = { id: string; envVar: string; dir: string; label: string };
 
@@ -161,8 +192,6 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 		case 'big-lama':
 		case 'aot':
 		case 'lama-manga':
-		case 'migan':
-		case 'manga-inpainting':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-clean-models.py', ['--model', target.id]);
 			break;
@@ -290,15 +319,6 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				hfCached('mayocream/comic-text-detector-onnx', 'comic-text-detector.onnx')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
-		case 'migan':
-		case 'manga-inpainting': {
-			const directory = join(envVar('SCAN_WORKFLOW_MODELS_DIR') || join(DATA_DIR, 'models/workflow'), target.id);
-			const files = target.id === 'migan' ? ['migan_traced.pt'] : ['manga_inpaintor.jit', 'erika.jit'];
-			const installed = [...files, 'LICENSE'].every(file => {
-				try { return statSync(join(directory, file)).size > 0; } catch { return false; }
-			});
-			return { installed, detail: installed ? undefined : 'Weights or license notice missing; install this model' };
-		}
 		case 'big-lama':
 			return hfCached('dreMaz/AnimeMangaInpainting', 'lama_large_512px.ckpt')
 				? { installed: true }
@@ -374,6 +394,7 @@ export function installStatus(target: InstallTarget): InstallStatus {
 		uninstallBlocked: uninstall?.blocked,
 		uninstallWarnings: uninstall?.warnings,
 		alsoRemoves: uninstall?.alsoRemoves,
+		runtime: pythonRuntimeStatus(target.id),
 		job: jobs().get(target.id),
 	};
 }
@@ -406,10 +427,16 @@ function pushLine(job: InstallJob, raw: string) {
 }
 
 const packageInstalls = new Map<string, AbortController>();
+const runtimeControllers = new Map<string, AbortController>();
+function killInstallChild(child: ChildProcess, signal: NodeJS.Signals) {
+  if (!child.pid) return;
+  try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal); } catch { /* Already exited. */ }
+}
 
 /** Run one configured installer. Throws 409 when that target is already running. */
-export function startInstall(targetId: string): InstallJob {
-  const pkg = modelPackage(targetId);
+export function startInstall(targetId: string, upgradeRuntime = false): InstallJob {
+  if (upgradeRuntime && !['env-workflow', 'env-review'].includes(targetId)) throw Object.assign(new Error('Only workflow/review runtimes can be upgraded'), { status: 400 });
+  const pkg = ENV_IDS.includes(targetId) ? undefined : modelPackage(targetId);
   if (pkg) {
     if (jobs().get(targetId)?.state === 'running') throw new Error('That install is already running');
     const controller = new AbortController();
@@ -430,11 +457,37 @@ export function startInstall(targetId: string): InstallJob {
 	if (existing?.state === 'running')
 		throw Object.assign(new Error('That install is already running'), { status: 409 });
 
-	const { command, bin, args } = installCommand(target);
+	const installation = installCommand(target);
+	if (upgradeRuntime) installation.args.push('--upgrade-runtime');
+	if (targetId.startsWith('env-')) installation.args.push('--workers-drained');
+	const { bin, args } = installation;
+	const command = [bin, ...args].map(sh).join(' ');
 	const job: InstallJob = { targetId, command, state: 'running', lines: [], startedAt: Date.now() };
 	jobs().set(targetId, job);
 
-	const child = spawn(bin, args, { cwd: ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const controller = new AbortController();
+  runtimeControllers.set(targetId, controller);
+  void (async () => {
+    let release: (() => void) | undefined;
+    try {
+      if (targetId.startsWith('env-')) {
+        pushLine(job, 'Waiting for active work to finish before replacing the environment');
+        release = await maintainPythonRuntime(targetId, AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60_000)]));
+        const configured = envVar(ENV_SPECS.find(spec => spec.id === targetId)!.envVar);
+        if (configured) throw new Error('Configured interpreters are read-only; manage that environment outside Komatose');
+        if (targetId === 'env-workflow') {
+          const { retireWorkflowWorker } = await import('./localWorker');
+          await retireWorkflowWorker();
+        }
+        if (targetId === 'env-review') {
+          const { retirePythonReviewWorkers } = await import('./localReview');
+          const { stopTranslationRuntime } = await import('./translationRuntime');
+          await retirePythonReviewWorkers();
+          await stopTranslationRuntime();
+        }
+      }
+      controller.signal.throwIfAborted();
+	const child = spawn(bin, args, { cwd: ROOT, env: process.env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
 	store.children.set(targetId, child);
 	let buffer = '';
 	let stderrTail = '';
@@ -446,7 +499,7 @@ export function startInstall(targetId: string): InstallJob {
 		job.endedAt = Date.now();
 	};
 	const killTimer = setTimeout(() => {
-		child.kill('SIGKILL');
+		killInstallChild(child, 'SIGKILL');
 		settle('failed', null, 'Install timed out after 4 hours');
 	}, JOB_TIMEOUT_MS);
 	killTimer.unref?.();
@@ -473,10 +526,21 @@ export function startInstall(targetId: string): InstallJob {
 		clearTimeout(killTimer);
 		if (store.children.get(targetId) === child) store.children.delete(targetId);
 		if (buffer.trim()) pushLine(job, buffer);
+		release?.();
+		runtimeControllers.delete(targetId);
+		runtimePlans.clear();
+		if (code === 0) ensureInstalledModelRows(targetId);
 		if (spawnError) return settle('failed', null, spawnError);
 		if (code === 0) settle('done', code);
 		else settle('failed', code, stderrTail.trim().split('\n').slice(-1)[0] || `Exit code ${code}`);
 	});
+
+    } catch (error) {
+      release?.(); runtimeControllers.delete(targetId);
+      job.state = 'failed'; job.endedAt = Date.now();
+      job.error = error instanceof Error ? error.message : String(error);
+    }
+  })();
 
 	// Keep the store bounded once installs stop being watched.
 	if (jobs().size > MAX_JOBS) {
@@ -491,13 +555,14 @@ export function startInstall(targetId: string): InstallJob {
 /** Stop a running installer for this target. */
 export function cancelInstall(targetId: string): InstallJob | undefined {
   packageInstalls.get(targetId)?.abort();
+  runtimeControllers.get(targetId)?.abort();
 	const job = jobs().get(targetId);
 	if (!job) return undefined;
 	if (job.state === 'running') {
 		const child = store.children.get(targetId);
-		child?.kill('SIGTERM');
+		if (child) killInstallChild(child, 'SIGTERM');
 		setTimeout(() => {
-			if (job.state === 'running') child?.kill('SIGKILL');
+			if (child && child.exitCode === null) killInstallChild(child, 'SIGKILL');
 		}, 2_000).unref?.();
 	}
 	return job;
@@ -519,6 +584,7 @@ export type InstallQueueItem = {
 	neededBy?: string;
 	state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 	error?: string;
+	upgradeRuntime?: boolean;
 };
 
 type QueueStore = { items: InstallQueueItem[]; timer?: NodeJS.Timeout };
@@ -587,6 +653,18 @@ export function startInstallQueue(ids: string[]): { plan: InstallQueueItem[]; sk
 	return { plan, skipped };
 }
 
+export function startRuntimeUpgrade(id: string): InstallQueueItem {
+  if (!['env-review', 'env-workflow'].includes(id)) throw Object.assign(new Error('Choose a workflow or review runtime'), { status: 400 });
+  if (queue.items.some(item => item.key === id && ['queued', 'running'].includes(item.state))) throw Object.assign(new Error('That environment is already queued'), { status: 409 });
+  const spec = ENV_SPECS.find(item => item.id === id)!;
+  if (envVar(spec.envVar)) throw Object.assign(new Error('Configured interpreters are read-only'), { status: 409 });
+  const target = installTarget(id)!;
+  const cmd = installCommand(target);
+  const item: InstallQueueItem = { key: id, kind: 'env', label: `Upgrade ${target.label}`, command: [cmd.bin, ...cmd.args, '--upgrade-runtime'].map(sh).join(' '), state: 'queued', upgradeRuntime: true };
+  queue.items = queue.items.filter(previous => previous.key !== id || !['done', 'failed', 'cancelled'].includes(previous.state));
+  queue.items.push(item); pumpQueue(); return item;
+}
+
 export function installQueueStatus(): InstallQueueItem[] {
 	return queue.items.map((item) => {
 		const job = item.kind === 'model' || ENV_IDS.includes(item.key) ? jobs().get(item.key) : undefined;
@@ -641,7 +719,7 @@ function pumpQueue() {
 			return;
 		}
 		try {
-			startInstall(next.key);
+			startInstall(next.key, next.upgradeRuntime);
 			next.state = 'running';
 		} catch (error) {
 			next.state = 'failed';
@@ -837,13 +915,6 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		paths.push(describePath(file, 'COO sound-effect checkpoint'));
 		if (!envVar('SCAN_COO_MODEL') && existsSync(join(DATA_DIR, 'models/coo')))
 			paths.push(describePath(join(DATA_DIR, 'models/coo'), 'Its model directory'));
-		return { paths, alsoRemoves, warnings };
-	}
-	if (targetId === 'migan' || targetId === 'manga-inpainting') {
-		const directory = join(envVar('SCAN_WORKFLOW_MODELS_DIR') || join(DATA_DIR, 'models/workflow'), targetId);
-		paths.push(describePath(directory, 'Its model weights and license notice'));
-		const receipt = join(DATA_DIR, 'models/package-installations', `${targetId}.json`);
-		if (existsSync(receipt)) paths.push(describePath(receipt, 'Its installation receipt'));
 		return { paths, alsoRemoves, warnings };
 	}
 	const REVIEW_IDS = ['hayai-ocr-v2', 'manga-ocr', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];

@@ -40,6 +40,13 @@
 			toast(String((e as Error).message), 'bad');
 		}
 	}
+	async function upgradeRuntime(id: string) {
+    try {
+      await apiPost('/api/admin/setup-install', { action: 'upgrade-runtime', id });
+      toast('Runtime upgrade queued; active work finishes first');
+      await refreshHub();
+    } catch (e) { toast(String((e as Error).message), 'bad'); }
+  }
 	async function setTorch(variant: string) {
 		try {
 			await hubPost({ action: 'set-torch-variant', variant });
@@ -181,6 +188,15 @@
 							<strong>{target.label}</strong>
 						</div>
 						<div class="ci-sum">{target.summary}</div>
+            {#if ins?.runtime}
+              <div class="small muted">
+                {ins.runtime.receipt?.plan?.profile || (ins.runtime.legacyReceipt ? 'Legacy runtime' : ins.runtime.plan?.profile || 'Runtime not installed')}
+                {#if ins.runtime.receipt?.plan?.architectures?.length} · {ins.runtime.receipt.plan.architectures.join(', ')}{/if}
+                {#if ins.runtime.installedBytes != null} · {formatDisk(ins.runtime.installedBytes)} installed{/if}
+              </div>
+              {#if ins.runtime.upgradeAvailable && ins.runtime.plan}<div class="small muted">Available: {ins.runtime.plan.profile}{ins.runtime.plan.architectures.length ? ` · ${ins.runtime.plan.architectures.join(', ')}` : ''}</div>{/if}
+              {#each [...ins.runtime.reasons, ...(ins.runtime.plan?.reasons || [])] as reason}<div class="small muted">{reason}</div>{/each}
+            {/if}
 						<div class="ci-foot">
 							<span class="chip"><i class="bi bi-hdd"></i> {formatDisk(target.diskBytes)}</span>
 							{#if target.memoryBytes}<span class="chip"><i class="bi bi-memory"></i> {formatMemory(target.memoryBytes)}</span>{/if}
@@ -188,7 +204,8 @@
 							{#if target.requires?.length && !ins?.installed}<span class="chip warn">+ {target.requires.join(' or ')}</span>{/if}
 							{#if ins?.installed}
 								<span class="status tone-ok"><i class="bi bi-check2-circle"></i> Installed</span>
-								<button class="btn ghost sm" onclick={() => openUninstall(target.id)}>Uninstall</button>
+								{#if ins.runtime?.upgradeAvailable && !running}<button class="btn sm" onclick={() => void upgradeRuntime(target.id)}>Upgrade runtime</button>{/if}
+                                <button class="btn ghost sm" onclick={() => openUninstall(target.id)}>Uninstall</button>
 							{:else if running}
 								<span class="status tone-busy"><span class="dot busy"></span>{queued?.state === 'queued' ? 'Queued' : 'Installing…'}</span>
 							{:else if ins?.job?.state === 'failed'}

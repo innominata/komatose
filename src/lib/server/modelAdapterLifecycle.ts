@@ -55,6 +55,21 @@ export async function builtinPackageReadiness(pkg: DiscoveredPackage): Promise<{
 }
 
 async function runSetup(pkg: DiscoveredPackage, signal?: AbortSignal, progress?: (s: string) => void) {
+  if (['env-ocr', 'env-review', 'env-workflow'].includes(pkg.manifest.id)) {
+    const { startInstall, cancelInstall } = await import('./modelInstall');
+    const job = startInstall(pkg.manifest.id);
+    let seen = 0;
+    while (job.state === 'running') {
+      if (signal?.aborted) cancelInstall(pkg.manifest.id);
+      for (const line of job.lines.slice(seen)) progress?.(line);
+      seen = job.lines.length;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    signal?.throwIfAborted();
+    if (job.state !== 'done') throw new Error(job.error || 'Environment installation failed');
+    return;
+  }
+
   const cmd = pkg.manifest.setup;
   if (!cmd) throw new ModelTaskError('unsupported', 'This package does not provide an installer');
   const root = process.env.SCAN_ROOT || process.cwd();

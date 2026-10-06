@@ -56,7 +56,7 @@
 		"test:geometry": "node --import tsx tests/detection-geometry.test.ts && .venv-workflow/bin/python -m unittest discover -s tests -p test_geometry.py && .venv-workflow/bin/python -m unittest discover -s tests -p test_cleaning.py",
 		"test:coo": "node --import tsx tests/coo-detection.test.ts && node --import tsx tests/detect-fusion.test.ts && .venv-workflow/bin/python tests/test_coo.py",
 		"test:lettering": "node --import tsx tests/mask-diagnostics.test.ts && .venv-workflow/bin/python tests/test_lettering.py && .venv-workflow/bin/python tests/test_koharu_mask.py",
-		"test:cleaning": ".venv-workflow/bin/python tests/test_cleaning.py && .venv-workflow/bin/python tests/test_inpaint_models.py && .venv-workflow/bin/python tests/test_lama_device.py",
+		"test:cleaning": ".venv-workflow/bin/python tests/test_cleaning.py && .venv-workflow/bin/python tests/test_lama_device.py",
 		"test:codex-cleaning": "node --import tsx tests/codex-clean-prompt.test.ts && node --import tsx tests/codex-cleaning.test.ts",
 		"test:image-edit": "node --import tsx tests/image-edit-prompt.test.ts && node --import tsx tests/image-edit-cleaning.test.ts",
 		"test:browser-image-edit": "node scripts/test-browser.mjs scripts/check-browser-image-edit.mjs",

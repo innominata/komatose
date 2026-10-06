@@ -1,3 +1,4 @@
+import { pythonRuntimePath, withPythonRuntime } from './pythonRuntimeMaintenance';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
@@ -168,7 +169,7 @@ async function connection(model: TranslationModel, signal: AbortSignal): Promise
   assertTranslationModelReady(model);
   const cfg = translationModelConfig(model);
   if (cfg.url) return cfg;
-  const key = JSON.stringify([model.id, cfg.runtime, cfg.path, cfg.bin, cfg.device]);
+  const key = JSON.stringify([model.id, cfg.runtime, cfg.path, cfg.bin, cfg.device, cfg.runtime === 'pytorch' ? pythonRuntimePath(cfg.bin) : undefined]);
   const current = state.service;
   if (current?.key === key && current.child.exitCode === null && current.child.signalCode === null && !current.child.killed)
     return current;
@@ -228,7 +229,7 @@ async function connection(model: TranslationModel, signal: AbortSignal): Promise
 /** One owned model/process at a time; cancellation never frees capacity before it stops. */
 export async function completeTranslation(model: TranslationModel, request: TranslationRequest, abort?: AbortSignal) {
   abort?.throwIfAborted();
-  const task = state.queue.catch(() => {}).then(async () => {
+  const task = state.queue.catch(() => {}).then(() => withPythonRuntime('env-review', async () => {
     abort?.throwIfAborted();
     clearTimeout(state.idle);
     const signal = AbortSignal.any([...(abort ? [abort] : []), AbortSignal.timeout(5 * 60_000)]);
@@ -250,7 +251,7 @@ export async function completeTranslation(model: TranslationModel, request: Tran
       state.idle = setTimeout(() => { void stopTranslationRuntime(); }, 5 * 60_000);
       state.idle.unref();
     }
-  });
+  }));
   state.queue = task.catch(() => {});
   if (!abort) return task;
   // A cancelled item waiting in the queue returns promptly and never starts a model.
@@ -269,7 +270,7 @@ process.once('exit', () => { state.service?.child.kill('SIGTERM'); });
 export async function startTranslationModel(id: string, signal?: AbortSignal) {
   const model = translationModel(id);
   if (!model) throw new Error('Unknown translation recipe');
-  return connection(model, signal || AbortSignal.timeout(120_000));
+  return withPythonRuntime('env-review', () => connection(model, signal || AbortSignal.timeout(120_000)));
 }
 export function translationModelRunning(id: string) {
   return state.service?.model === id && state.service.child.exitCode === null;

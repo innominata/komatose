@@ -1,5 +1,5 @@
 import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
-import { DEFAULT_TRANSCRIPTION_MODEL_IDS } from '../modelRegistry';
+import { DEFAULT_TRANSCRIPTION_MODEL_IDS, RETIRED_INPAINT_MODEL_IDS } from '../modelRegistry';
 import type { ModelTaskId } from '../modelTasks';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,8 +24,11 @@ function defaultsPath(): string {
 export function readModelDefaults(): ModelDefaultsFile {
 	try {
 		const parsed = JSON.parse(readFileSync(defaultsPath(), 'utf8')) as ModelDefaultsFile;
-		if (parsed && typeof parsed === 'object' && parsed.defaults && typeof parsed.defaults === 'object')
-			return { version: 1, defaults: parsed.defaults };
+		if (parsed && typeof parsed === 'object' && parsed.defaults && typeof parsed.defaults === 'object') {
+			const defaults = Object.fromEntries(Object.entries(parsed.defaults).filter(([, id]) =>
+				!(RETIRED_INPAINT_MODEL_IDS as readonly string[]).includes(id)));
+			return { version: 1, defaults };
+		}
 	} catch {
 		/* absent */
 	}

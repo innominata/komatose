@@ -1,4 +1,4 @@
-# Install torch/torchvision for the verified ROCm version separately, in .venv-workflow.
+# torch/torchvision are pinned separately by scripts/setup-python-env.py for this hardware.
 # SAM2_BUILD_CUDA=0 must be set during pip install as well as at runtime.
 numpy>=1.26,<3
 opencv-python-headless>=4.10

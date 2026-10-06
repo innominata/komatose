@@ -19,13 +19,3 @@ test('resident native LaMa Manga stays on its GPU when free VRAM drops', () => {
   assert.deepEqual(eligibleCleaningDevices(info, 'lama'), [resident]);
   assert.deepEqual(eligibleCleaningDevices({ ...info, lamaDevice: null }, 'lama'), []);
 });
-
-test('new resident inpainters remain eligible below the free-memory threshold', () => {
-  const resident = { id: 'cuda:0', name: 'GPU', backend: 'ROCm', free: 1024 ** 3, total: 8 * 1024 ** 3 };
-  const info: BackendInfo = { devices: [resident], errors: [], cpu: true, sam: false,
-    bigLama: false, koharu: false, inpaintDevices: { migan: resident.id, 'manga-inpainting': resident.id } };
-  assert.deepEqual(eligibleCleaningDevices(info, 'migan'), [resident]);
-  assert.deepEqual(eligibleCleaningDevices(info, 'manga-inpainting'), [resident]);
-  assert.deepEqual(eligibleCleaningDevices({ ...info, inpaintDevices: {} }, 'migan'), []);
-  assert.deepEqual(eligibleCleaningDevices({ ...info, inpaintDevices: {} }, 'manga-inpainting'), []);
-});

@@ -52,13 +52,15 @@ def has_module(name):
 def pip_install(packages):
     """Install into this interpreter. uv-created venvs have no `pip` module."""
     uv = shutil.which('uv')
+    pins = Path(sys.prefix) / '.runtime-constraints.txt'
+    constraints = ['-c', str(pins)] if pins.is_file() else []
     if uv:
-        subprocess.check_call([uv, 'pip', 'install', '--python', sys.executable, *packages], cwd=ROOT)
+        subprocess.check_call([uv, 'pip', 'install', '--python', sys.executable, *packages, *constraints], cwd=ROOT)
         return
     if not has_module('pip'):
         subprocess.check_call([sys.executable, '-m', 'ensurepip', '--upgrade'], cwd=ROOT)
     subprocess.check_call(
-        [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *packages],
+        [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *packages, *constraints],
         cwd=ROOT,
     )
 

@@ -1,3 +1,4 @@
+import { translationModel, translationRuntimeOf } from '../translationModels';
 import { CAPABILITIES, CAPABILITY_VERSION } from '../modelCapabilities';
 import { homedir } from 'node:os';
 import { envVar } from './envFile';
@@ -123,7 +124,7 @@ const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
   'native-translator': ['src/lib/server/specialistTranslation.ts', 'src/lib/server/translationRuntime.ts', 'src/lib/translationModels.json',
     'ocr/ko_en_translate.py', 'ocr/opus_mt_translate.py', 'ocr/sugoi_translate.py', 'ocr/translategemma-ja-en.jinja'],
   'workflow-image': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/detect.ts',
-    'ocr/workflow.py', 'ocr/inpaint_models.py', 'ocr/worker.py', 'ocr/koharu_mask.py', 'ocr/lettering.py', 'ocr/coo.py'],
+    'ocr/workflow.py', 'ocr/worker.py', 'ocr/koharu_mask.py', 'ocr/lettering.py', 'ocr/coo.py'],
   'native-detector': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/ocr.ts', 'ocr/worker.py', 'ocr/detect.py', 'ocr/native_detect.py', 'ocr/lettering.py', 'ocr/workflow.py'],
   'image-editor': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/qwenImageClean.ts', 'src/lib/server/imageEdit.ts'],
   'browser-proofreader': ['src/lib/server/proofreadService.ts'],
@@ -131,6 +132,17 @@ const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
   openai: ['src/lib/server/llm.ts', 'src/lib/server/openaiHttp.ts', 'src/lib/server/ocrReview.ts', 'src/lib/server/managedModels.ts'],
   'local-chat': ['src/lib/server/llm.ts', 'src/lib/server/openaiHttp.ts', 'src/lib/server/ocrReview.ts', 'src/lib/server/managedModels.ts', 'src/lib/server/localReview.ts'],
 };
+function pythonRuntimeFingerprint(adapter: string | undefined, row: ModelRow) {
+  const workflow = adapter === 'workflow-image' || adapter === 'native-detector';
+  const translator = translationModel(row.id);
+  const review = adapter === 'native-ocr' && ['hayai-ocr-v2', 'manga-ocr'].includes(row.id)
+    || adapter === 'native-translator' && translator && translationRuntimeOf(translator) === 'pytorch';
+  if (!workflow && !review) return undefined;
+  const python = envVar(workflow ? 'SCAN_WORKFLOW_PYTHON' : 'SCAN_REVIEW_PYTHON') || (adapter === 'native-translator' ? envVar('SCAN_TRANSLATION_PYTHON') : undefined);
+  const environment = python ? resolve(python, '../..') : resolve(process.env.SCAN_ROOT || process.cwd(), workflow ? '.venv-workflow' : '.venv-review');
+  try { return fingerprint(JSON.parse(readFileSync(join(environment, '.komatose-runtime.json'), 'utf8'))); }
+  catch { return 'legacy'; }
+}
 export function adapterSourceFiles(adapterId: string, cliAdapter?: string): string[] {
   const own = ADAPTER_SOURCE_FILES[adapterId] || [];
   const cliFile = adapterId === 'cli' && cliAdapter ? [`src/lib/server/cliAdapters/${cliAdapter}.ts`] : [];
@@ -187,7 +199,7 @@ export function rowTaskFingerprints(row: ModelRow): Record<string, string> {
     visit(path);
   }
   const adapterId = builtinAdapterId(row, pkg);
-  const config = { directoryArtifacts, weights, slug: row.slug, runtime: row.runtime, access: row.access, cliAdapter: row.cliAdapter,
+  const config = { pythonRuntime: pythonRuntimeFingerprint(adapterId, row), directoryArtifacts, weights, slug: row.slug, runtime: row.runtime, access: row.access, cliAdapter: row.cliAdapter,
     http: row.http, launch: row.managedLaunch, preset: row.requestPreset || "generic", revision: row.modelRevision,
     environment: Object.fromEntries((pkg?.manifest.environment || []).map(name => [name, envVar(name)])),
     inheritedEndpoint: row.access === 'local_http' && !row.http?.baseUrl && !row.managedLaunch ? envVar('LLAMASWAP_URL') || 'http://127.0.0.1:8081/v1' : undefined,

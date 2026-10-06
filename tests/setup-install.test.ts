@@ -374,28 +374,30 @@ test('uninstalling Qwen3-VL 8B detaches its managed launch and keeps the reader 
 	);
 });
 
-test('Manga Inpainting and MI-GAN are independently installed and uninstalled', async () => {
-  const directory = join(root, 'custom-workflow-models');
-  process.env.SCAN_WORKFLOW_MODELS_DIR = directory;
-  try {
-    for (const id of ['migan', 'manga-inpainting']) {
-      const target = installTarget(id)!;
-      assert.equal(target.group, 'inpaint');
-      assert.match(installCommand(target).command, new RegExp(`--model.*${id}`));
-      assert.equal(targetInstalled(target).installed, false);
-      await mkdir(join(directory, id), { recursive: true });
-      await writeFile(join(directory, id, 'LICENSE'), 'License notice');
-    }
-    await writeFile(join(directory, 'migan', 'migan_traced.pt'), 'MI-GAN weights');
-    await writeFile(join(directory, 'manga-inpainting', 'manga_inpaintor.jit'), 'Manga weights');
-    assert.equal(targetInstalled(installTarget('migan')!).installed, true);
-    assert.equal(targetInstalled(installTarget('manga-inpainting')!).installed, false, 'line extractor is required');
-    await writeFile(join(directory, 'manga-inpainting', 'erika.jit'), 'Line weights');
-    assert.equal(targetInstalled(installTarget('manga-inpainting')!).installed, true);
-    const migan = uninstallPlan('migan');
-    const manga = uninstallPlan('manga-inpainting');
-    assert.ok(migan.paths.some(path => path.path === join(directory, 'migan')));
-    assert.ok(manga.paths.some(path => path.path === join(directory, 'manga-inpainting')));
-    assert.ok(!migan.paths.some(path => path.path.startsWith(join(directory, 'manga-inpainting'))));
-  } finally { delete process.env.SCAN_WORKFLOW_MODELS_DIR; }
+test('removed inpainters cannot be installed through the bundled catalog', () => {
+  assert.equal(installTarget('migan'), undefined);
+  assert.equal(installTarget('manga-inpainting'), undefined);
+});
+
+test('saved defaults for removed cleaners fall back without deleting downloaded files', async () => {
+  const defaults = await import('../src/lib/server/modelDefaultStore');
+  const file = join(root, 'data', 'model-defaults.json');
+  await writeFile(file, JSON.stringify({ version: 1, defaults: { inpaint: 'migan', cleaning: 'manga-inpainting', detect: 'ctd' } }));
+  assert.equal(defaults.effectiveDefault('inpaint', 'lama-manga'), 'lama-manga');
+  assert.equal(defaults.effectiveDefault('cleaning', 'aot'), 'aot');
+  assert.equal(defaults.effectiveDefault('detect', 'rtdetr'), 'ctd');
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).defaults.inpaint, 'migan', 'reading settings does not mutate local files');
+});
+
+
+test('runtime upgrades are restricted to managed workflow/review environments', async () => {
+  const { startRuntimeUpgrade } = await import('../src/lib/server/modelInstall');
+  assert.throws(() => startRuntimeUpgrade('lama-manga'), /workflow or review runtime/);
+  const previous = process.env.SCAN_REVIEW_PYTHON;
+  process.env.SCAN_REVIEW_PYTHON = '/outside/bin/python';
+  try { assert.throws(() => startRuntimeUpgrade('env-review'), /read-only/); }
+  finally {
+    if (previous === undefined) delete process.env.SCAN_REVIEW_PYTHON;
+    else process.env.SCAN_REVIEW_PYTHON = previous;
+  }
 });

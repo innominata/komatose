@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """Prefetch pinned inpainting weights into their model-specific caches.
 
-Big-LaMa, AOT and LaMa Manga use the Hugging Face cache. MI-GAN and
-Manga Inpainting use verified release exports under SCAN_WORKFLOW_MODELS_DIR. Installing them up front means Cleaning works offline afterwards
+Big-LaMa, AOT and LaMa Manga use the Hugging Face cache.
+Installing them up front means Cleaning works offline afterwards
 and Setup can show them as installed. Revisions are pinned to the tested files.
 
     .venv-workflow/bin/python scripts/install-clean-models.py --model big-lama
     .venv-workflow/bin/python scripts/install-clean-models.py --model all
 """
 import sys
-import json
 import argparse
 import os
 from pathlib import Path
 import time
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ocr'))
-from inpaint_models import EXPORTS, models_dir, download_verified
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
@@ -70,10 +66,10 @@ def install_one(name, spec):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=["all", *MODELS, *EXPORTS], default="all",
+    parser.add_argument("--model", choices=["all", *MODELS], default="all",
                         help="Which clean model to prefetch (default all)")
     args = parser.parse_args()
-    names = [*MODELS, *EXPORTS] if args.model == "all" else [args.model]
+    names = list(MODELS) if args.model == "all" else [args.model]
     try:
         import huggingface_hub  # noqa: F401
     except ImportError:
@@ -81,24 +77,7 @@ def main():
             "huggingface-hub is not installed for this Python. "
             "Run: python3 scripts/setup-python-env.py --env workflow")
     for name in names:
-        if name in EXPORTS:
-            spec = EXPORTS[name]
-            directory = models_dir() / name
-            for filename, (url, checksum) in spec['files'].items():
-                print(f'Installing {name}: {filename}', flush=True)
-                retry(lambda url=url, filename=filename, checksum=checksum: download_verified(url, directory / filename, checksum))
-            retry(lambda: download_verified(spec['license'], directory / 'LICENSE'))
-            # Receipts make artifacts visible to task fingerprints even with a custom data root.
-            root = Path(os.environ.get('SCAN_ROOT', str(Path(__file__).resolve().parents[1])))
-            receipt_dir = Path(os.environ.get('SCAN_DATA_DIR', str(root / 'data'))) / 'models/package-installations'
-            receipt_dir.mkdir(parents=True, exist_ok=True)
-            receipt = {'source': spec['source'], 'artifacts': [str((directory / f).resolve()) for f in [*spec['files'], 'LICENSE']]}
-            temporary = receipt_dir / f'{name}.json.tmp'
-            temporary.write_text(json.dumps(receipt) + '\n')
-            temporary.replace(receipt_dir / f'{name}.json')
-            print(f'Verified {name} in {directory}', flush=True)
-        else:
-            install_one(name, MODELS[name])
+        install_one(name, MODELS[name])
 
 
 if __name__ == "__main__":

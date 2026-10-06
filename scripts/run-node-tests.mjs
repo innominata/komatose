@@ -7,6 +7,7 @@ const groups = {
     "tests/region-catalog.test.ts",
     "tests/credits.test.ts",
     "tests/cleaning-device.test.ts",
+    "tests/python-runtime-maintenance.test.ts",
     "tests/work-credit.test.ts",
     "tests/provider-catalog.test.ts",
     "tests/effective-translate.test.ts",

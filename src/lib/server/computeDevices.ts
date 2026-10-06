@@ -1,3 +1,4 @@
+import { pythonRuntimePath } from './pythonRuntimeMaintenance';
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, freemem, totalmem } from 'node:os';
@@ -134,9 +135,9 @@ export function torchPython(env: string): string | undefined {
 	const spec = TORCH_ENVIRONMENTS.find((item) => item.env === env);
 	if (!spec) return undefined;
 	const configured = (process.env[spec.variable] || '').trim();
-	if (configured && fileExists(configured)) return configured;
+	if (configured && fileExists(configured)) return pythonRuntimePath(configured);
 	const local = join(process.env.SCAN_ROOT || ROOT, spec.dir, 'bin/python');
-	return fileExists(local) ? local : undefined;
+	return fileExists(local) ? pythonRuntimePath(local) : undefined;
 }
 
 const TORCH_PROBE = `

@@ -333,13 +333,20 @@ export function mmprojDeviceEnv(env: NodeJS.ProcessEnv, deviceName: string | und
   return next;
 }
 
-export function hipWorkerEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function hipWorkerEnv(env: NodeJS.ProcessEnv = process.env, pythonPath?: string): NodeJS.ProcessEnv {
+  let splitRuntime = false;
+  if (pythonPath) {
+    try {
+      const receipt = JSON.parse(readFileSync(join(pythonPath, '../../.komatose-runtime.json'), 'utf8'));
+      splitRuntime = receipt.plan?.profile?.startsWith('rocm-split-') === true;
+    } catch { /* Legacy interpreter. */ }
+  }
   const devices = hipVisibleDevices();
   return {
     ...env,
     HIP_VISIBLE_DEVICES: devices,
     CUDA_VISIBLE_DEVICES: devices,
-    HSA_OVERRIDE_GFX_VERSION: env.HSA_OVERRIDE_GFX_VERSION || '11.0.0',
+    ...(env.HSA_OVERRIDE_GFX_VERSION ? { HSA_OVERRIDE_GFX_VERSION: env.HSA_OVERRIDE_GFX_VERSION } : splitRuntime ? {} : { HSA_OVERRIDE_GFX_VERSION: '11.0.0' }),
     SAM2_BUILD_CUDA: '0',
   };
 }

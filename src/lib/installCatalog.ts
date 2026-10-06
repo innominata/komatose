@@ -356,16 +356,6 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'AOT clean method',
 	},
 	{
-		id: 'manga-inpainting', group: 'inpaint', label: 'Manga Inpainting',
-		summary: 'Semantics-aware grayscale manga inpainting with structural-line extraction. Grayscale pages only.',
-		diskBytes: 247 * MB, memoryBytes: 1 * GB, requires: ['env-workflow'], unlocks: 'Manga Inpainting clean method',
-	},
-	{
-		id: 'migan', group: 'inpaint', label: 'MI-GAN',
-		summary: 'Lightweight Places2-512 inpainting for grayscale and color artwork, using native PyTorch on CPU, ROCm or CUDA.',
-		diskBytes: 30 * MB, memoryBytes: 500 * MB, requires: ['env-workflow'], unlocks: 'MI-GAN clean method',
-	},
-	{
 		id: 'lama-manga',
 		group: 'inpaint',
 		label: 'lama-Manga',

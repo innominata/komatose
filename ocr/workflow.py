@@ -70,8 +70,7 @@ def probe():
     resident = next((key[1] for key in _MODELS if key and key[0] == 'big-lama' and str(key[1]).startswith('cuda')), None)
     lama_models = getattr(sys.modules.get('worker'), '_lama', {})
     lama_resident = next((device for device in lama_models if str(device).startswith('cuda')), None)
-    inpaint_devices = {key[0]: key[1] for key in _MODELS if key[0] in ('migan', 'manga-inpainting') and str(key[1]).startswith('cuda')}
-    return {'inpaintDevices': inpaint_devices, 'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
+    return {'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
             'bigLama': bool(importlib.util.find_spec('spandrel')), 'bigLamaDevice': resident,
             'lamaDevice': lama_resident,
             'koharu': koharu, 'cpu': True}
@@ -1003,10 +1002,8 @@ def removal_mask(img, req):
 
 
 def model_inpaint(img, mask, method, device):
-    if method in ('migan', 'manga-inpainting'):
-        import inpaint_models
-        models = _cached((method, device), lambda: inpaint_models.load_models(method, device))
-        return inpaint_models.run_inpaint(img, mask, method, device, models)
+    if method not in ('lama', 'big-lama', 'aot'):
+        raise ValueError(f'Unknown inpainting method: {method}')
     from huggingface_hub import hf_hub_download
     h, w = img.shape[:2]
     scale = min(1, 1024/max(h,w))
@@ -1092,9 +1089,6 @@ def clean(img, mask, req):
         raise ValueError('The approved removal mask is empty')
     result = img.copy()
     method = req.get('method','auto')
-    if method == 'manga-inpainting':
-        from inpaint_models import require_grayscale
-        require_grayscale(img)
     if method == 'clone':
         dx, dy = req.get('offset', [0,0])
         ys, xs = np.where(mask>0)
@@ -1474,7 +1468,7 @@ def run(req):
         if not cv2.imwrite(req['out'],result): raise ValueError('Clean write failed')
         parts = method.split('+')
         device = str(req.get('device', 'cpu'))
-        if any(m in parts for m in ('lama', 'big-lama', 'aot', 'migan', 'manga-inpainting')):
+        if any(m in parts for m in ('lama', 'big-lama', 'aot')):
             import torch
             runtime = 'ROCm' if torch.version.hip else 'CUDA'
             backend = f'{device} · GPU · PyTorch {runtime}' if device.startswith('cuda') else 'CPU · PyTorch'

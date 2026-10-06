@@ -9,6 +9,7 @@ import {
 	listInstallStatuses,
 	startInstall,
 	startInstallQueue,
+	startRuntimeUpgrade,
 	uninstallPlan,
 	uninstallTarget,
 } from '$lib/server/modelInstall';
@@ -40,6 +41,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const action = String(body.action || '');
 		const id = String(body.id || '').trim();
 		const ids = Array.isArray(body.ids) ? body.ids.map((item) => String(item || '').trim()).filter(Boolean) : id ? [id] : [];
+		if (action === 'upgrade-runtime') {
+			return json({ ok: true, job: startRuntimeUpgrade(id), queue: installQueueStatus() });
+		}
 		if (action === 'start') {
 			if (!ids.length) return fail(400, 'Choose an install target');
 			// A single id keeps the old one-step behaviour for "Install" buttons.

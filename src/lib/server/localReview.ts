@@ -1,3 +1,4 @@
+import { pythonRuntimePath, withPythonRuntime } from './pythonRuntimeMaintenance';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
@@ -24,7 +25,7 @@ import { findRegistryRow, listRegistryRows } from './modelRegistryStore';
 import { managedModelStatus, operateManagedModel, waitManagedOperation } from './managedModels';
 import { modelHttpConfig } from './modelConnection';
 
-type Service = { child: ChildProcess; url: string; token: string; ready: Promise<void>; adopted?: boolean };
+type Service = { child: ChildProcess; url: string; token: string; ready: Promise<void>; adopted?: boolean; runtimePath?: string };
 export type ReviewServerState = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 export type ReviewServerStatus = {
   id: LocalReviewModelId;
@@ -137,6 +138,12 @@ export function stopLocalReviewModels() {
   }
   state.services.clear();
 }
+/** Called after runtime requests drain. External resident services are not ours to retire. */
+export async function retirePythonReviewWorkers() {
+  const ids = Object.keys(PYTHON_REVIEW_SCRIPTS) as LocalReviewModelId[];
+  if (ids.some(id => state.services.get(id)?.adopted)) throw failure('Stop the externally owned Python review server before upgrading its runtime');
+  await Promise.all(ids.map(id => terminateOwned(id)));
+}
 function stopPythonReview() {
   for (const id of Object.keys(PYTHON_REVIEW_SCRIPTS) as LocalReviewModelId[]) {
     const service = state.services.get(id);
@@ -200,7 +207,7 @@ function childEnv(id: LocalReviewModelId): NodeJS.ProcessEnv {
     const device = reviewResolved(id);
     return mmprojDeviceEnv(vulkanLlamaEnv(base), device.kind === 'gpu' ? device.name : undefined);
   }
-  if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(base);
+  if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(base, python());
   return torchDeviceEnv(reviewResolved(id), base);
 }
 
@@ -301,7 +308,11 @@ async function managedHostService(id: LocalReviewModelId, host: ModelRow, abort:
 async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise<Service> {
   if (!installedLocalReviewModels().some(model => model.id === id))
     throw new Error(`${id} is not installed. Run scripts/install-review-models.py with the review Python environment.`);
-  const existing = state.services.get(id);
+  let existing = state.services.get(id);
+  if (existing && !existing.adopted && pythonReviewModel(id) && existing.runtimePath && existing.runtimePath !== pythonRuntimePath(python())) {
+    await terminateOwned(id);
+    existing = undefined;
+  }
   if (existing?.adopted) {
     if (await liveReady(id, existing.url, existing.token, abort)) {
       await existing.ready;
@@ -358,7 +369,7 @@ async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise
   let spawnError: Error | undefined;
   child.on('error', error => { spawnError = error; });
   writeSavedToken(id, token);
-  const instance: Service = { child, url: bindUrl(port), token, ready: Promise.resolve() };
+  const instance: Service = { child, url: bindUrl(port), token, ready: Promise.resolve(), runtimePath: script ? pythonRuntimePath(python()) : undefined };
   state.services.set(id, instance);
   instance.ready = (async () => {
     try {
@@ -500,7 +511,7 @@ export async function withLocalReview<T>(run: (signal: AbortSignal) => Promise<T
     signal.throwIfAborted();
     return run(signal);
   }
-  const queued = state.queue.then(async () => {
+  const queued = state.queue.then(() => withPythonRuntime('env-review', async () => {
     abort?.throwIfAborted();
     clearTimeout(state.idle);
     const signal = AbortSignal.any([...(abort ? [abort] : []), AbortSignal.timeout(15 * 60_000)]);
@@ -517,7 +528,7 @@ export async function withLocalReview<T>(run: (signal: AbortSignal) => Promise<T
         state.idle.unref();
       }
     }
-  });
+  }));
   state.queue = queued.catch(() => {});
   if (!abort) return queued;
   return new Promise<T>((resolve, reject) => {
@@ -629,7 +640,7 @@ export function operateReviewServer(id: string, action: 'start' | 'stop' | 'rest
   // A managed host runs the one server for this model; its lifecycle is the
   // review lifecycle here, so Setup buttons drive the managed model directly.
   const host = managedReviewHost(modelId);
-  entry.promise = (async () => {
+  entry.promise = withPythonRuntime('env-review', async () => {
     try {
       if (host) {
         operateManagedModel(host.id, action);
@@ -648,7 +659,7 @@ export function operateReviewServer(id: string, action: 'start' | 'stop' | 'rest
       entry.state = 'error';
       entry.error = error instanceof Error ? error.message : String(error);
     }
-  })();
+  });
   return host ? managedHostStatus(modelId, host) : {
     id: modelId,
     label: model.label,

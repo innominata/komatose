@@ -46,9 +46,12 @@ export const RESERVED_LEGACY_HOST_IDS = ['qwen', 'grok', 'codex', 'cursor'] as c
  * dropped rather than reinterpreted, so an install that predates their removal can
  * never resurrect them as a bogus row of another access kind.
  */
+export const RETIRED_INPAINT_MODEL_IDS = ['migan', 'manga-inpainting'] as const;
+
 export const RETIRED_SEED_IDS = [
 	'chatgpt',
 	'deepseek',
+	...RETIRED_INPAINT_MODEL_IDS,
 	// The chat-model rows were never configs: this build ships launch presets in
 	// Setup instead, so an operator adds them explicitly (or not at all).
 	QWEN_38_27B_ID,
