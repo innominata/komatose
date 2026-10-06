@@ -176,3 +176,45 @@ test("editor hot path keeps current pages fast, polls jobs, and drops finished u
   assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM lines WHERE image_id='p1'").get() as { n: number }).n, 0);
   assert.equal((sqlite.prepare("SELECT id FROM lines WHERE id='r2'").get() as { id: string }).id, "r2");
 });
+
+test("placement edits advance revisions, preserve history, and reject stale writes", async () => {
+  const { migrateLinePlacementRevisions } = await import("../src/lib/server/db/workflowMigration");
+  // Simulate an existing installation with the original trigger definitions.
+  sqlite.exec(`
+    DELETE FROM schema_versions WHERE version=8;
+    DROP TRIGGER lines_version;
+    CREATE TRIGGER lines_version AFTER UPDATE OF body ON lines BEGIN
+      UPDATE lines SET revision=OLD.revision+1 WHERE id=NEW.id;
+      UPDATE episodes SET revision=revision+1 WHERE id=NEW.episode_id;
+    END;
+  `);
+  migrateLinePlacementRevisions(sqlite);
+  migrateLinePlacementRevisions(sqlite);
+  db.insert(lines).values({
+    id: "placement-revision", episodeId: "chapter", body: "Text", updatedAt: 1,
+  }).run();
+  const current = () => sqlite.prepare("SELECT * FROM lines WHERE id=?").get("placement-revision") as Record<string, number>;
+  for (const column of ["invert", "placed", "sidebar_x", "sidebar_y", "sidebar_w", "sidebar_h"]) {
+    const before = current();
+    const chapterBefore = (sqlite.prepare("SELECT revision FROM episodes WHERE id='chapter'").get() as { revision: number }).revision;
+    assert.equal(sqlite.prepare(`UPDATE lines SET ${column}=? WHERE id=? AND revision=?`)
+      .run(1, "placement-revision", before.revision).changes, 1);
+    assert.equal(current().revision, before.revision + 1);
+    assert.equal((sqlite.prepare("SELECT revision FROM episodes WHERE id='chapter'").get() as { revision: number }).revision, chapterBefore + 1);
+    assert.equal(sqlite.prepare(`UPDATE lines SET ${column}=? WHERE id=? AND revision=?`)
+      .run(0, "placement-revision", before.revision).changes, 0);
+  }
+  const before = current();
+  sqlite.prepare("UPDATE lines SET body='New text',invert=0,placed=0 WHERE id=?").run("placement-revision");
+  assert.equal(current().revision, before.revision + 1, "mixed edits increment once");
+  const saved = sqlite.prepare("SELECT data FROM workflow_revisions WHERE entity_id=? AND revision=?")
+    .get("placement-revision", before.revision) as { data: string };
+  const history = JSON.parse(saved.data);
+  assert.equal(history.body, "Text");
+  assert.equal(history.invert, true);
+  assert.equal(history.placed, true);
+  assert.equal(history.sidebarX, 1);
+  assert.equal(history.sidebarY, 1);
+  assert.equal(history.sidebarW, 1);
+  assert.equal(history.sidebarH, 1);
+});

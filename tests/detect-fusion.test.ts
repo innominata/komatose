@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { composeDetections, minRegionPx, MIN_AUTO_REGION_PX } from '../src/lib/server/detect';
 import { fuseDetections, type FusedRegion } from '../src/lib/server/detectFusion';
 import type { WorkerRegion } from '../src/lib/server/ocr';
 
 const r = (backend: string, cls: string, score: number, box: [number, number, number, number]): WorkerRegion => ({ backend, cls, score, box });
 const text = (rows: FusedRegion[]) => rows.filter((row) => row.cls !== 'bubble');
+
+const page16 = JSON.parse(readFileSync(new URL('./fixtures/geometry/page16.json', import.meta.url), 'utf8'));
+for (const fixture of page16) {
+  test(`page 16 ${fixture.name}: joined dialogue has two regions, without a spanning CTD box`, () => {
+    const rows = composeDetections(fixture.outputs, fixture.width, fixture.height);
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every(row => row.kind === 'bubble'));
+    // Keep the two independent RT-DETR text boxes as the geometry seeds.
+    const expected = fixture.outputs.rtdetr.filter((row: WorkerRegion) => row.cls === 'text_bubble');
+    for (const row of rows) {
+      assert.ok(expected.some((seed: WorkerRegion) => Math.abs(row.place.x * fixture.width - seed.box[0]) < 4 && Math.abs(row.place.y * fixture.height - seed.box[1]) < 4));
+    }
+  });
+}
 
 test('a weak free-text box alone is dropped; a second detector keeps it', () => {
   const weak = r('rtdetr', 'text_free', 0.25, [100, 100, 160, 180]);

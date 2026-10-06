@@ -553,6 +553,42 @@ export async function addSeriesCredits(ctx: Ctx): Promise<{ images: ImageRow[]; 
   return { images: next, added: created.length };
 }
 
+/** Join adjacent pages in RTL order without resampling either page. */
+export async function combineSpread(ctx: Ctx, input: unknown): Promise<ImageRow> {
+  const all = await listImages(ctx.episode.id);
+  if (!Array.isArray(input) || input.length !== 2 || input.some(id => typeof id !== "string") || input[0] === input[1])
+    throw new PageEditError("Select exactly two consecutive pages");
+  const selected = all.filter(img => input.includes(img.id));
+  if (selected.length !== 2 || all.indexOf(selected[1]) !== all.indexOf(selected[0]) + 1)
+    throw new PageEditError("Select exactly two consecutive pages");
+  const [right, left] = selected;
+  if (selected.some(isCreditsPage)) throw new PageEditError("Credits pages cannot be combined");
+  const [rightBytes, leftBytes] = await Promise.all(selected.map(img => readWorkingBytes(ctx, img)));
+  const [r, l] = await Promise.all([sharp(rightBytes).metadata(), sharp(leftBytes).metadata()]);
+  const width = r.width! + l.width!, height = Math.max(r.height!, l.height!);
+  const bytes = await sharp({ create: { width, height, channels: 4, background: "#ffffff" } })
+    .composite([{ input: leftBytes, left: 0, top: 0 }, { input: rightBytes, left: l.width!, top: 0 }]).png().toBuffer();
+  const geometry = Object.fromEntries(await Promise.all(selected.map(async img => [img.id, await captureGeometry(ctx.episode.id, img.id)])));
+  await backupWorking(ctx, right);
+  await pushUndo(ctx.series.slug, ctx.episode.slug, { type: "combine", originalId: right.id, removed: left, geometry });
+  const image = await commitPixels(ctx, right, bytes, false);
+  for (const img of selected) {
+    await applyPageGeometry(ctx.episode.id, img, image, geometry[img.id],
+      { sx: 1, sy: 1, dx: img.id === right.id ? l.width! : 0, dy: 0, width, height }, "#ffffff");
+  }
+  // A spread needs a fresh prepared source; page-level cleaning belongs to the old halves.
+  const doc = getDoc(`page:${right.id}`, {});
+  putDoc(ctx.episode.id, doc.id, {}, doc.revision);
+  await db.update(lines).set({ imageId: right.id }).where(and(eq(lines.episodeId, ctx.episode.id), eq(lines.imageId, left.id)));
+  await db.delete(images).where(eq(images.id, left.id));
+  // Keep the removed half's files for undo.
+  broadcast(ctx.episode.id, { type: "image:delete", id: left.id });
+  for (const line of await listLines(ctx.episode.id)) broadcast(ctx.episode.id, { type: "line:upsert", line });
+  void logActivity({ seriesId: ctx.series.id, episodeId: ctx.episode.id, userId: ctx.user.id,
+    action: "combined_spread", payload: { imageIds: selected.map(img => img.id) } });
+  return image;
+}
+
 export async function splitSpread(
   ctx: Ctx,
   imageId: string,
@@ -1163,6 +1199,16 @@ export async function undoPageOp(
 ): Promise<{ op: PageUndoOp | null; image?: ImageRow; images?: ImageRow[] }> {
   const op = await popUndo(ctx.series.slug, ctx.episode.slug);
   if (!op) throw new PageEditError("Nothing to undo");
+  if (op.type === "combine") {
+    await db.insert(images).values(op.removed);
+    for (const saved of op.geometry[op.removed.id].lines)
+      await db.update(lines).set({ imageId: op.removed.id }).where(and(eq(lines.id, saved.id), eq(lines.episodeId, ctx.episode.id)));
+    const restored = await undoInpaint({ ...ctx, imageId: op.originalId });
+    await restoreGeometry(ctx.episode.id, restored.image, op.geometry[op.originalId]);
+    await restoreGeometry(ctx.episode.id, op.removed, op.geometry[op.removed.id]);
+    broadcast(ctx.episode.id, { type: "image:upsert", image: op.removed });
+    return { op, images: await listImages(ctx.episode.id) };
+  }
   if (op.type === "pixels") {
     const ids = op.imageIds?.length ? op.imageIds : [op.imageId];
     const restored: ImageRow[] = [];

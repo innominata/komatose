@@ -10,7 +10,7 @@
 paddleocr==3.7.0
 paddlepaddle==3.2.0
 
-# Detection: runs the RT-DETR and comic-text-detector ONNX graphs.
+# CPU fallback for RT-DETR/CTD. GPU inference uses native PyTorch in env-workflow.
 onnxruntime==1.29.0
 
 # Weight downloads.

@@ -67,6 +67,13 @@ export async function registryPickerRows(role?: Role | null, operation?: Provide
 			if (!ok) continue;
 		}
 		const live = await rowAvailability(row);
+		// A proofreader's page-image job is the service reporting ready. A stored
+		// probe can stay failed from when the service was down, and that must not
+		// keep a ready proofreader out of the proofreading picker.
+		const operations = [...allowedOperations(row)];
+		if (row.access === 'proofreader' && live.available && !operations.includes('pageImageProofread')) {
+			operations.push('pageImageProofread');
+		}
 		out.push({
 			id: row.id,
 			label: row.name,
@@ -74,7 +81,7 @@ export async function registryPickerRows(role?: Role | null, operation?: Provide
 			reason: live.reason,
 			pageImageOnly: row.access === 'proofreader',
 			group: accessGroup(row),
-			operations: allowedOperations(row),
+			operations,
 			slug: row.slug,
 			access: row.access,
 			estimates: estimatesOf(row),

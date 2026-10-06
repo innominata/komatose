@@ -21,6 +21,10 @@ export async function localMaskFixture() {
   const worker = join(root, 'worker.py'), log = join(root, 'calls.jsonl');
   await writeFile(worker, `#!/usr/bin/python3
 import sys,json,struct,zlib
+if '-c' in sys.argv:
+    # This executable also stands in for the interpreter used by hardware probes.
+    print(json.dumps({'version':'fixture','cuda':None,'hip':None,'devices':[]}))
+    sys.exit(0)
 def chunk(kind,data):
     return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
 for line in sys.stdin:

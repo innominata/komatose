@@ -2,7 +2,7 @@
   "version": 1,
   "id": "rtdetr",
   "name": "RT-DETR",
-  "revision": "1",
+  "revision": "2",
   "access": "local_http",
   "adapter": {
     "id": "native-detector"
@@ -11,25 +11,28 @@
     "backend": "rtdetr"
   },
   "service": {
-    "id": "ocr-worker",
+    "id": "cleaning-worker",
     "resource": "native-image-workers"
   },
   "setup": {
-    "executable": "{root}/.venv-ocr/bin/python",
+    "executable": "{root}/.venv-workflow/bin/python",
     "args": [
       "{root}/scripts/install-detect-models.py",
       "--model",
       "rtdetr"
     ],
-    "executableEnv": "PADDLEOCR_PYTHON"
+    "executableEnv": "SCAN_WORKFLOW_PYTHON"
   },
   "dependencies": [
+    "env-workflow",
     "env-ocr"
   ],
   "environment": [
     "PADDLEOCR_PYTHON",
     "SCAN_OCR_MODELS_DIR",
-    "HF_HOME"
+    "HF_HOME",
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_DETECT_DEVICE"
   ],
   "artifactDirectories": [
     {

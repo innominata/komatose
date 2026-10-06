@@ -18,6 +18,8 @@ export type BackendInfo = {
   sam: boolean;
   bigLama: boolean;
   bigLamaDevice?: string | null;
+  lamaDevice?: string | null;
+  inpaintDevices?: Record<string, string>;
   koharu: boolean;
   cpu: boolean;
 };
@@ -250,7 +252,8 @@ function execute(
   payload: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Record<string, any>> {
-  return komatoseGpuEnabled() || workflowWorkerRunning() ? persistentExecute(payload, signal) : oneShot(payload, signal);
+  const gpu = typeof payload.device === 'string' && payload.device.startsWith('cuda:');
+  return komatoseGpuEnabled() || gpu || workflowWorkerRunning() ? persistentExecute(payload, signal) : oneShot(payload, signal);
 }
 
 async function rawProbe(): Promise<BackendInfo> {
@@ -313,6 +316,14 @@ export async function warmupWorkflow() {
   return warmupInFlight;
 }
 
+/** Resident LaMa models already own their weights; keep using their GPU. */
+export function eligibleCleaningDevices(info: BackendInfo | null, method: unknown) {
+  return info?.devices.filter(d => d.free > 2 * 1024 ** 3 ||
+    (typeof method === "string" && d.id === info.inpaintDevices?.[method]) ||
+    (method === "lama" && d.id === info.lamaDevice) ||
+    ((method === "big-lama" || method === "auto") && d.id === info.bigLamaDevice)) ?? [];
+}
+
 export async function rawLocalOperation(
   payload: Record<string, unknown>,
   signal?: AbortSignal,
@@ -322,13 +333,21 @@ export async function rawLocalOperation(
     (payload.cmd === "mask" &&
       !!payload.detect &&
       payload.maskEngine !== "ctd");
+  const nativeDetect = payload.cmd === 'detect-regions' || payload.cmd === 'detect-sfx' ||
+    (payload.cmd === 'mask' && !!payload.detect && payload.maskEngine === 'ctd');
+  const detectorChoice = nativeDetect ? process.env.SCAN_DETECT_DEVICE : undefined;
+  const requestedDevice = typeof payload.device === 'string' && payload.device !== 'auto'
+    ? payload.device : detectorChoice && detectorChoice !== 'auto' ? detectorChoice : undefined;
   const cleanGpu =
+    payload.method === "lama" ||
     payload.method === "sam" ||
     payload.method === "big-lama" ||
     payload.method === "aot" ||
+    payload.method === "migan" ||
+    payload.method === "manga-inpainting" ||
     (payload.method === "auto" && (komatoseGpuEnabled() || workflowResolved().kind === "gpu"));
   const info =
-    payload.device !== "cpu" && (mightUseKoharu || cleanGpu)
+    requestedDevice !== "cpu" && (mightUseKoharu || cleanGpu || nativeDetect)
       ? await probeBackend()
       : null;
   const maskDetect =
@@ -338,13 +357,12 @@ export async function rawLocalOperation(
       ((payload.maskEngine === "auto" || !payload.maskEngine) && !!info?.koharu));
   const gpuEligible = maskDetect || cleanGpu;
   const devices =
-    info?.devices
-      .filter((d) => d.free > 2 * 1024 ** 3)
+    eligibleCleaningDevices(info, payload.method)
       .sort(
         (a, b) =>
           (loads.get(a.id) ?? 0) - (loads.get(b.id) ?? 0) || b.free - a.free,
-      ) ?? [];
-  const device = typeof payload.device === "string" ? payload.device : devices[0]?.id ?? "cpu";
+      );
+  const device = requestedDevice ?? devices[0]?.id ?? "cpu";
   loads.set(device, (loads.get(device) ?? 0) + 1);
   const previous = queues.get(device) ?? Promise.resolve();
   const task = previous
@@ -424,5 +442,5 @@ export async function localOperation(payload: Record<string, unknown>, signal?: 
   const { width = 1, height = 1 } = await sharp(jpeg).metadata();
   return { ...result, width, height, regions: result.regions.map((r: any) => ({...r, box:[r.x * width,r.y * height,(r.x+r.w)*width,(r.y+r.h)*height]})) };
  }
- return { ...result, method: id, backend: 'Model adapter' };
+ return { ...result, method: id, backend: result.backend || 'Model adapter' };
 }

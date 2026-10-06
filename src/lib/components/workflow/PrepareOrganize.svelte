@@ -19,6 +19,8 @@
     onreorder,
     onaddfiles,
     onaddcredits,
+    canCombinePages = false,
+    oncombine,
     onextract,
     ondelete,
   }: {
@@ -38,6 +40,8 @@
     onreorder: (order: string[]) => void;
     onaddfiles: (files: File[]) => void;
     onaddcredits: () => void;
+    canCombinePages?: boolean;
+    oncombine: () => void;
     onextract: () => void;
     ondelete: () => void;
   } = $props();
@@ -109,6 +113,9 @@
     <div class="sel-bar" role="region" aria-label="Selected page actions">
       <i class="bi bi-check2-square" aria-hidden="true"></i>
       <strong>{selectedIds.length} selected</strong>
+      {#if canCombinePages}
+        <button type="button" class="ed-btn small" data-find="combine-spread" title="RTL spread: later page on the left, earlier page on the right" disabled={selectionDisabled} onclick={oncombine}>Combine into spread</button>
+      {/if}
       <button type="button" class="ed-btn small" disabled={selectionDisabled} onclick={onextract}>Extract to chapter…</button>
       <button type="button" class="ed-btn small danger" disabled={selectionDisabled} onclick={ondelete}>Delete selected pages…</button>
       <button type="button" class="ed-btn small ghost" onclick={() => onselectall(false)}>Clear selection</button>

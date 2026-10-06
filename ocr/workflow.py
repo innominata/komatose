@@ -67,9 +67,13 @@ def probe():
         koharu = koharu_mask.installed()
     except Exception:
         koharu = False
-    resident = next((key[1] for key in _MODELS if key and key[0] == 'big-lama'), None)
-    return {'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
+    resident = next((key[1] for key in _MODELS if key and key[0] == 'big-lama' and str(key[1]).startswith('cuda')), None)
+    lama_models = getattr(sys.modules.get('worker'), '_lama', {})
+    lama_resident = next((device for device in lama_models if str(device).startswith('cuda')), None)
+    inpaint_devices = {key[0]: key[1] for key in _MODELS if key[0] in ('migan', 'manga-inpainting') and str(key[1]).startswith('cuda')}
+    return {'inpaintDevices': inpaint_devices, 'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
             'bigLama': bool(importlib.util.find_spec('spandrel')), 'bigLamaDevice': resident,
+            'lamaDevice': lama_resident,
             'koharu': koharu, 'cpu': True}
 
 
@@ -999,6 +1003,10 @@ def removal_mask(img, req):
 
 
 def model_inpaint(img, mask, method, device):
+    if method in ('migan', 'manga-inpainting'):
+        import inpaint_models
+        models = _cached((method, device), lambda: inpaint_models.load_models(method, device))
+        return inpaint_models.run_inpaint(img, mask, method, device, models)
     from huggingface_hub import hf_hub_download
     h, w = img.shape[:2]
     scale = min(1, 1024/max(h,w))
@@ -1009,13 +1017,13 @@ def model_inpaint(img, mask, method, device):
     sm = cv2.copyMakeBorder(sm,0,(-sh)%8,0,(-sw)%8,cv2.BORDER_CONSTANT)
     if method == 'lama':
         import worker
-        result = worker._lama_run(small, sm)
+        result = worker._lama_run(small, sm, device)
     else:
         x = np.ascontiguousarray(small[:,:,::-1].transpose(2,0,1))[None].astype(np.float32)/255
         m = (sm>0).astype(np.float32)[None,None]
         if method == 'aot' and device == 'cpu':
             import onnxruntime as ort
-            session = _cached(('aot-onnx', 'cpu'), lambda: ort.InferenceSession(hf_hub_download('ogkalu/aot-inpainting','aot.onnx'), providers=['CPUExecutionProvider']))
+            session = _cached(('aot-onnx', 'cpu'), lambda: ort.InferenceSession(hf_hub_download('ogkalu/aot-inpainting','aot.onnx', revision='42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189'), providers=['CPUExecutionProvider']))
             inputs = session.get_inputs()
             # AOT's traced interface consumes RGB in [-1,1] and a 1=remove mask.
             result = session.run(None,{inputs[0].name:(x*2-1)*(1-m),inputs[1].name:m})[0]
@@ -1023,13 +1031,13 @@ def model_inpaint(img, mask, method, device):
         else:
             import torch
             if method == 'aot':
-                model = _cached(('aot', device), lambda: torch.jit.load(hf_hub_download('ogkalu/aot-inpainting','aot_traced.pt'), map_location=device).eval())
+                model = _cached(('aot', device), lambda: torch.jit.load(hf_hub_download('ogkalu/aot-inpainting','aot_traced.pt', revision='42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189'), map_location=device).eval())
                 with torch.inference_mode():
                     result = (model(torch.from_numpy((x*2-1)*(1-m)).to(device),torch.from_numpy(m).to(device)).cpu().numpy()+1)/2
             elif method == 'big-lama':
                 from spandrel import ModelLoader
                 def load_big_lama():
-                    path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt')
+                    path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt', revision='2953a4e935bf01ad1471f6cbfd26ab81abeeb92d')
                     state = torch.load(path, map_location='cpu', weights_only=True)
                     state = state.get('gen_state_dict', state.get('state_dict', state))
                     # The manga checkpoint contains the generator only; Spandrel expects its wrapper prefix.
@@ -1084,6 +1092,9 @@ def clean(img, mask, req):
         raise ValueError('The approved removal mask is empty')
     result = img.copy()
     method = req.get('method','auto')
+    if method == 'manga-inpainting':
+        from inpaint_models import require_grayscale
+        require_grayscale(img)
     if method == 'clone':
         dx, dy = req.get('offset', [0,0])
         ys, xs = np.where(mask>0)
@@ -1137,7 +1148,7 @@ def warmup(device):
 
     def load_big_lama():
         from spandrel import ModelLoader
-        path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt')
+        path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt', revision='2953a4e935bf01ad1471f6cbfd26ab81abeeb92d')
         state = torch.load(path, map_location='cpu', weights_only=True)
         state = state.get('gen_state_dict', state.get('state_dict', state))
         state = {('generator.'+k if k.startswith('model.') else k): v for k, v in state.items()}
@@ -1149,11 +1160,11 @@ def warmup(device):
         return build_sam2('configs/sam2.1/sam2.1_hiera_s.yaml', checkpoint, device=device, apply_postprocessing=False)
 
     def load_aot():
-        return torch.jit.load(hf_hub_download('ogkalu/aot-inpainting','aot_traced.pt'), map_location=device).eval()
+        return torch.jit.load(hf_hub_download('ogkalu/aot-inpainting','aot_traced.pt', revision='42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189'), map_location=device).eval()
 
     def load_lama():
         import worker
-        return worker._get_lama()
+        return worker._get_lama(device)
 
     # Big-LaMa first, and isolate each failure: one optional model must not
     # stop the cleaner the user selected from becoming GPU-resident.
@@ -1382,6 +1393,15 @@ def run(req):
     if req['cmd']=='warmup': return warmup(req.get('device','cpu'))
     img = cv2.imread(req['path'])
     if img is None: raise ValueError('Prepared source is missing')
+    if req['cmd']=='detect-regions':
+        import detect
+        # Reuse the same preprocessing/postprocessing as the CPU ONNX path.
+        with contextlib.redirect_stdout(sys.stderr):
+            regions = detect.detect(img, backend=req.get('backend', 'rtdetr'),
+                                    conf=req.get('conf'), tile=req.get('tile'),
+                                    overlap=req.get('overlap'), supplement=req.get('supplement', True),
+                                    device=req.get('device', 'cpu'))
+        return {'regions': regions, 'width': img.shape[1], 'height': img.shape[0]}
     if req['cmd']=='mask-geometry':
         mask = cv2.imread(req['mask'], cv2.IMREAD_GRAYSCALE)
         if mask is None or mask.shape != img.shape[:2]:
@@ -1454,10 +1474,10 @@ def run(req):
         if not cv2.imwrite(req['out'],result): raise ValueError('Clean write failed')
         parts = method.split('+')
         device = str(req.get('device', 'cpu'))
-        if any(m in parts for m in ('big-lama', 'aot')) and device.startswith('cuda'):
-            backend = f'{device} · GPU'
-        elif 'lama' in parts:
-            backend = 'CPU ONNX · LaMa'
+        if any(m in parts for m in ('lama', 'big-lama', 'aot', 'migan', 'manga-inpainting')):
+            import torch
+            runtime = 'ROCm' if torch.version.hip else 'CUDA'
+            backend = f'{device} · GPU · PyTorch {runtime}' if device.startswith('cuda') else 'CPU · PyTorch'
         else:
             backend = 'CPU'
         return {'method':method,'backend':backend}

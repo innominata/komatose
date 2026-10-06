@@ -4,7 +4,10 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { episodeDir } from './storage';
 
+import type { ImageRow } from '../types';
+
 export type PageUndoOp =
+	| { type: 'combine'; originalId: string; removed: ImageRow; geometry: Record<string, GeometrySnapshot> }
 	| { type: 'pixels'; imageId: string; imageIds?: string[]; geometry?: Record<string, GeometrySnapshot> }
 	| { type: 'reorder'; order: { id: string; sortOrder: number }[] }
 	| {
@@ -88,6 +91,7 @@ export async function discardDeletedPageUndo(seriesSlug: string, episodeSlug: st
 	const log = await readUndoLog(seriesSlug, episodeSlug);
 	const kept = log.filter(op => {
 		if (op.type === 'pixels') return ![op.imageId, ...(op.imageIds ?? [])].some(id => deleted.has(id));
+		if (op.type === 'combine') return !deleted.has(op.originalId) && !deleted.has(op.removed.id);
 		if (op.type === 'split') return !deleted.has(op.originalId) && !deleted.has(op.createdId);
 		if (op.type === 'reslice') return ![...op.createdIds, ...op.previous.map(page => page.id)].some(id => deleted.has(id));
 		return true;

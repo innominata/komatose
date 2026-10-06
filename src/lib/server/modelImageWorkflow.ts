@@ -18,7 +18,7 @@ export async function runImageTaskFiles(row: ModelRow, task: ModelTaskId,
   const [image, mask] = await Promise.all([readFile(opts.path), opts.mask ? readFile(opts.mask) : undefined]);
   const result = await executeModelTask(row, task, { image, jpeg: image, mask, prompt: opts.prompt }, { abort });
   await writeFile(opts.out, Buffer.from((result.image || result.mask).split(',')[1], 'base64'));
-  return { ...result, method: row.id, backend: 'Model adapter' };
+  return { ...result, method: row.id, backend: result.backend || 'Model adapter' };
 }
 export function imageWorkflowChoices() {
   return listRegistryRows().filter(row => !row.disabled).map(row => ({ id: row.id, label: row.name,

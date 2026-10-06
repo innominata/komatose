@@ -2,7 +2,7 @@
   "version": 1,
   "id": "ctd",
   "name": "Comic Text Detector",
-  "revision": "1",
+  "revision": "2",
   "access": "local_http",
   "adapter": {
     "id": "native-detector"
@@ -11,32 +11,44 @@
     "backend": "ctd"
   },
   "service": {
-    "id": "ocr-worker",
+    "id": "cleaning-worker",
     "resource": "native-image-workers"
   },
   "setup": {
-    "executable": "{root}/.venv-ocr/bin/python",
+    "executable": "{root}/.venv-workflow/bin/python",
     "args": [
       "{root}/scripts/install-detect-models.py",
       "--model",
       "ctd"
     ],
-    "executableEnv": "PADDLEOCR_PYTHON"
+    "executableEnv": "SCAN_WORKFLOW_PYTHON"
   },
   "dependencies": [
-    "env-ocr",
-    "env-workflow"
+    "env-workflow",
+    "env-ocr"
   ],
   "environment": [
     "PADDLEOCR_PYTHON",
     "SCAN_OCR_MODELS_DIR",
-    "HF_HOME"
+    "HF_HOME",
+    "SCAN_WORKFLOW_PYTHON",
+    "SCAN_DETECT_DEVICE",
+    "SCAN_CTD_SOURCE_DIR"
   ],
   "artifactDirectories": [
     {
       "path": "{home}/.cache/huggingface",
       "rootEnv": "HF_HOME",
       "subdirectory": "hub/models--mayocream--comic-text-detector-onnx"
+    },
+    {
+      "path": "{home}/.cache/huggingface",
+      "rootEnv": "HF_HOME",
+      "subdirectory": "hub/models--mayocream--comic-text-detector"
+    },
+    {
+      "path": "{root}/data/models/ctd-native-a9fca9d0e8ecec081d3cd817efb98f2f863e262c",
+      "rootEnv": "SCAN_CTD_SOURCE_DIR"
     }
   ]
 }

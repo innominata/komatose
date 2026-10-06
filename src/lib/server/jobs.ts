@@ -320,8 +320,8 @@ export function updateJob(
     progress && typeof progress === "object" && !Array.isArray(progress)
       ? (progress as Record<string, unknown>)
       : {};
-  const next: Record<string, unknown> = { ...prev };
-  for (const [key, value] of Object.entries(incoming)) {
+  const next: Record<string, unknown> = omitInlineBitmaps({ ...prev });
+  for (const [key, value] of Object.entries(omitInlineBitmaps(incoming))) {
     if (value !== undefined) next[key] = value;
   }
   if (incoming.log == null && prev.log != null) next.log = prev.log;
@@ -435,10 +435,23 @@ function clientPayload(
   return payload;
 }
 
+/** Model adapters return the page as a data URL. The saved artwork is the asset; the job only needs the status. */
+function omitInlineBitmaps(progress: Record<string, any>) {
+  let next = progress;
+  for (const key of ["image", "mask"] as const) {
+    const value = next[key];
+    if (typeof value !== "string" || !value.startsWith("data:image")) continue;
+    if (next === progress) next = { ...progress };
+    delete next[key];
+  }
+  return next;
+}
+
 function clientProgress(progress: Record<string, any>, summary: boolean): Record<string, any> & { logCount: number; log: JobLogEntry[] } {
   const log = Array.isArray(progress.log) ? (progress.log as JobLogEntry[]) : [];
-  if (!summary) return { ...progress, log, logCount: log.length };
-  const { log: _log, ...rest } = progress;
+  const body = omitInlineBitmaps(progress);
+  if (!summary) return { ...body, log, logCount: log.length };
+  const { log: _log, ...rest } = body;
   return {
     ...rest,
     log: log.slice(-SUMMARY_LOG),

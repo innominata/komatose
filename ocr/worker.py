@@ -334,6 +334,7 @@ def do_detect(req: dict) -> dict:
             ocr=_get_ocr(_paddle_lang(req)) if backend == "paddle" else None,
             progress=progress,
             supplement=req.get("supplement") is not False,
+            device=req.get('device', 'cpu'),
         )
     h, w = img.shape[:2]
     payload = []
@@ -358,45 +359,51 @@ def do_detect(req: dict) -> dict:
     }
 
 
-_lama = None
+_lama = {}
 
 
-def _get_lama():
-    """LaMa-manga (dynamic ONNX) session, loaded on first clean that needs it."""
-    global _lama
-    if _lama is None:
-        import onnxruntime as ort
+def _get_lama(device="cpu"):
+    """Native mayocream LaMa Manga, cached per PyTorch device."""
+    if device not in _lama:
+        import torch
+        from spandrel import ModelLoader
         from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
 
         with _quiet():
-            path = hf_hub_download("ogkalu/lama-manga-onnx-dynamic", "lama-manga-dynamic.onnx")
-            so = ort.SessionOptions()
-            # FourierUnit weights produce denormal activations that stall CPU inference.
-            so.add_session_config_entry("session.set_denormal_as_zero", "1")
-            _lama = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
-        _log("lama-manga inpaint model loaded")
-    return _lama
+            path = os.environ.get("SCAN_LAMA_CHECKPOINT") or hf_hub_download(
+                "mayocream/lama-manga", "lama-manga.safetensors",
+                revision="f91c85b26913b3e83f9877867b4c336da3675238")
+            state = load_file(path, device="cpu")
+            # The published SafeTensors omit the generator wrapper prefix.
+            state = {("generator." + k if k.startswith("model.") else k): v
+                     for k, v in state.items()}
+            _lama[device] = ModelLoader().load_from_state_dict(state).to(device).eval()
+        runtime = ('ROCm' if torch.version.hip else 'CUDA') if str(device).startswith('cuda') else 'CPU'
+        _log(f"lama-manga loaded from {path} on {device}: PyTorch {runtime}")
+    return _lama[device]
 
 
-def _lama_run(img, mask):
+def _lama_run(img, mask, device="cpu"):
     """One LaMa pass. BGR uint8 + uint8 mask (255=erase) -> full BGR result."""
     import cv2
     import numpy as np
+    import torch
 
-    sess = _get_lama()
+    model = _get_lama(device)
     h, w = img.shape[:2]
-    ph, pw = (-h) % 8, (-w) % 8
-    im = cv2.copyMakeBorder(img, 0, ph, 0, pw, cv2.BORDER_REFLECT)
-    m = cv2.copyMakeBorder(mask, 0, ph, 0, pw, cv2.BORDER_CONSTANT, value=0)
-    x = im[:, :, ::-1].astype(np.float32) / 255.0
-    x = np.ascontiguousarray(np.transpose(x, (2, 0, 1)))[None]
+    # Native FFT accepts varying dimensions; only the model's stride needs padding.
+    im = cv2.copyMakeBorder(img, 0, (-h) % 8, 0, (-w) % 8, cv2.BORDER_REFLECT)
+    m = cv2.copyMakeBorder(mask, 0, (-h) % 8, 0, (-w) % 8, cv2.BORDER_CONSTANT, value=0)
+    x = np.ascontiguousarray(im[:, :, ::-1].transpose(2, 0, 1))[None].astype(np.float32) / 255.0
     mm = (m > 0).astype(np.float32)[None, None]
-    out = sess.run(None, {"image": x, "mask": mm})[0][0]
-    res = np.clip(np.transpose(out, (1, 2, 0)) * 255.0, 0, 255).astype(np.uint8)[:, :, ::-1]
+    with torch.inference_mode():
+        out = model(torch.from_numpy(x).to(device), torch.from_numpy(mm).to(device)).cpu().numpy()[0]
+    res = np.clip(out.transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)[:, :, ::-1]
     return np.ascontiguousarray(res[:h, :w])
 
 
-# Longest crop side LaMa sees after upscaling; bounds CPU time (~1.5s here).
+# Longest crop side LaMa sees after upscaling; bounds memory and inference time.
 _LAMA_MAX_SIDE = 1024
 
 

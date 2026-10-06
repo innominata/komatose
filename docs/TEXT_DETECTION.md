@@ -9,12 +9,18 @@ Chapter transcription cross-checks several detectors (see Cross-check fusion).
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-pip install onnxruntime huggingface-hub numpy opencv-python-headless   # RT-DETR
-pip install torch torchvision pyclipper                               # COO, Koharu
+pip install onnxruntime huggingface-hub numpy opencv-python-headless   # CPU fallback
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.1
+SAM2_BUILD_CUDA=0 pip install -r ocr/requirements-workflow.txt
 ```
 
 `pyclipper` is required for COO polygon expansion. Koharu additionally needs the
 Hi-SAM source tree (see below).
+
+The app runs RT-DETR and CTD on GPU through native eager PyTorch in the workflow
+worker. ONNX is exclusively a CPU fallback. The example below documents that
+fallback's tensor interface; the native adapter preserves the same crop geometry.
+`scripts/install-detect-models.py` installs both native weights and CPU fallback.
 
 ## RT-DETR
 
@@ -24,7 +30,7 @@ Hi-SAM source tree (see below).
 | --- | --- |
 | Repository | `ogkalu/comic-text-and-bubble-detector` |
 | Revision | `16e8a622f91fabc6b5b65c96d32d1183f8843546` |
-| Files | `detector.onnx`, `config.json`, `preprocessor_config.json` |
+| Files | `model.safetensors` (native), `detector.onnx` (CPU fallback), `config.json`, `preprocessor_config.json` |
 | Classes | `0: bubble`, `1: text_bubble`, `2: text_free` |
 | Input size | 640 × 640 |
 
@@ -316,7 +322,7 @@ Read by the Python layer:
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `SCAN_DETECTOR` | `rtdetr` | `rtdetr`, `ctd`, or `paddle`; legacy fallback only |
-| `SCAN_DETECT_DEVICE` | `auto` | `auto` prefers ROCm, MIGraphX or CUDA; `cpu` forces CPU |
+| `SCAN_DETECT_DEVICE` | `auto` | `auto` uses native PyTorch ROCm/CUDA when available; `cpu` forces CPU ONNX. ONNX never runs on GPU. |
 | `SCAN_DETECT_THREADS` | `0` | `0` lets onnxruntime choose |
 | `SCAN_DETECT_CTD_SUPPLEMENT` | `1` | `0` disables the CTD supplement |
 | `SCAN_DETECT_CROSSCHECK` | `1` | `0` disables the cross-check partner (host side) |
@@ -341,10 +347,10 @@ Read by the host application and passed as per-request arguments:
 ## Installers
 
 ```bash
-python scripts/install-detect-models.py            # RT-DETR and CTD
-python scripts/install-detect-models.py --model rtdetr
-python scripts/install-coo.py                      # COO weights, verifies SHA256
-python scripts/install-koharu.py [--gpu]           # Koharu weights + Hi-SAM source
+.venv-workflow/bin/python scripts/install-detect-models.py            # RT-DETR and CTD
+.venv-workflow/bin/python scripts/install-detect-models.py --model rtdetr
+.venv-workflow/bin/python scripts/install-coo.py                      # COO weights, verifies SHA256
+.venv-workflow/bin/python scripts/install-koharu.py [--gpu]           # Koharu weights + Hi-SAM source
 ```
 
 ## Reference implementations

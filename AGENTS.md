@@ -2,7 +2,7 @@
 
 ## Licensed test content
 
-The bundled test series, *Give My Regards to Black Jack* (volume 1, pages 1-10,
+The bundled test series, *Give My Regards to Black Jack* (volume 1, pages 1-10 and 16,
 in `fixtures/test-pages`), is **licensed for use** under
 [densho810.com/free](https://densho810.com/free/). Screenshots of the app
 showing those pages, including everything in `docs/images/`, may be committed

@@ -27,6 +27,7 @@ delete process.env.SCAN_TRANSLATION_PYTHON;
 delete process.env.SCAN_REVIEW_MODELS_DIR;
 delete process.env.SCAN_TRANSLATION_MODELS_DIR;
 delete process.env.SCAN_IMAGE_MODELS_DIR;
+delete process.env.SCAN_WORKFLOW_MODELS_DIR;
 delete process.env.SCAN_LLM_MODELS_DIR;
 delete process.env.SCAN_COO_MODEL;
 delete process.env.SCAN_KOHARU_DIR;
@@ -194,6 +195,32 @@ test('targetInstalled resolves ids by kind without touching the network', () => 
 	}
 });
 
+test('LaMa Manga requires mayocream SafeTensors independently of Big LaMa and old ONNX weights', async () => {
+  const cache = join(root, 'lama-cache');
+  const previous = process.env.HF_HOME;
+  process.env.HF_HOME = cache;
+  try {
+    const old = join(cache, 'hub/models--ogkalu--lama-manga-onnx-dynamic/snapshots/old');
+    await mkdir(old, { recursive: true });
+    await writeFile(join(old, 'lama-manga-dynamic.onnx'), 'old weights');
+    assert.equal(targetInstalled(installTarget('lama-manga')!).installed, false);
+    const native = join(cache, 'hub/models--dreMaz--AnimeMangaInpainting/snapshots/native');
+    await mkdir(native, { recursive: true });
+    await writeFile(join(native, 'lama_large_512px.ckpt'), 'native weights');
+    assert.equal(targetInstalled(installTarget('lama-manga')!).installed, false);
+    assert.equal(targetInstalled(installTarget('big-lama')!).installed, true);
+    const manga = join(cache, 'hub/models--mayocream--lama-manga/snapshots/native');
+    await mkdir(manga, { recursive: true });
+    await writeFile(join(manga, 'lama-manga.safetensors'), 'mayocream weights');
+    assert.equal(targetInstalled(installTarget('lama-manga')!).installed, true);
+    assert.notDeepEqual(uninstallPlan('lama-manga').paths, uninstallPlan('big-lama').paths);
+    assert.equal(uninstallPlan('lama-manga').warnings.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.HF_HOME;
+    else process.env.HF_HOME = previous;
+  }
+});
+
 test('uninstall plans name the files each installer wrote, and never a dangerous path', () => {
 	const forbidden = new Set(['', '/', root, join(root, 'data'), join(root, 'home')]);
 	for (const target of INSTALL_TARGETS) {
@@ -345,4 +372,30 @@ test('uninstalling Qwen3-VL 8B detaches its managed launch and keeps the reader 
 		[...CHAT_AND_CLI_OPERATIONS].sort(),
 		'only the launch goes: the entry stays task-agnostic',
 	);
+});
+
+test('Manga Inpainting and MI-GAN are independently installed and uninstalled', async () => {
+  const directory = join(root, 'custom-workflow-models');
+  process.env.SCAN_WORKFLOW_MODELS_DIR = directory;
+  try {
+    for (const id of ['migan', 'manga-inpainting']) {
+      const target = installTarget(id)!;
+      assert.equal(target.group, 'inpaint');
+      assert.match(installCommand(target).command, new RegExp(`--model.*${id}`));
+      assert.equal(targetInstalled(target).installed, false);
+      await mkdir(join(directory, id), { recursive: true });
+      await writeFile(join(directory, id, 'LICENSE'), 'License notice');
+    }
+    await writeFile(join(directory, 'migan', 'migan_traced.pt'), 'MI-GAN weights');
+    await writeFile(join(directory, 'manga-inpainting', 'manga_inpaintor.jit'), 'Manga weights');
+    assert.equal(targetInstalled(installTarget('migan')!).installed, true);
+    assert.equal(targetInstalled(installTarget('manga-inpainting')!).installed, false, 'line extractor is required');
+    await writeFile(join(directory, 'manga-inpainting', 'erika.jit'), 'Line weights');
+    assert.equal(targetInstalled(installTarget('manga-inpainting')!).installed, true);
+    const migan = uninstallPlan('migan');
+    const manga = uninstallPlan('manga-inpainting');
+    assert.ok(migan.paths.some(path => path.path === join(directory, 'migan')));
+    assert.ok(manga.paths.some(path => path.path === join(directory, 'manga-inpainting')));
+    assert.ok(!migan.paths.some(path => path.path.startsWith(join(directory, 'manga-inpainting'))));
+  } finally { delete process.env.SCAN_WORKFLOW_MODELS_DIR; }
 });

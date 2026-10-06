@@ -1,3 +1,4 @@
+import type { PageData } from "../src/lib/workflow";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, mkdir, writeFile, rm } from "node:fs/promises";
@@ -1195,7 +1196,7 @@ test("raw vs cleaned comparison flips the region crop as one animated image", as
     // The lettering box sits at page 250,170 inside a crop that starts at 120,100.
     assert.deepEqual(pixel(raw, 180, 100), [16, 16, 16], "frame 1 is the raw lettering");
     assert.deepEqual(pixel(clean, 180, 100), [255, 255, 255], "frame 2 is the cleaned artwork");
-    assert.deepEqual(pixel(raw, 4, 4), pixel(clean, 4, 4), "untouched pixels match in both frames");
+    assert.deepEqual(pixel(raw, 4, 40), pixel(clean, 4, 40), "untouched pixels match in both frames");
 
     const gif = await regionComparison(series, episodeRow, lineRow, pageRow, "gif");
     assert.equal(gif.contentType, "image/gif");
@@ -1203,6 +1204,37 @@ test("raw vs cleaned comparison flips the region crop as one animated image", as
     const gifMeta = await sharp(gif.body, { animated: true }).metadata();
     assert.equal(gifMeta.pages, 2);
     assert.deepEqual(gifMeta.delay, [500, 500]);
+    const { saveCleanExample } = await import("../src/lib/server/regionCompare");
+    const first = saveCleanExample(episodeRow, lineRow, pageRow);
+    const previous = getDoc<PageData>("page:compare-p", {});
+    // Undoing changes the page doc, but retains the independently saved example.
+    putDoc(epId, previous.id, { ...previous.data, cleaned: undefined }, previous.revision);
+    const secondPage = await sharp({ create: { width: 600, height: 400, channels: 3, background: "#dddddd" } }).png().toBuffer();
+    const undone = getDoc<PageData>("page:compare-p", {});
+    putDoc(epId, undone.id, { ...undone.data, cleaned: await storeAsset(secondPage), cleanMethod: "lama-manga", cleanDurationMs: 1234 }, undone.revision);
+    const multiple = await regionComparison(series, episodeRow, lineRow, pageRow, "gif", undefined, [first.token]);
+    const multipleMeta = await sharp(multiple.body, { animated: true }).metadata();
+    assert.equal(multipleMeta.pages, 4, "raw, saved method, raw, current method");
+    assert.deepEqual(multipleMeta.delay, [500, 500, 500, 500]);
+    const second = saveCleanExample(episodeRow, lineRow, pageRow);
+    const deduplicated = await regionComparison(series, episodeRow, lineRow, pageRow, "apng", undefined, [first.token, second.token]);
+    assert.equal(pngChunks(deduplicated.body).find((chunk) => chunk.type === "acTL")!.data.readUInt32BE(0), 4);
+    // Two methods may produce identical pixels: keep both method labels in the link.
+    const samePixels = getDoc<PageData>("page:compare-p", {});
+    putDoc(epId, samePixels.id, { ...samePixels.data, cleanMethod: "big-lama", cleanDurationMs: 2345 }, samePixels.revision);
+    const { shareRegionComparison, sharedComparisonResponse } = await import("../src/lib/server/sharedComparison");
+    const shared = await shareRegionComparison(series, episodeRow, lineRow, pageRow, [second.token]);
+    const token = shared.apngSrc.split("/")[3];
+    const response = await sharedComparisonResponse(token, "apng");
+    const linked = Buffer.from(await response.arrayBuffer());
+    assert.equal(pngChunks(linked).find((chunk) => chunk.type === "acTL")!.data.readUInt32BE(0), 4, "public APNG retains different methods with identical pixels");
+    const linkedGif = await sharedComparisonResponse(token, "gif");
+    assert.equal((await sharp(Buffer.from(await linkedGif.arrayBuffer()), { animated: true }).metadata()).pages, 4);
+    const linkedChunks = pngChunks(linked);
+    const labeled = unfilter(inflateSync(linkedChunks[5].data.subarray(4)), 360, 200, 3);
+    assert.ok(pixel(labeled, 2, 2)[0] < 60, "label has a dark backing over light artwork");
+    await assert.rejects(regionComparison(series, episodeRow, { ...lineRow, x: 0.1 }, pageRow, "apng", undefined, [first.token]), /region changed/);
+
   } finally {
     sqlite.prepare("DELETE FROM episodes WHERE id='compare-e'").run();
   }
@@ -4253,7 +4285,7 @@ test("clear-finished deletes terminal jobs and leaves running ones", async () =>
 });
 
 test("job log caps history and compact summaries omit older entries", async () => {
-  const { createJob, runWithJob, appendJobLog, listJobs, clipJobText } =
+  const { createJob, runWithJob, appendJobLog, listJobs, clipJobText, updateJob } =
     await import("../src/lib/server/jobs");
   const id = createJob("e", "describe", {});
   runWithJob({ jobId: id, step: "describe", engine: "qwen" }, () => {
@@ -4271,9 +4303,19 @@ test("job log caps history and compact summaries omit older entries", async () =
   const last = full.progress.log.at(-1)!;
   assert.match(last.request, /truncated/);
   assert.ok(last.request.length < 9000);
+  updateJob(id, "completed", {
+    image: "data:image/png;base64," + "A".repeat(2000),
+    mask: "data:image/png;base64," + "B".repeat(2000),
+    message: "done",
+  });
+  const stored = listJobs("e").find((j) => j.id === id)!;
+  assert.equal(stored.progress.image, undefined);
+  assert.equal(stored.progress.mask, undefined);
+  assert.equal(stored.progress.message, "done");
   const summary = listJobs("e", "summary").find((j) => j.id === id)!;
   assert.equal(summary.progress.log.length, 8);
   assert.equal(summary.progress.logCount, 80);
+  assert.equal(summary.progress.image, undefined);
   assert.ok(clipJobText("a".repeat(9000)).includes("truncated"));
 });
 

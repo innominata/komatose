@@ -13,6 +13,37 @@ spec.loader.exec_module(workflow)
 
 
 class Geometry(unittest.TestCase):
+    def test_page16_joined_bubbles_have_separate_polygons(self):
+        cases = json.loads((ROOT / 'tests/fixtures/geometry/page16.json').read_text())
+        for case in cases:
+            with self.subTest(case=case['name']):
+                img = cv2.imread(str(ROOT / case['image']))
+                self.assertIsNotNone(img, 'licensed page 16 fixture must be present')
+                H, W = img.shape[:2]
+                boxes = [[r['box'][0] / W, r['box'][1] / H,
+                          (r['box'][2] - r['box'][0]) / W,
+                          (r['box'][3] - r['box'][1]) / H]
+                         for r in case['outputs']['rtdetr'] if r['cls'] == 'text_bubble']
+                self.assertEqual(len(boxes), 2)
+                results = workflow.run({'cmd': 'geometry-batch', 'path': str(ROOT / case['image']),
+                                        'method': 'opencv', 'regions': [
+                                            {'box': box, 'kind': 'bubble'} for box in boxes]})['regions']
+                masks = []
+                centers = [(int((b[0] + b[2] / 2) * W), int((b[1] + b[3] / 2) * H)) for b in boxes]
+                for i, result in enumerate(results):
+                    self.assertTrue(result['split'])
+                    self.assertGreaterEqual(len(result['polygon']), 6)
+                    mask = np.zeros((H, W), np.uint8)
+                    points = np.array([[round(p['x'] * W), round(p['y'] * H)]
+                                       for p in result['polygon']], np.int32)
+                    cv2.fillPoly(mask, [points], 255)
+                    own, other = centers[i], centers[1 - i]
+                    self.assertGreater(mask[own[1], own[0]], 0)
+                    self.assertEqual(mask[other[1], other[0]], 0)
+                    self.assertGreater(np.count_nonzero(mask), boxes[i][2] * W * boxes[i][3] * H)
+                    masks.append(mask)
+                self.assertEqual(np.count_nonzero(masks[0] & masks[1]), 0)
+
     def test_real_enclosures_and_artwork(self):
         fixtures = ROOT / 'tests/fixtures/geometry'
         cases = json.loads((fixtures / 'cases.json').read_text())

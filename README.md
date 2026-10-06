@@ -291,7 +291,7 @@ Paid model, GPU, and Python worker checks stay on their own scripts
 
 **Test series artwork** — Pages in [`fixtures/test-pages/`](fixtures/test-pages/)
 and screenshots in [`docs/images/`](docs/images/) are from *Give My Regards to Black
-Jack* (volume 1, pages 1–10). Shuho Sato and Sato Manga Works Ltd. permit reuse
+Jack* (volume 1, pages 1–10 and 16). Shuho Sato and Sato Manga Works Ltd. permit reuse
 under [densho810.com/free](https://densho810.com/free/). Credit for this
 repository is here and in [`docs/images/ATTRIBUTION.txt`](docs/images/ATTRIBUTION.txt).
 Shipped exports include `attribution.txt` when the series applies; bundled page

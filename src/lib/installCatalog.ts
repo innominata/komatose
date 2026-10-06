@@ -129,9 +129,9 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		label: 'RT-DETR',
 		summary:
 			'Default region detector. Separates in-bubble text, free-floating SFX and balloon outlines; fine-tuned on ~11k comic pages.',
-		diskBytes: 172 * MB,
+		diskBytes: 340 * MB,
 		memoryBytes: 600 * MB,
-		requires: ['env-ocr'],
+		requires: ['env-workflow', 'env-ocr'],
 		unlocks: 'text detection (default)',
 	},
 	{
@@ -140,9 +140,9 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		label: 'Comic Text Detector',
 		summary:
 			'YOLOv5 text blocks plus a UNet text mask. The mask also feeds the cleaning step. Alternative detector to RT-DETR.',
-		diskBytes: 95 * MB,
+		diskBytes: 175 * MB,
 		memoryBytes: 500 * MB,
-		requires: ['env-ocr'],
+		requires: ['env-workflow', 'env-ocr'],
 		unlocks: 'text detection, text masks',
 	},
 	{
@@ -356,12 +356,22 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'AOT clean method',
 	},
 	{
+		id: 'manga-inpainting', group: 'inpaint', label: 'Manga Inpainting',
+		summary: 'Semantics-aware grayscale manga inpainting with structural-line extraction. Grayscale pages only.',
+		diskBytes: 247 * MB, memoryBytes: 1 * GB, requires: ['env-workflow'], unlocks: 'Manga Inpainting clean method',
+	},
+	{
+		id: 'migan', group: 'inpaint', label: 'MI-GAN',
+		summary: 'Lightweight Places2-512 inpainting for grayscale and color artwork, using native PyTorch on CPU, ROCm or CUDA.',
+		diskBytes: 30 * MB, memoryBytes: 500 * MB, requires: ['env-workflow'], unlocks: 'MI-GAN clean method',
+	},
+	{
 		id: 'lama-manga',
 		group: 'inpaint',
 		label: 'lama-Manga',
 		summary:
-			'Dynamic ONNX LaMa-manga: the CPU inpaint pass behind balloon-fill cleaning and click-to-fill erase.',
-		diskBytes: 206 * MB,
+			'mayocream/lama-manga SafeTensors inpainting for balloon-fill cleaning and click-to-fill erase; supports ROCm and CUDA through PyTorch.',
+		diskBytes: 205 * MB,
 		memoryBytes: 500 * MB,
 		requires: ['env-workflow'],
 		unlocks: 'balloon fill, click-to-fill erase',

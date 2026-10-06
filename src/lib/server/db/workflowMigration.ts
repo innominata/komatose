@@ -188,3 +188,23 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_episode ON suggestions(episode_id, cr
   })();
   unlinkAssetFiles(unreferencedAssets(db, hashes));
 }
+
+/** Include every editable line field in optimistic concurrency and history. */
+export function migrateLinePlacementRevisions(db: Database.Database) {
+  if (db.prepare("SELECT 1 FROM schema_versions WHERE version=8").get()) return;
+  db.transaction(() => {
+    db.exec(`
+DROP TRIGGER IF EXISTS lines_history;
+DROP TRIGGER IF EXISTS lines_version;
+CREATE TRIGGER lines_history BEFORE UPDATE OF body,source,ocr_confidence,source_state,ignore_reason,line_type,status,x,y,w,h,image_id,sort_order,placed,invert,sidebar_x,sidebar_y,sidebar_w,sidebar_h ON lines BEGIN
+ INSERT INTO workflow_revisions(episode_id,entity_id,revision,data,created_at)
+ VALUES(OLD.episode_id,OLD.id,OLD.revision,json_object('body',OLD.body,'source',OLD.source,'status',OLD.status,'sourceState',OLD.source_state,'ignoreReason',OLD.ignore_reason,'lineType',OLD.line_type,'x',OLD.x,'y',OLD.y,'w',OLD.w,'h',OLD.h,'sortOrder',OLD.sort_order,'imageId',OLD.image_id,'placed',json(CASE WHEN OLD.placed THEN 'true' ELSE 'false' END),'invert',json(CASE WHEN OLD.invert IS NULL THEN 'null' WHEN OLD.invert THEN 'true' ELSE 'false' END),'sidebarX',OLD.sidebar_x,'sidebarY',OLD.sidebar_y,'sidebarW',OLD.sidebar_w,'sidebarH',OLD.sidebar_h),unixepoch()*1000);
+END;
+CREATE TRIGGER lines_version AFTER UPDATE OF body,source,ocr_confidence,source_state,ignore_reason,line_type,status,x,y,w,h,image_id,sort_order,placed,invert,sidebar_x,sidebar_y,sidebar_w,sidebar_h ON lines BEGIN
+ UPDATE lines SET revision=OLD.revision+1 WHERE id=NEW.id;
+ UPDATE episodes SET revision=revision+1 WHERE id=NEW.episode_id;
+END;
+`);
+    db.prepare("INSERT INTO schema_versions VALUES(8,?)").run(Date.now());
+  })();
+}

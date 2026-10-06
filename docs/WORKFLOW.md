@@ -128,9 +128,27 @@ SAM2_BUILD_CUDA=0 uv pip install --python .venv-workflow/bin/python -r ocr/requi
 
 `SCAN_WORKFLOW_PYTHON` overrides the workflow interpreter. Without that environment, the worker falls back to `.venv-ocr`, where SAM and Big-LaMa may be unavailable. Model weights download on first use and cache in Hugging Face's normal cache. Local cleaning and segmentation do not require a paid service. Existing optional translation engines retain their own configuration and authentication. Local model readiness checks the configured model service; CLI readiness checks that a launchable executable was found and reports that authentication and model availability are checked by the CLI when run. Discovery never sends absolute executable paths to the browser. An invalid `GROK_BIN` / `CODEX_BIN` / `CURSOR_BIN` / `CURSOR_AGENT_BIN` override is reported instead of silently using another install. Cursor is resolved as `cursor-agent` only.
 
-For AMD acceleration, first verify `/opt/rocm/bin/rocminfo` and that PyTorch can execute a tensor on **each** card. Install the PyTorch/torchvision build matching the verified ROCm runtime in the dedicated environment, then install workflow requirements with `SAM2_BUILD_CUDA=0`. Do not run the CPU installation command afterward. The installed environment in this implementation session is **CPU PyTorch**, not a validated ROCm build. SAM postprocessing that needs its optional CUDA extension is also disabled at runtime.
+For AMD acceleration, first verify `/opt/rocm/bin/rocminfo` and that PyTorch can execute a tensor on **each** card. Install the PyTorch/torchvision build matching the verified ROCm runtime in the dedicated environment, then install workflow requirements with `SAM2_BUILD_CUDA=0`. `scripts/install-gpu-torch.sh` creates or updates the workflow and review environments, installs their runtime dependencies, and installs the verified ROCm PyTorch build. Environment setup removes GPU ONNX packages and repairs the CPU ONNX fallback. Do not run the CPU installation command afterward. SAM postprocessing that needs its optional CUDA extension is also disabled at runtime.
 
-The scheduler probes device execution and free memory, prefers the least queued GPU with the most free memory, and serializes jobs per device. Separate GPUs can execute separate page jobs; VRAM is never pooled. `SCAN_GPU_MEMORY_FRACTION` defaults to `0.7`; `SCAN_MODEL_THREADS` defaults to `4`. SAM, Big-LaMa, and AOT support the PyTorch device path. Existing LaMa remains CPU ONNX; OpenCV/masks run on CPU. The interface reports the backend actually used and falls back to CPU when no usable GPU is detected.
+LaMa Manga runs `mayocream/lama-manga` (`lama-manga.safetensors`) through PyTorch, using ROCm
+or CUDA on the selected cleaning device. It caches the loaded model per device
+and accepts varying crop sizes with padding to a multiple of eight. No ONNX
+provider or MIGraphX graph compilation is required.
+`scripts/install-clean-models.py --model lama-manga` installs its weights and config.
+Big LaMa uses the separate `dreMaz/AnimeMangaInpainting` repository and
+`lama_large_512px.ckpt` file.
+`SCAN_LAMA_CHECKPOINT` overrides the LaMa Manga checkpoint path.
+
+RT-DETR and Comic Text Detector also run as eager PyTorch models in the workflow
+worker on the selected GPU, retaining their weights between requests. Install
+their native SafeTensors and CPU ONNX fallback with
+`.venv-workflow/bin/python scripts/install-detect-models.py`.
+CTD's native architecture is downloaded from a pinned BallonsTranslator revision,
+verified by SHA-256, and stored with its GPL-3.0 license in `data/models/ctd-native-*`.
+ONNX sessions always use `CPUExecutionProvider`; GPU ONNX providers are neither
+required nor selected. `SCAN_DETECT_DEVICE=cpu` forces the detector CPU fallback.
+
+The scheduler probes device execution and free memory, prefers the least queued GPU with the most free memory, and serializes jobs per device. Separate GPUs can execute separate page jobs; VRAM is never pooled. `SCAN_GPU_MEMORY_FRACTION` defaults to `0.7`; `SCAN_MODEL_THREADS` defaults to `4`. SAM, LaMa Manga, Big-LaMa, and AOT support the PyTorch device path; OpenCV/masks run on CPU. The interface reports the backend actually used and falls back to CPU when no usable GPU is detected.
 
 ## Region types and colors
 
@@ -198,3 +216,17 @@ regions or translate unread text.
 
 Shift-click a blue polygon point to remove it, including draft tracing/SAM points.
 Saved polygons retain at least three vertices; saved removals are undoable.
+
+In Clean, right-click a region and open **Compare raw vs cleaned**. **Save clean example** keeps the current result temporarily while you undo and try another cleaner. Reopen Compare to cycle raw → saved result → raw → current result in either APNG or GIF. Each frame includes a bold top-left 12pt label with a 1px outline on a dark backing; cleaning results show their method and, for new passes, elapsed cleaning time. Saving or clearing examples refreshes the animation and its image URL immediately. Different methods remain separate even when they produce identical pixels. Save up to ten examples per region. **Clear examples** resets the list; examples also expire after two hours, a server restart, or reloading the workflow. Changed source artwork or region bounds require clearing and saving new examples.
+
+### Additional independent inpainters
+
+**Manga Inpainting** (`manga-inpainting`) uses Minshan Xie et al.’s [Seamless Manga Inpainting with Semantics Awareness](https://github.com/msxie92/MangaInpainting) (SIGGRAPH 2021), through the IOPaint-compatible `manga_inpaintor.jit` and `erika.jit` structural-line exports. It reconstructs grayscale line art and screentones. The app rejects color pages before processing: a page is grayscale when at least 99.9% of its pixels have an RGB channel spread of at most 3 levels. No automatic grayscale conversion of color pages is performed.
+
+**MI-GAN** (`migan`) uses Picsart AI Research’s [MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN) Places2-512 model through the IOPaint-compatible TorchScript export. It accepts grayscale and color pages, preserves crop aspect ratio, and processes masked crops at up to 512 pixels before restoring their original dimensions. Its weights use the MIT license.
+
+Install either in **Models**, then run its **Inpaint** test to enable it in Clean. Both use native PyTorch on CPU, ROCm, or CUDA through the existing cleaning worker. Models load on demand and retain their selected device while resident. They preserve all pixels outside the removal mask exactly and save model IDs and elapsed cleaning times for comparison examples.
+
+The installer downloads checksum-verified exports and upstream license notices into `data/models/workflow/<model-id>` (under `SCAN_DATA_DIR` when configured). `SCAN_WORKFLOW_MODELS_DIR` overrides the shared parent directory. Manga Inpainting requires both model files; MI-GAN requires one. Uninstall removes only that model’s directory and receipt. Existing cleaning defaults remain unchanged.
+
+Manga Inpainting’s [license](https://github.com/msxie92/MangaInpainting/blob/main/LICENSE) permits academic, research, and commercial use; it requires preservation of its notices and citation, and written notice to the author for commercial use. The installer retains the upstream notice beside the weights. Exports are obtained from the `Sanster/models` release artifacts, with checksums matching IOPaint’s model definitions pinned at commit `61a759fb3f332bacdce8b2813f4837495c9b86e0`.

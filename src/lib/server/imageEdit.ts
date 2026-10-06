@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { existsSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { existsSync, closeSync, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -281,6 +281,84 @@ export function foreignResidentsOnDevice(id?: ImageEditModelId): { pid: number; 
     .map(({ pid, label }) => ({ pid, label }));
 }
 
+export type ImageEditModule = 'diffusion' | 'te' | 'vae';
+
+export type ImageEditDeviceBudget = {
+  name: string;
+  freeMiB: number;
+  integrated?: boolean;
+};
+
+export type ImageEditBackendPlan = {
+  /** `--backend` assignment. Each module's weights stay on this compute device. */
+  backend: string;
+  /** `--max-vram` for integrated cards that must not receive spilled weights. */
+  maxVram: string;
+};
+
+/** Matches sd.cpp auto-fit: a card's own scratch, on top of the weights. */
+const MODULE_RESERVE_MIB: Record<ImageEditModule, number> = { diffusion: 2048, te: 2048, vae: 1024 };
+/** sd.cpp subtracts this from free VRAM before it will place weights. */
+const DEVICE_SLACK_MIB = 512;
+/** Negative GiB: auto-fit treats the card as having no room for weights. */
+const HIDDEN_VRAM_GIB = -1024;
+
+/**
+ * Auto-fit keeps weights on the compute card, then in RAM, then on whichever
+ * other GPU reports the most free memory. An iGPU reports system RAM as VRAM,
+ * so it wins that comparison, and ggml-vulkan pins the RAM copy on Vulkan
+ * device 0 — the iGPU. A module that does not fit on the chosen card is placed
+ * wholly on another discrete card instead, and unused iGPUs are given no budget.
+ */
+export function placeImageEditModules(
+  card: string,
+  sizesMiB: Record<ImageEditModule, number>,
+  devices: ImageEditDeviceBudget[],
+): ImageEditBackendPlan {
+  const budget = new Map<string, number>();
+  for (const entry of devices) {
+    if (entry.integrated && entry.name !== card) continue;
+    budget.set(entry.name, Math.max(0, entry.freeMiB - DEVICE_SLACK_MIB));
+  }
+  if (!budget.has(card)) budget.set(card, Number.POSITIVE_INFINITY);
+
+  const assigned: Record<ImageEditModule, string> = { diffusion: card, te: card, vae: card };
+  for (const key of ['diffusion', 'te', 'vae'] as const) {
+    const size = Math.max(0, sizesMiB[key] || 0);
+    const need = size > 0 ? size + MODULE_RESERVE_MIB[key] : 0;
+    const candidates = [...budget.entries()].sort((a, b) => {
+      if (a[0] === card) return -1;
+      if (b[0] === card) return 1;
+      return b[1] - a[1];
+    });
+    const fit = candidates.find(([, free]) => free >= need);
+    // Leave a module that fits nowhere on the chosen card. Auto-fit may then
+    // stream it from RAM; it must not also be charged against that card.
+    if (!fit) continue;
+    assigned[key] = fit[0];
+    const left = budget.get(fit[0]);
+    if (left !== undefined && Number.isFinite(left)) budget.set(fit[0], left - size);
+  }
+
+  const used = new Set(Object.values(assigned));
+  const maxVram = devices
+    .filter((entry) => entry.integrated && !used.has(entry.name))
+    .map((entry) => `${entry.name}=${HIDDEN_VRAM_GIB}`)
+    .join(',');
+  const backend = (['diffusion', 'vae', 'te'] as const)
+    .map((key) => `${key}=${assigned[key]}`)
+    .join(',');
+  return { backend, maxVram };
+}
+
+function fileMiB(path: string): number {
+  try {
+    return statSync(path).size / (1024 * 1024);
+  } catch {
+    return 0;
+  }
+}
+
 function serverArgs(recipe: Recipe, listenPort: number): string[] {
   const { model } = recipe;
   const gpu = gpuOn(model.id);
@@ -292,12 +370,16 @@ function serverArgs(recipe: Recipe, listenPort: number): string[] {
     '--listen-ip', '127.0.0.1',
     '--listen-port', String(listenPort),
   ];
-  // Pin the diffusion model, VAE, and text encoder to the editor's card. Auto-fit then
-  // decides the weight cache within that budget; leaving the encoder unpinned lets it
-  // land on the Raphael iGPU (Vulkan0), which is far slower than CPU.
   const card = device(model.id);
-  if (gpu) args.push('--backend', `diffusion=${card},vae=${card},te=${card}`, '--diffusion-fa');
-  else args.push('--backend', 'cpu');
+  if (gpu) {
+    const plan = placeImageEditModules(card, {
+      diffusion: fileMiB(join(model.dir, recipe.diffusion)),
+      te: fileMiB(join(model.encoderDir, model.encoderFile)) + fileMiB(join(model.encoderDir, model.encoderVisionFile)),
+      vae: fileMiB(join(model.dir, recipe.vae)),
+    }, ggmlDevices(0).devices);
+    args.push('--backend', plan.backend, '--diffusion-fa');
+    if (plan.maxVram) args.push('--max-vram', plan.maxVram);
+  } else args.push('--backend', 'cpu');
   if (model.modelArgs.length) args.push('--model-args', ...model.modelArgs);
   args.push(...model.flags);
   // Style LoRAs named by SCAN_IMAGE_LORAS resolve against this directory.

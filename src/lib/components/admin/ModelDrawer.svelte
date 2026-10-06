@@ -47,7 +47,7 @@
 			return { runtime: 'torch', env: 'env-review', key: entry.id, label: 'GPU' };
 		if (entry.id.startsWith('qwen-image'))
 			return { runtime: 'llama', env: 'env-review', key: 'qwen-image-edit-2511', label: 'Device' };
-		if (['rtdetr', 'ctd', 'koharu', 'coo', 'big-lama', 'aot', 'lama-manga'].includes(entry.id))
+		if (['rtdetr', 'ctd', 'koharu', 'coo', 'big-lama', 'aot', 'lama-manga', 'migan', 'manga-inpainting'].includes(entry.id))
 			return { runtime: 'torch', env: 'env-workflow', key: 'cleaning-worker', label: 'Cleaning worker GPU' };
 		return null;
 	});

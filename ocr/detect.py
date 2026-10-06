@@ -39,7 +39,7 @@ CTD_REPO = "mayocream/comic-text-detector-onnx"
 CTD_FILE = "comic-text-detector.onnx"
 CTD_SIZE = 1024
 
-_sessions: dict[str, Any] = {}
+_sessions: dict[tuple, Any] = {}
 
 
 class DetectorUnavailable(RuntimeError):
@@ -159,9 +159,16 @@ def _clip(regions: list[dict], W: int, H: int, min_side: int = 6) -> list[dict]:
 # ---------------------------------------------------------------- sessions
 
 
-def _session(repo: str, filename: str, threads: int = 0) -> Any:
-    key = f"{repo}/{filename}"
+def _session(repo: str, filename: str, threads: int = 0, device=None) -> Any:
+    from native_detect import gpu_device, CtdSession, RtdetrSession
+    gpu = gpu_device(device)
+    key = (repo, filename, gpu or 'cpu')
     if key in _sessions:
+        return _sessions[key]
+    if gpu:
+        import torch
+        torch.set_num_threads(threads or 2)
+        _sessions[key] = RtdetrSession(gpu) if repo == RTDETR_REPO else CtdSession(gpu)
         return _sessions[key]
     try:
         import onnxruntime as ort
@@ -170,7 +177,8 @@ def _session(repo: str, filename: str, threads: int = 0) -> Any:
         raise DetectorUnavailable(f"onnxruntime/huggingface_hub missing: {e}") from e
 
     try:
-        path = hf_hub_download(repo, filename)
+        revision = '16e8a622f91fabc6b5b65c96d32d1183f8843546' if repo == RTDETR_REPO else 'a5d67ec772adef819ef5b0e7aa701fcf4c8bf74a'
+        path = hf_hub_download(repo, filename, revision=revision)
     except Exception as e:
         raise DetectorUnavailable(f"could not fetch {key}: {e}") from e
 
@@ -183,15 +191,8 @@ def _session(repo: str, filename: str, threads: int = 0) -> Any:
 
 
 def _providers() -> list[str]:
-    """Prefer a GPU execution provider when the build offers one."""
-    import onnxruntime as ort
-
-    want = os.environ.get("SCAN_DETECT_DEVICE", "auto").lower()
-    have = set(ort.get_available_providers())
-    if want == "cpu":
-        return ["CPUExecutionProvider"]
-    ranked = ["ROCMExecutionProvider", "MIGraphXExecutionProvider", "CUDAExecutionProvider"]
-    return [p for p in ranked if p in have] + ["CPUExecutionProvider"]
+    """ONNX is CPU-only, regardless of installed execution providers."""
+    return ["CPUExecutionProvider"]
 
 
 def threads_from_env() -> int:
@@ -212,10 +213,11 @@ def detect_rtdetr(
     *,
     progress=None,
     supplement: bool = True,
+    device=None,
 ) -> list[dict]:
     if progress:
         progress("RT-DETR", "Detecting regions")
-    sess = _session(RTDETR_REPO, RTDETR_FILE, threads_from_env())
+    sess = _session(RTDETR_REPO, RTDETR_FILE, threads_from_env(), device)
     H, W = img.shape[:2]
     rows: list[dict] = []
     for x0, y0, x1, y1 in _crops(W, H, tile, overlap):
@@ -255,7 +257,7 @@ def detect_rtdetr(
         try:
             if progress:
                 progress("Comic Text Detector", "Detecting regions")
-            extra = detect_ctd(img, conf=max(.4, conf))
+            extra = detect_ctd(img, conf=max(.4, conf), device=device)
             for candidate in extra:
                 a = candidate["box"]
                 area = max(1, (a[2]-a[0])*(a[3]-a[1]))
@@ -305,8 +307,9 @@ def detect_ctd(
     tile: int = 1024,
     overlap: int = 256,
     want_mask: bool = False,
+    *, device=None,
 ) -> list[dict] | tuple[list[dict], np.ndarray]:
-    sess = _session(CTD_REPO, CTD_FILE, threads_from_env())
+    sess = _session(CTD_REPO, CTD_FILE, threads_from_env(), device)
     H, W = img.shape[:2]
     rows: list[dict] = []
     mask = np.zeros((H, W), dtype=np.uint8) if want_mask else None
@@ -443,18 +446,19 @@ def detect(
     *,
     progress=None,
     supplement: bool = True,
+    device=None,
 ) -> list[dict]:
     backend = (backend or "rtdetr").lower()
     if backend == "rtdetr":
         t = tile or 690
         return detect_rtdetr(
             img, conf if conf is not None else 0.20, t, overlap or int(t * 0.25), progress=progress,
-            supplement=supplement)
+            supplement=supplement, device=device)
     if backend == "ctd":
         if progress:
             progress("Comic Text Detector", "Detecting regions")
         t = tile or 1024
-        out = detect_ctd(img, conf if conf is not None else 0.22, t, overlap or int(t * 0.25))
+        out = detect_ctd(img, conf if conf is not None else 0.22, t, overlap or int(t * 0.25), device=device)
         return out if isinstance(out, list) else out[0]
     if backend == "paddle":
         if progress:

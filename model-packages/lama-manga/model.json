@@ -2,7 +2,7 @@
   "version": 1,
   "id": "lama-manga",
   "name": "LaMa Manga",
-  "revision": "1",
+  "revision": "3",
   "access": "local_http",
   "adapter": {
     "id": "workflow-image"
@@ -31,6 +31,7 @@
   ],
   "environment": [
     "SCAN_WORKFLOW_PYTHON",
+    "SCAN_LAMA_CHECKPOINT",
     "SCAN_WORKFLOW_MODELS_DIR",
     "HF_HOME"
   ],
@@ -38,7 +39,7 @@
     {
       "path": "{home}/.cache/huggingface",
       "rootEnv": "HF_HOME",
-      "subdirectory": "hub/models--ogkalu--lama-manga-onnx-dynamic"
+      "subdirectory": "hub/models--mayocream--lama-manga"
     }
   ]
 }

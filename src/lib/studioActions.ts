@@ -65,6 +65,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Reorder pages (drag)", "Prepare › Organize grid", "Move page earlier / later buttons", { stage: "prepare", prepView: "grid" }, "organize", "move order"),
   A("Move page earlier / later", "Page menu › Page, or Prepare › Edit page › Page actions", "Prepare chapter panel · page menu", pageMenu("prepare", "Move page earlier")),
   A("Renumber pages", "Prepare › stale-numbering banner, or Prepare › More", "Prepare chapter panel", { stage: "prepare", menu: "more", menuFind: "Renumber" }, "renumber"),
+  A("Combine two consecutive pages into an RTL spread", "Prepare › select two consecutive pages › Combine into spread", "Selection bar in Prepare", { stage: "prepare", prepView: "grid" }, "combine-spread", "centerfold join merge"),
   A("Split spreads", "Prepare › Stage bar", "Prepare chapter panel", { stage: "prepare" }, "split-spreads"),
   A("Auto-crop margins (chapter)", "Prepare › Stage bar", "Prepare chapter panel", { stage: "prepare" }, "auto-crop"),
   A("Auto-crop margins (one page)", "Page menu › Page", "Page context menu (Prepare only)", pageMenu("prepare", "Auto-crop")),

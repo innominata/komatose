@@ -73,3 +73,32 @@ test('device pickers list GPU 1 before the iGPU for both llama and PyTorch', () 
 	assert.match(torchOptions[0].detail || '', /gfx1100/);
 	assert.equal((torchOptions[0].detail || '').includes('bus 3'), false);
 });
+
+test('CPU and managed status include every field needed by the formatter', async () => {
+	const { gpuClientStatus } = await import('../src/lib/server/gpuMode');
+	const { presentGpuStatus } = await import('../src/lib/server/computeDevices');
+	const { setEffectiveManagedRow } = await import('../src/lib/server/modelUsage');
+	const { SEED_ROWS } = await import('../src/lib/modelRegistry');
+	const previousMode = process.env.SCAN_GPU_MODE;
+	process.env.SCAN_GPU_MODE = 'cpu';
+	try {
+		const cpu = gpuClientStatus();
+		assert.equal(cpu.mode, 'cpu');
+		for (const field of ['ocr', 'llm', 'cleaning'] as const) assert.equal(typeof cpu[field], 'string');
+		assert.doesNotThrow(() => presentGpuStatus(cpu));
+		const row = { ...SEED_ROWS[0], id: 'status-regression-model', name: 'Status regression model' };
+		setEffectiveManagedRow(row.id, row);
+		try {
+			const managed = gpuClientStatus();
+			assert.equal(managed.mode, 'managed');
+			assert.equal(managed.models[0].id, row.id);
+			for (const field of ['ocr', 'llm', 'cleaning'] as const) assert.equal(typeof managed[field], 'string');
+			assert.doesNotThrow(() => presentGpuStatus(managed));
+		} finally {
+			setEffectiveManagedRow(row.id);
+		}
+	} finally {
+		if (previousMode === undefined) delete process.env.SCAN_GPU_MODE;
+		else process.env.SCAN_GPU_MODE = previousMode;
+	}
+});

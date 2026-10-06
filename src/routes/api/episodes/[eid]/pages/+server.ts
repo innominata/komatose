@@ -13,6 +13,7 @@ import {
 import { isRegionQueueBusy } from '$lib/server/aiTranslate';
 import { parseTranslateEngine } from '$lib/server/cliTranslate';
 import {
+	combineSpread,
 	autoAlignPages,
 	autoCropPages,
 	addSeriesCredits,
@@ -115,6 +116,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			return fail(409, 'Finish or cancel queued translates before changing pages');
 		}
 
+		if (op === 'combine') return json({ ok: true, image: await combineSpread(ctx, body.imageIds) });
 		if (op === 'delete') return json({ ok: true, ...await deletePages(ctx, body.imageIds) });
 		if (op === 'extract') return json({ ok: true, chapter: await extractPages(ctx, body.imageIds, body.chapterNumber) }, { status: 201 });
 		if (op === 'add-credits') return json({ ok: true, ...await addSeriesCredits(ctx) });

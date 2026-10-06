@@ -1,3 +1,4 @@
+import { shareRegionComparison } from '$lib/server/sharedComparison';
 import { holdManagedModel } from '$lib/server/managedModels';
 import { resolveLiveAssistant } from '$lib/server/assistantRoute';
 import { json } from "@sveltejs/kit";
@@ -30,7 +31,7 @@ import {
   parseReviewMaskPng,
   regionReviewCrop,
 } from "$lib/server/reviewMask";
-import { parseComparisonFormat, regionComparison } from "$lib/server/regionCompare";
+import { saveCleanExample, parseComparisonFormat, regionComparison } from "$lib/server/regionCompare";
 import { WorkflowError } from "$lib/server/workflowStore";
 import { preferences } from "$lib/server/workflowService";
 import { regionAiSettings } from "$lib/regionAi";
@@ -60,6 +61,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       b.lineId,
       b.expectedRevision,
     );
+    if (b.action === "save-clean-example") return json(saveCleanExample(episode, line, page));
+    if (b.action === "share-comparison") {
+      const tokens = Array.isArray(b.exampleTokens) ? b.exampleTokens.filter((v): v is string => typeof v === "string") : [];
+      return json(await shareRegionComparison(series, episode, line, page, tokens));
+    }
     if (b.action === "detect-mask") {
       if (!page) throw new WorkflowError("Region needs image bounds");
       const expansion = b.expansion == null ? 3 : Number(b.expansion);

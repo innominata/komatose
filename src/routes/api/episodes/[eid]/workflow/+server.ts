@@ -169,7 +169,9 @@ async function runWorkflowPng(payload: Record<string, unknown>) {
   const output = join(DATA_DIR, "workflow", `${randomUUID()}.png`);
   try {
     await mkdir(join(DATA_DIR, "workflow"), { recursive: true });
+    const started = Date.now();
     const result = (await localOperation({ ...payload, out: output })) as Record<string, any>;
+    result.cleanDurationMs = Date.now() - started;
     return { result, artifact: await storeAsset(await readFile(output)) };
   } finally {
     await unlink(output).catch(() => {});
@@ -189,7 +191,7 @@ function saveCleanPixels(
   episodeId: string,
   doc: WorkflowDoc<PageData>,
   artifact: string,
-  result: { method?: string; backend?: string },
+  result: { method?: string; backend?: string; cleanDurationMs?: number },
   mode: "keep" | "replace",
 ) {
   return putDoc(
@@ -203,6 +205,7 @@ function saveCleanPixels(
         cleanBase: artifact,
         cleaned: undefined,
         cleanMethod: result.method,
+        cleanDurationMs: result.cleanDurationMs,
         backend: result.backend,
         cleanApproved: false,
       },
@@ -1325,6 +1328,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           out: output,
           prompt: cleanPrompt,
         });
+        const cleanStarted = Date.now();
         const result: Record<string, any> = action === 'clean' && imageModel
           ? await runWithJob({ jobId, imageId: img.id, step: 'clean', engine: imageModel.id },
               () => runImageTaskFiles(imageModel, imageTask, reconstruction(), abort.signal))
@@ -1358,6 +1362,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           },
           abort.signal,
         );
+        const cleanDurationMs = Date.now() - cleanStarted;
         if (abort.signal.aborted) throw new Error("Cancelled");
         const latest = (await listImages(episode.id)).find(
           (p) => p.id === img.id,
@@ -1415,7 +1420,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
               : withPreviousArtwork(doc.id, doc.data, {
                   ...doc.data,
                   cleaned: artifact,
-                  cleanMethod: result.method,
+                  cleanMethod: result.method || method,
+                  cleanDurationMs,
                   backend: result.backend,
                   cleanApproved: false,
                 }, "replace");

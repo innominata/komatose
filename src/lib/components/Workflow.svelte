@@ -394,6 +394,7 @@
   let regionAiSettingsDialog: RegionAiSettings;
   let cleanPromptDialog: CleanPromptDialog;
   let regionCompareDialog: RegionCompareDialog;
+  const cleanExamples = new Map<string, string[]>();
   /** Raw-vs-cleaned flipbook for one region; the letterer saves or links the image themselves. */
   async function openRegionCompare(line: LineRow) {
     menu = null;
@@ -409,17 +410,46 @@
       return;
     }
     const fresh = studioState?.lines.find((l) => l.id === id) ?? line;
-    // The page revision also busts the image cache, so re-opening after another pass refetches.
-    const source =
-      `${apiBase}/region-ai?lineId=${encodeURIComponent(id)}` +
-      `&revision=${fresh.revision ?? 0}&variant=comparison&page=${pageDoc?.revision ?? 0}`;
-    void regionCompareDialog.open({
-      title: `Raw vs cleaned · ${pageName}, region ${regionNumber ?? "?"}`,
-      apngSrc: source,
-      gifSrc: `${source}&format=gif`,
-      downloadName: `${pageName.replace(" ", "-")}-region-${regionNumber ?? "x"}-raw-vs-clean`,
-    });
+    busy = true;
+    error = "";
+    try {
+      const shared = await request(`${apiBase}/region-ai`, {
+        action: "share-comparison", lineId: id, expectedRevision: fresh.revision ?? 0,
+        exampleTokens: cleanExamples.get(id) ?? [],
+      });
+      void regionCompareDialog.open({
+        title: `Raw vs cleaned · ${pageName}, region ${regionNumber ?? "?"}`,
+        savedCount: cleanExamples.get(id)?.length ?? 0,
+        onSaveExample: async () => {
+          const saved = await request(`${apiBase}/region-ai`, {
+            action: "save-clean-example", lineId: id, expectedRevision: fresh.revision ?? 0,
+          });
+          cleanExamples.set(id, [...(cleanExamples.get(id) ?? []), saved.token].slice(-10));
+          const updated = await request(`${apiBase}/region-ai`, {
+            action: "share-comparison", lineId: id, expectedRevision: fresh.revision ?? 0,
+            exampleTokens: cleanExamples.get(id) ?? [],
+          });
+          return { ...updated, savedCount: cleanExamples.get(id)!.length };
+        },
+        onClearExamples: async () => {
+          cleanExamples.delete(id);
+          const updated = await request(`${apiBase}/region-ai`, {
+            action: "share-comparison", lineId: id, expectedRevision: fresh.revision ?? 0,
+            exampleTokens: [],
+          });
+          return { ...updated, savedCount: 0 };
+        },
+        apngSrc: shared.apngSrc,
+        gifSrc: shared.gifSrc,
+        downloadName: `${pageName.replace(" ", "-")}-region-${regionNumber ?? "x"}-raw-vs-clean`,
+      });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
   }
+
   function openRegionAi(line: LineRow, mode: "review" | "enquire") {
     menu = null;
     void regionAiDialog.open(line, mode, aiModels.reviewers);
@@ -733,6 +763,21 @@
     }
     selectedPageIds = ordered.filter(page => selected.has(page));
     menu = null;
+  }
+  const canCombinePages = $derived(selectedPageIds.length === 2 && !!studioState &&
+    studioState.images.some((image, index, all) => image.id === selectedPageIds[0] &&
+      all[index + 1]?.id === selectedPageIds[1] &&
+      image.role !== "pre-credits" && image.role !== "post-credits" &&
+      all[index + 1].role !== "pre-credits" && all[index + 1].role !== "post-credits"));
+  async function combineSelectedPages() {
+    if (!canCombinePages || pageSelectionBusy) return;
+    const result = await pageOperation({ op: "combine", imageIds: [...selectedPageIds] });
+    if (result) {
+      selectedPageIds = [];
+      pageSelectionAnchor = "";
+      choosePage(result.image.id);
+      notify("Combined pages into an RTL spread. Undo page edit restores the halves.");
+    }
   }
   async function deleteSelectedPages() {
     if (!selectedPageIds.length || pageSelectionBusy) return;
@@ -3788,6 +3833,7 @@
             {#if step === "Prepare" && canUpload && selectedPageIds.length && prepView !== "grid"}
               <div class="page-selection-actions" role="region" aria-label="Selected page actions">
                 <strong>{selectedPageIds.length} selected</strong>
+                {#if canCombinePages}<button class="ed-btn" data-find="combine-spread" disabled={pageSelectionBusy} onclick={combineSelectedPages}>Combine into spread</button>{/if}
                 <button class="ed-btn" disabled={pageSelectionBusy} onclick={extractSelectedPages}>Extract to chapter…</button>
                 <button class="ed-btn danger" disabled={pageSelectionBusy} onclick={deleteSelectedPages}>Delete selected pages…</button>
                 <button class="ed-btn" onclick={() => { selectedPageIds = []; pageSelectionAnchor = ""; }}>Clear selection</button>
@@ -3836,6 +3882,8 @@
             onreorder={reorderImages}
             onaddfiles={addFiles}
             onaddcredits={() => pageOperation({ op: "add-credits" })}
+            {canCombinePages}
+            oncombine={combineSelectedPages}
             onextract={extractSelectedPages}
             ondelete={deleteSelectedPages}
           />
@@ -4279,13 +4327,13 @@
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
             onrectangle={() => void rectanglePolygon()}
             onfitbubble={() => selected && page && act({ action: "geometry", imageId: page.id, lineId: selected.id, expectedRevision: pageDoc?.revision ?? 0, method: "opencv" })}
-            canSegmentBubble={!!backend?.models?.some((m) => m.tasks.includes("segmentBubble"))}
+            canSegmentBubble={!!backend?.models?.some((m: { id: string; tasks: string[] }) => m.tasks.includes("segmentBubble"))}
             onrefinebubble={() => selected && page && act({
               action: "geometry",
               imageId: page.id,
               lineId: selected.id,
               expectedRevision: pageDoc?.revision ?? 0,
-              method: backend?.models?.find((m) => m.tasks.includes("segmentBubble"))?.id,
+              method: backend?.models?.find((m: { id: string; tasks: string[] }) => m.tasks.includes("segmentBubble"))?.id,
               points: bubbleFitPoints(selected, polygonDraft),
             })}
             onapprovegeometry={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { geometryApproved: true } })}

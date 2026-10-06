@@ -3,15 +3,22 @@
 
 ocr/detect.py downloads these on first use; installing them up front means the
 first Transcribe run does not pay the download and Setup can show them as
-installed. Revisions are pinned so the cached graph is the tested one.
+installed. Both native weights and CPU fallback graphs use pinned revisions.
 
-    .venv-ocr/bin/python scripts/install-detect-models.py --model rtdetr
-    .venv-ocr/bin/python scripts/install-detect-models.py --model ctd
+    .venv-workflow/bin/python scripts/install-detect-models.py --model rtdetr
+    .venv-workflow/bin/python scripts/install-detect-models.py --model ctd
 """
 import argparse
 import os
 from pathlib import Path
 import time
+import hashlib
+import sys
+import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ocr'))
+from native_detect import (CTD_REPO, CTD_REVISION, CTD_SOURCE_REVISION,
+                           CTD_SOURCE_FILES, ctd_source_root)
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
@@ -19,13 +26,13 @@ MODELS = {
     "rtdetr": {
         "repo": "ogkalu/comic-text-and-bubble-detector",
         "revision": "16e8a622f91fabc6b5b65c96d32d1183f8843546",
-        "files": ["detector.onnx", "config.json", "preprocessor_config.json"],
+        "files": ["model.safetensors", "detector.onnx", "config.json", "preprocessor_config.json"],
         "label": "RT-DETR comic region detector (default)",
     },
     "ctd": {
-        "repo": "mayocream/comic-text-detector-onnx",
-        "revision": "a5d67ec772adef819ef5b0e7aa701fcf4c8bf74a",
-        "files": ["comic-text-detector.onnx"],
+        "repo": CTD_REPO,
+        "revision": CTD_REVISION,
+        "files": ["yolo-v5.safetensors", "unet.safetensors", "dbnet.safetensors", "config.json"],
         "label": "Comic Text Detector (YOLOv5 blocks + UNet mask)",
     },
 }
@@ -54,7 +61,40 @@ def install_one(name, spec):
         size = Path(path).stat().st_size
         total += size
         print(f"  {filename} — {size / 1e6:.1f} MB", flush=True)
+    if name == 'ctd':
+        fallback = retry(lambda: hf_hub_download('mayocream/comic-text-detector-onnx',
+              'comic-text-detector.onnx', revision='a5d67ec772adef819ef5b0e7aa701fcf4c8bf74a'))
+        size = Path(fallback).stat().st_size
+        total += size
+        print(f'  comic-text-detector.onnx (CPU fallback) — {size / 1e6:.1f} MB', flush=True)
+        install_ctd_source()
     print(f"Verified {name} ({total / 1e6:.1f} MB in the Hugging Face cache)", flush=True)
+
+
+def install_ctd_source():
+    """Fetch only the native architecture, unchanged, with its upstream license."""
+    root = ctd_source_root()
+    base = f'https://raw.githubusercontent.com/dmMaze/BallonsTranslator/{CTD_SOURCE_REVISION}/'
+    for name, digest in CTD_SOURCE_FILES.items():
+        target = root / name
+        if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+            continue
+        remote = name if name == 'LICENSE' else 'ballontranslator/dl/textdetector/' + name
+        def fetch():
+            with urllib.request.urlopen(base + remote, timeout=60) as response:
+                return response.read()
+        data = retry(fetch)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise RuntimeError(f'CTD upstream source checksum mismatch: {name}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix(target.suffix + '.download')
+        temp.write_bytes(data)
+        os.replace(temp, target)
+    for directory in [root, root / 'ctd', root / 'yolov5']:
+        initializer = directory / '__init__.py'
+        if not initializer.is_file() or initializer.read_text() != '':
+            initializer.write_text('')
+    print(f'CTD native architecture verified: {root}', flush=True)
 
 
 def main():
@@ -68,7 +108,7 @@ def main():
     except ImportError:
         raise SystemExit(
             "huggingface-hub is not installed for this Python. "
-            "Run: python3 scripts/setup-python-env.py --env ocr")
+            "Run: python3 scripts/setup-python-env.py --env workflow")
     for name in names:
         install_one(name, MODELS[name])
 

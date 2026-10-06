@@ -264,7 +264,7 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu'):
         return propose_koharu(image, regions, expansion, device)
     import detect
     height, width = image.shape[:2]
-    full_boxes, full_probability = detect.detect_ctd(image, want_mask=True)
+    full_boxes, full_probability = detect.detect_ctd(image, want_mask=True, device=device)
     result = np.zeros((height, width), np.uint8)
     diagnostics = []
     for index, poly in enumerate(regions):
@@ -284,7 +284,7 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu'):
         left, top = max(0, int(cx-cw/2)), max(0, int(cy-ch/2))
         right, bottom = min(width, int(cx+cw/2)+1), min(height, int(cy+ch/2)+1)
         crop = image[top:bottom, left:right]
-        boxes, probability = detect.detect_ctd(crop, want_mask=True)
+        boxes, probability = detect.detect_ctd(crop, want_mask=True, device=device)
         probability = np.maximum(probability, full_probability[top:bottom, left:right])
         boxes += [{**b, 'box': [b['box'][0]-left, b['box'][1]-top, b['box'][2]-left, b['box'][3]-top]} for b in full_boxes]
         # Keep only text blocks intersecting the requested region. The crop
@@ -309,7 +309,7 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu'):
     meta = {
         'engine': 'ctd',
         'version': VERSION,
-        'backend': 'CPU',
+        'backend': 'CPU ONNX' if device == 'cpu' else f'{device} · GPU · PyTorch',
         'repo': detect.CTD_REPO,
         'revision': detect.CTD_FILE,
     }

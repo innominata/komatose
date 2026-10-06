@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import type { DiscoveredPackage } from './modelPackages';
 import { findRegistryRow } from './modelRegistryStore';
 import { ModelTaskError } from '../modelTasks';
+import { createHash } from 'node:crypto';
 
 export function nativeInstallationStatus(id: string): { installed: boolean; detail?: string } {
   try {
@@ -83,6 +84,17 @@ export async function operateBuiltinPackage(pkg: DiscoveredPackage, action: stri
     return status;
   }
   if (action === 'installation-status') {
+    if (pkg.manifest.id === 'env-workflow') {
+      const root = process.env.SCAN_ROOT || process.cwd();
+      const requirements = resolve(root, 'ocr/requirements-workflow.txt');
+      if (existsSync(requirements)) {
+        try {
+          const expected = `workflow\n${createHash('sha256').update(readFileSync(requirements)).digest('hex')}\n`;
+          const current = readFileSync(resolve(root, '.venv-workflow/.komatose-env'), 'utf8');
+          if (current !== expected) return { installed: false, reason: 'Workflow dependencies changed; update the environment' };
+        } catch { return { installed: false, reason: 'Update the workflow environment for native detectors' }; }
+      }
+    }
     if (pkg.manifest.artifacts?.length) return { installed: pkg.manifest.artifacts.every(p => existsSync(resolve(pkg.directory, p.replaceAll("{root}", process.env.SCAN_ROOT || process.cwd())))) };
     const status = await builtinPackageReadiness(pkg); return { installed: status.available, reason: status.reason };
   }
@@ -114,7 +126,7 @@ export async function operateBuiltinPackage(pkg: DiscoveredPackage, action: stri
   }
   if (adapter === 'workflow-image' || adapter === 'native-detector') {
     let running = false;
-    if (adapter === 'workflow-image') {
+    if (adapter === 'workflow-image' || pkg.manifest.service?.id === 'cleaning-worker') {
       const runtime = await import('./localWorker');
       if (action === 'stop') runtime.restartWorkflowWorker();
       if (action === 'start') await runtime.startWorkflowWorker(signal);

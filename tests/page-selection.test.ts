@@ -208,3 +208,61 @@ test('bulk deletion removes only selected pages and their dependent metadata', a
 });
 
 after(() => { sqlite.close(); });
+
+test('combine requires adjacent pages, joins RTL pixels and restores pages and regions on undo', async () => {
+  const { combineSpread, undoPageOp } = await import('../src/lib/server/pageEdit');
+  const ctx = await fixture(), id = ctx.episode.id;
+  const ids = [0, 1, 2].map(n => `${id}-p${n}`);
+  await assert.rejects(combineSpread(ctx, [ids[0]]), /exactly two consecutive/);
+  await assert.rejects(combineSpread(ctx, [ids[0], ids[2]]), /exactly two consecutive/);
+  await assert.rejects(combineSpread(ctx, [ids[0], ids[0]]), /exactly two consecutive/);
+  const { imagePath } = await import('../src/lib/server/storage');
+  for (const [index, color] of ['#ff0000', '#0000ff'].entries()) {
+    const row = db.select().from(images).where(eq(images.id, ids[index])).get()!;
+    await writeFile(imagePath(s.slug, ctx.episode.slug, row.filename), await sharp({ create: {
+      width: 80, height: 100, channels: 3, background: color,
+    } }).png().toBuffer());
+  }
+  const before = ids.slice(0, 2).map(pageId => db.select().from(images).where(eq(images.id, pageId)).get()!);
+  const spread = await combineSpread(ctx, [ids[1], ids[0]]);
+  assert.equal(spread.width, 160);
+  assert.equal(spread.height, 100);
+  const pixels = await sharp(await readFile(imagePath(s.slug, ctx.episode.slug, spread.filename)))
+    .removeAlpha().raw().toBuffer();
+  assert.deepEqual([...pixels.subarray(0, 3)], [0, 0, 255]);
+  assert.deepEqual([...pixels.subarray(80 * 3, 80 * 3 + 3)], [255, 0, 0]);
+  const right = db.select().from(lines).where(eq(lines.id, `${id}-l0`)).get()!;
+  const left = db.select().from(lines).where(eq(lines.id, `${id}-l1`)).get()!;
+  assert.equal(right.x, 0.55);
+  assert.equal(left.x, 0.05);
+  assert.equal(left.imageId, ids[0]);
+  assert.equal(db.select().from(images).where(eq(images.id, ids[1])).get(), undefined);
+  await undoPageOp(ctx);
+  const restored = db.select().from(images).where(eq(images.id, ids[1])).get()!;
+  assert.equal(restored.filename, before[1].filename);
+  assert.equal(db.select().from(images).where(eq(images.id, ids[0])).get()!.width, 80);
+  assert.equal(db.select().from(lines).where(eq(lines.id, left.id)).get()!.imageId, ids[1]);
+  assert.equal(db.select().from(lines).where(eq(lines.id, right.id)).get()!.x, 0.1);
+});
+
+
+test('shared comparison snapshots serve APNG and GIF without a session', async () => {
+  const { shareRegionComparison, sharedComparisonResponse } = await import('../src/lib/server/sharedComparison');
+  const ctx = await fixture(), id = ctx.episode.id;
+  const page = toImage(db.select().from(images).where(eq(images.id, `${id}-p0`)).get()!);
+  const line = toLine(db.select().from(lines).where(eq(lines.id, `${id}-l0`)).get()!);
+  const shared = await shareRegionComparison(ctx.series, ctx.episode, line, page);
+  const token = shared.apngSrc.split('/')[3];
+  assert.match(token, /^[a-f0-9]{48}$/);
+  const snapshot = await (await sharedComparisonResponse(token, 'apng')).arrayBuffer();
+  assert.equal(Buffer.from(snapshot).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  const gif = await sharedComparisonResponse(token, 'gif');
+  assert.equal(gif.headers.get('content-type'), 'image/gif');
+  assert.equal((await sharp(Buffer.from(await gif.arrayBuffer()), { animated: true }).metadata()).pages, 2);
+  const doc = getDoc(`page:${page.id}`, {});
+  putDoc(id, doc.id, {}, doc.revision);
+  assert.deepEqual(Buffer.from(await (await sharedComparisonResponse(token, 'apng')).arrayBuffer()), Buffer.from(snapshot));
+  await assert.rejects(sharedComparisonResponse('0'.repeat(48), 'gif'), /Not found/);
+  await assert.rejects(sharedComparisonResponse(token, 'mask'), /Not found/);
+  await assert.rejects(sharedComparisonResponse('../private', 'apng'), /Not found/);
+});

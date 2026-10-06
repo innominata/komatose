@@ -356,7 +356,7 @@ export function coverageFor(data: HubData | null, task: AdminTask): Coverage {
 		}
 		case 'clean': {
 			const editors = (data?.editors || []).filter((m) => m.installed);
-			const fill = ['lama-manga', 'big-lama', 'aot'].filter(installed);
+			const fill = ['lama-manga', 'big-lama', 'aot', 'migan', 'manga-inpainting'].filter(installed);
 			if (editors.length)
 				return { tone: 'ok', label: 'Ready', defLabel: editors[0].label, others: editors.slice(1).map((m) => m.label), note: fill.length ? `Fill methods: ${fill.length} installed.` : undefined };
 			if (fill.length) return { tone: 'warn', label: 'Fill only', defLabel: 'Inpainting fill', others: [], text: 'Detailed art under lettering can’t be redrawn.' };
@@ -641,6 +641,8 @@ const TARGET_TASKS: Record<string, AdminTask['id'][]> = {
 	'qwen-image-edit-2511-lightning': ['clean'],
 	'big-lama': ['clean'],
 	aot: ['clean'],
+	migan: ['clean'],
+	'manga-inpainting': ['clean'],
 	'lama-manga': ['clean'],
 };
 

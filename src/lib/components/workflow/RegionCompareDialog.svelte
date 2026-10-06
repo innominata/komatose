@@ -4,9 +4,12 @@
 
   type RegionCompareRequest = {
     title: string;
+    savedCount: number;
+    onSaveExample: () => Promise<{ savedCount: number; apngSrc: string; gifSrc: string }>;
+    onClearExamples: () => Promise<{ savedCount: number; apngSrc: string; gifSrc: string }>;
     /** Animated PNG for this region. */
     apngSrc: string;
-    /** Same two frames as a GIF, for apps that still prefer one. */
+    /** Same frames as a GIF, for apps that still prefer one. */
     gifSrc: string;
     /** Suggested file name, without the extension. */
     downloadName: string;
@@ -18,6 +21,8 @@
   let loading = $state(true);
   let failed = $state(false);
   let copied = $state(false);
+  let savingExample = $state(false);
+  let exampleError = $state("");
   let copyError = $state("");
 
   const src = $derived(request ? (format === "gif" ? request.gifSrc : request.apngSrc) : "");
@@ -30,6 +35,7 @@
 
   export async function open(next: RegionCompareRequest) {
     request = next;
+    exampleError = "";
     format = "apng";
     loading = true;
     failed = false;
@@ -55,6 +61,26 @@
     format = next;
     loading = true;
     failed = false;
+  }
+
+  async function updateExamples(clear = false) {
+    if (!request) return;
+    const current = request;
+    savingExample = true;
+    exampleError = "";
+    try {
+      const updated = await (clear ? current.onClearExamples() : current.onSaveExample());
+      if (request !== current) return;
+      Object.assign(current, updated);
+      loading = true;
+      failed = false;
+      copied = false;
+      copyError = "";
+    } catch (e) {
+      exampleError = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingExample = false;
+    }
   }
 
   async function copyLink() {
@@ -107,11 +133,17 @@
         </p>
       {:else}
         <p class="compare-hint">
-          Frame 1 is the raw artwork, frame 2 is the cleaned artwork, swapping every 0.5&nbsp;s.
-          Right-click the image and <strong>Save image as…</strong> (or drag it out) to keep both
+          Raw artwork alternates with each cleaning example every 0.5&nbsp;s. Method and available cleaning time appear at the top left.
+          Right-click the image and <strong>Save image as…</strong> (or drag it out) to keep all
           frames. Pasting a copied image flattens it to one frame in most editors.
         </p>
       {/if}
+      <div class="hud-modal-actions">
+        <button class="btn-hud-ghost" type="button" disabled={loading || failed || savingExample} onclick={() => updateExamples()}>{savingExample ? "Saving…" : "Save clean example"}</button>
+        <button class="btn-hud-ghost" type="button" disabled={savingExample || !request.savedCount} onclick={() => updateExamples(true)}>Clear examples</button>
+      </div>
+      <p class="compare-hint">{request.savedCount} temporary example(s) saved. Undo, try another cleaner, then compare again. Examples expire after two hours or a server restart; reloading clears this list.</p>
+      {#if exampleError}<p class="compare-error" role="alert">{exampleError}</p>{/if}
       <div class="compare-formats">
         <span>Format</span>
         <button class="btn-hud-ghost" type="button" class:active={format === "apng"} onclick={() => pick("apng")}

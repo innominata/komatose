@@ -164,6 +164,15 @@ export function fuseDetections(
   // chaining separate pieces of lettering together.
   const seeds: { lead: Candidate; members: Candidate[] }[] = [];
   for (const c of backed) {
+    // CTD can group dialogue from two joined balloons into one block. It is
+    // corroborating evidence for those seeds, not a third geometry seed.
+    // Check before repeats: the block can also resemble just one of its lobes.
+    if (c.source === "ctd") {
+      const held = seeds.filter((s) => s.lead.source !== "coo" &&
+        inside(s.lead.box, c.box) >= FUSION.voteInside &&
+        area(s.lead.box) < area(c.box) * 0.7);
+      if (held.length >= FUSION.containerHolds) continue;
+    }
     const homes = seeds.filter((s) => repeats(c, s.lead));
     if (homes.length) {
       const best = homes.sort((a, b) => iou(c.box, b.lead.box) - iou(c.box, a.lead.box) || area(a.lead.box) - area(b.lead.box))[0];

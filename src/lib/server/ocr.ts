@@ -327,19 +327,25 @@ export async function rawDetectRegionsPy(
 		onProgress?: (update: DetectProgress) => void;
 	}
 ): Promise<{ regions: WorkerRegion[]; width: number; height: number }> {
-	const msg = await call(
-		{
-			cmd: 'detect',
-			path,
-			backend: opts.backend,
-			conf: opts.conf ?? null,
-			tile: opts.tile ?? null,
-			overlap: opts.overlap ?? null,
-			supplement: opts.supplement ?? true,
-			lang: opts.lang ?? parseOcrLang(undefined)
-		},
-		{ timeoutMs: DETECT_MS, abort: opts.abort, onProgress: opts.onProgress }
-	);
+	const payload = {
+		cmd: 'detect', path, backend: opts.backend, conf: opts.conf ?? null,
+		tile: opts.tile ?? null, overlap: opts.overlap ?? null,
+		supplement: opts.supplement ?? true, lang: opts.lang ?? parseOcrLang(undefined),
+	};
+	// The OCR environment remains CPU-only. Native GPU detectors use the
+	// existing ROCm PyTorch worker and retain their weights between requests.
+	const workflowPython = process.env.SCAN_WORKFLOW_PYTHON || join(ROOT, '.venv-workflow/bin/python');
+    const native = !process.env.PADDLEOCR_WORKER && ['ctd', 'rtdetr'].includes(opts.backend) && existsSync(workflowPython);
+	let msg: WorkerMessage;
+	if (native) {
+		opts.onProgress?.({ model: opts.backend === 'ctd' ? 'Comic Text Detector' : 'RT-DETR', step: 'Detecting regions' });
+		const { rawLocalOperation } = await import('./localWorker');
+		const choice = process.env.SCAN_DETECT_DEVICE;
+		msg = await rawLocalOperation({ ...payload, cmd: 'detect-regions',
+			...(choice && choice !== 'auto' ? { device: choice } : {}) }, opts.abort);
+	} else {
+		msg = await call(payload, { timeoutMs: DETECT_MS, abort: opts.abort, onProgress: opts.onProgress });
+	}
 	const raw = Array.isArray(msg.regions) ? msg.regions : [];
 	const regions: WorkerRegion[] = [];
 	for (const r of raw as Record<string, unknown>[]) {

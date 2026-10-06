@@ -2,9 +2,15 @@
 # SAM2_BUILD_CUDA=0 must be set during pip install as well as at runtime.
 numpy>=1.26,<3
 opencv-python-headless>=4.10
-onnxruntime>=1.20
+# CPU fallback only; never install onnxruntime-migraphx/onnxruntime-gpu.
+onnxruntime==1.29.0
 huggingface-hub>=0.26
 spandrel>=0.4
+safetensors>=0.4,<1
+transformers==4.57.6
+requests>=2.32,<3
+# Pinned upstream CTD uses pkg_resources for version comparisons.
+setuptools>=70,<81
 SAM-2 @ git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4
 # COO DBNet++ polygon expansion (torch/torchvision supplied above).
 pyclipper>=1.3,<2

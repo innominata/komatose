@@ -298,14 +298,21 @@ export function llamaServerEnv(executable: string, env: NodeJS.ProcessEnv = proc
 /** `cleaning` is where Koharu, SAM, Big-LaMa and AOT run — pass `cleaningDeviceLabel()`. */
 export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
   const models = managedRuntimeSummary();
-  if (!komatoseGpuEnabled()) return { mode: models.length ? 'managed' as const : 'cpu' as const, label: models.length ? 'Managed models' : 'CPU', models, llm: models.map(m => `${m.name} on ${m.device}`).join(', ') };
+  if (!komatoseGpuEnabled()) return {
+    mode: models.length ? 'managed' as const : 'cpu' as const,
+    label: models.length ? 'Managed models' : 'CPU',
+    models,
+    llm: models.map(m => `${m.name} on ${m.device}`).join(', ') || 'CPU',
+    ocr: 'Per-model device (see Setup)',
+    cleaning: 'Per-model device (see Setup)',
+  };
   return {
     mode: 'komatose' as const,
     label: 'GPU',
     models,
     llm: models.length ? models.map(m => `${m.name} on ${m.device}`).join(', ') : 'Managed local models (see Setup for per-model status)',
     ocr: `Hayai, PaddleOCR-VL, and Qwen3-VL on ${reviewVulkanDevice()}`,
-    cleaning: `Koharu SAM-TS-L, SAM, Big-LaMa, and AOT on ${cleaning}; LaMa stays CPU ONNX`,
+    cleaning: `Koharu SAM-TS-L, SAM, Big-LaMa, and AOT on ${cleaning}; LaMa Manga uses PyTorch on the cleaning device`,
   };
 }
 

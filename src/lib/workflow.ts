@@ -259,6 +259,7 @@ export type PageData = {
   maskApproved?: boolean;
   cleanApproved?: boolean;
   cleanMethod?: string;
+  cleanDurationMs?: number;
   backend?: string;
   dpi?: number;
   /** Stamp of the page when that step was marked complete. A later edit no longer matches. */

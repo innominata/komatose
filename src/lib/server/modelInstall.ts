@@ -120,7 +120,7 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			break;
 		case 'rtdetr':
 		case 'ctd':
-			bin = pythonFor(['env-ocr', 'env-review', 'env-workflow']);
+			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-detect-models.py', ['--model', target.id]);
 			break;
 		case 'koharu':
@@ -161,6 +161,8 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 		case 'big-lama':
 		case 'aot':
 		case 'lama-manga':
+		case 'migan':
+		case 'manga-inpainting':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-clean-models.py', ['--model', target.id]);
 			break;
@@ -276,13 +278,27 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				? { installed: true }
 				: { installed: false, detail: 'No GGUF found in the model directory' };
 		case 'rtdetr':
-			return hfCached('ogkalu/comic-text-and-bubble-detector', 'detector.onnx')
+			return hfCached('ogkalu/comic-text-and-bubble-detector', 'model.safetensors') &&
+				hfCached('ogkalu/comic-text-and-bubble-detector', 'detector.onnx')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
 		case 'ctd':
-			return hfCached('mayocream/comic-text-detector-onnx', 'comic-text-detector.onnx')
+			return ['yolo-v5.safetensors', 'unet.safetensors', 'dbnet.safetensors'].every(
+				file => hfCached('mayocream/comic-text-detector', file)) &&
+				existsSync(join(envVar('SCAN_CTD_SOURCE_DIR') || join(ROOT,
+					'data/models/ctd-native-a9fca9d0e8ecec081d3cd817efb98f2f863e262c'), 'ctd/basemodel.py')) &&
+				hfCached('mayocream/comic-text-detector-onnx', 'comic-text-detector.onnx')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
+		case 'migan':
+		case 'manga-inpainting': {
+			const directory = join(envVar('SCAN_WORKFLOW_MODELS_DIR') || join(DATA_DIR, 'models/workflow'), target.id);
+			const files = target.id === 'migan' ? ['migan_traced.pt'] : ['manga_inpaintor.jit', 'erika.jit'];
+			const installed = [...files, 'LICENSE'].every(file => {
+				try { return statSync(join(directory, file)).size > 0; } catch { return false; }
+			});
+			return { installed, detail: installed ? undefined : 'Weights or license notice missing; install this model' };
+		}
 		case 'big-lama':
 			return hfCached('dreMaz/AnimeMangaInpainting', 'lama_large_512px.ckpt')
 				? { installed: true }
@@ -292,7 +308,7 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
 		case 'lama-manga':
-			return hfCached('ogkalu/lama-manga-onnx-dynamic', 'lama-manga-dynamic.onnx')
+			return hfCached('mayocream/lama-manga', 'lama-manga.safetensors')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
 		case 'koharu':
@@ -743,10 +759,10 @@ export type UninstallPlan = {
 
 const HF_REPOS: Record<string, string> = {
 	rtdetr: 'ogkalu/comic-text-and-bubble-detector',
-	ctd: 'mayocream/comic-text-detector-onnx',
+	ctd: 'mayocream/comic-text-detector',
 	'big-lama': 'dreMaz/AnimeMangaInpainting',
 	aot: 'ogkalu/aot-inpainting',
-	'lama-manga': 'ogkalu/lama-manga-onnx-dynamic',
+	'lama-manga': 'mayocream/lama-manga',
 };
 
 function kindOf(path: string): UninstallPath['kind'] {
@@ -796,6 +812,11 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 	const repo = HF_REPOS[targetId];
 	if (repo) {
 		paths.push(describePath(hfCachePath(repo), 'Downloaded weights in the Hugging Face cache'));
+		if (targetId === 'ctd') {
+			paths.push(describePath(hfCachePath('mayocream/comic-text-detector-onnx'), 'CPU ONNX fallback weights'));
+			paths.push(describePath(envVar('SCAN_CTD_SOURCE_DIR') || join(ROOT,
+				'data/models/ctd-native-a9fca9d0e8ecec081d3cd817efb98f2f863e262c'), 'Pinned CTD native architecture'));
+		}
 		return { paths, alsoRemoves, warnings };
 	}
 	if (targetId === 'koharu') {
@@ -816,6 +837,13 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		paths.push(describePath(file, 'COO sound-effect checkpoint'));
 		if (!envVar('SCAN_COO_MODEL') && existsSync(join(DATA_DIR, 'models/coo')))
 			paths.push(describePath(join(DATA_DIR, 'models/coo'), 'Its model directory'));
+		return { paths, alsoRemoves, warnings };
+	}
+	if (targetId === 'migan' || targetId === 'manga-inpainting') {
+		const directory = join(envVar('SCAN_WORKFLOW_MODELS_DIR') || join(DATA_DIR, 'models/workflow'), targetId);
+		paths.push(describePath(directory, 'Its model weights and license notice'));
+		const receipt = join(DATA_DIR, 'models/package-installations', `${targetId}.json`);
+		if (existsSync(receipt)) paths.push(describePath(receipt, 'Its installation receipt'));
 		return { paths, alsoRemoves, warnings };
 	}
 	const REVIEW_IDS = ['hayai-ocr-v2', 'manga-ocr', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];

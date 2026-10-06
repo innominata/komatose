@@ -55,7 +55,7 @@ function markerPath(): string {
 export function ownedNvtopReady(): boolean {
 	if (!existsSync(ownedNvtopPath())) return false;
 	try {
-		const marker = JSON.parse(readFileSync(markerPath(), 'utf8')) as { version?: string; patched?: boolean };
+		const marker = JSON.parse(readFileSync(markerPath(), 'utf8')) as { version?: string; commit?: string; patched?: boolean };
 		return marker.version === NVTOP_VERSION && marker.commit === NVTOP_COMMIT && marker.patched === true;
 	} catch {
 		return false;
