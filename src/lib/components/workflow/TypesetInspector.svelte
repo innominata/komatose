@@ -28,8 +28,10 @@
     onedit,
     onsettype,
     onapplystyle,
-    onloadstyle,
     onresetstyle,
+    onrefitcategory,
+    categoryLabel = 'category',
+    fitting = false,
     onfit,
     onlock,
     onrectangle,
@@ -53,8 +55,10 @@
     onedit: (line: LineRow, patch: Record<string, unknown>) => void;
     onsettype: (line: LineRow, lineType: string) => void;
     onapplystyle: (scope?: string) => void;
-    onloadstyle: () => void;
     onresetstyle: () => void;
+    onrefitcategory: () => void;
+    categoryLabel?: string;
+    fitting?: boolean;
     onfit?: () => void;
     onlock?: () => void;
     onrectangle?: () => void;
@@ -64,6 +68,20 @@
     onrefinebubble?: () => void;
     tab?: "text" | "style" | "shape";
   } = $props();
+
+  const fontGroups = $derived(groupFontsByCategory(fonts));
+  const fontChoices = $derived(fontGroups.flatMap(group => group.fonts));
+
+  function cycleFont(direction: -1 | 1) {
+    if (!canClean || busy || !regionDoc || regionDoc.data.locked || !fontChoices.length) return;
+    const current = fontChoices.findIndex(font => font.id === regionStyle.fontId);
+    const next = current < 0
+      ? direction === 1 ? 0 : fontChoices.length - 1
+      : (current + direction + fontChoices.length) % fontChoices.length;
+    if (fontChoices[next].id === regionStyle.fontId) return;
+    regionStyle.fontId = fontChoices[next].id;
+    void onapplystyle();
+  }
 </script>
 
 <div class="wf-ui ts-insp">
@@ -105,23 +123,28 @@
     </div>
     {/if}
     {#if tab === "style"}
-    <p class="panel-hint" data-find="style">Series style, then this chapter's type, then this region's overrides. Reset drops the region back to the series.</p>
+    <p class="panel-hint" data-find="style">Category defaults come from the series across all chapters. Changes here override this region; Use series style removes those overrides.</p>
     <details open>
       <summary>Character · override series style</summary>
       <fieldset
         disabled={!canClean || busy || regionDoc.data.locked}
         onchange={() => void onapplystyle()}
       >
-        <label
-          >Font face<select aria-label="Font face" bind:value={regionStyle.fontId}
+        <div class="font-picker">
+          <label for="region-font-face">Font face</label>
+          <div class="font-controls">
+            <select id="region-font-face" aria-label="Font face" bind:value={regionStyle.fontId}
             ><option value="">Select uploaded font</option
-            >{#each groupFontsByCategory(fonts) as group}<optgroup label={group.label}
+            >{#each fontGroups as group}<optgroup label={group.label}
                 >{#each group.fonts as f}<option value={f.id}
                     >{f.familyName} · {f.subfamilyName}</option
                   >{/each}</optgroup
               >{/each}</select
-          ></label
-        >
+            >
+            <button type="button" aria-label="Previous font" title="Previous font" disabled={!fontChoices.length} onclick={() => cycleFont(-1)}><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+            <button type="button" aria-label="Next font" title="Next font" disabled={!fontChoices.length} onclick={() => cycleFont(1)}><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+          </div>
+        </div>
         <div class="style-grid">
           {#each [["size", "Default size (pt)"], ["minSize", "Minimum size (pt)"], ["leading", "Leading multiplier"], ["padding", "Padding (pt)"], ["outlineWidth", "Outline (pt)"], ["rotation", "Rotation (°)"], ["skewX", "Skew H (°)"], ["skewY", "Skew V (°)"]] as [k, label]}<label
               >{label}<input
@@ -184,15 +207,15 @@
       <small>Changes save and update placed text automatically.</small>
       <div class="control-row">
         <button type="button" disabled={!canClean || busy || regionDoc?.data.locked} onclick={() => onfit?.()}>Auto-fit</button>
-        <button onclick={onloadstyle}>Load saved style</button><button
-          disabled={!canClean || busy}
-          onclick={onresetstyle}>Reset to series style</button
-        ><button disabled={!canEdit || busy} onclick={() => onapplystyle("chapter")}
-          >Use for chapter category</button
-        >{#if canUpload}<button onclick={() => onapplystyle("series")}
-            >Use for series category</button
+        <button type="button" disabled={!canClean || busy || regionDoc.data.locked}
+          onclick={onresetstyle}>Use series style</button
+        >{#if canUpload}<button type="button" disabled={!canClean || busy || regionDoc.data.locked} onclick={() => onapplystyle("series")}
+            >Save as series {categoryLabel} style…</button
           >{/if}
+        <button type="button" data-find="refit-category" disabled={!canClean || busy || fitting}
+          onclick={onrefitcategory}>Refit {categoryLabel} in chapter…</button>
       </div>
+      <small>Category refit uses the saved series style and existing geometry. Locked layouts are skipped; individual placement transforms and text masks stay.</small>
     </details>
     {/if}
     {#if tab === "shape"}
@@ -243,6 +266,10 @@
   .ts-insp :global(label) { margin: 0; display: grid; gap: 4px; }
   .ts-insp p { margin: 0; color: var(--hud-muted); font-size: 12px; }
   .control-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .font-picker { display: grid; gap: 4px; }
+  .font-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; }
+  .font-controls select { min-width: 0; }
+  .font-controls button { justify-content: center; padding: 5px 8px; }
   .ts-insp details { border: 1px solid var(--hud-line); border-radius: 5px; padding: 8px 10px; display: grid; gap: 8px; }
   .ts-insp summary { cursor: pointer; font-size: 12px; color: var(--hud-text); }
   .ts-insp fieldset { border: 0; padding: 0; margin: 8px 0; display: grid; gap: 8px; }

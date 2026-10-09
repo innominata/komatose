@@ -64,6 +64,7 @@
   {#if selectedEngine && !selectedEngine.available && selectedEngine.reason}
     <small>{selectedEngine.reason}</small>
   {/if}
+  {#if selectedEngine?.warnings?.length}<small role="status">{selectedEngine.warnings.join(' ')}</small>{/if}
 </div>
 
 <style>

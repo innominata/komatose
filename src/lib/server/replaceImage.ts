@@ -12,6 +12,8 @@ import { now } from './ids';
 import { toImage } from './queries';
 import { broadcast } from './realtime';
 import { ensureOriginal, imagePath, nextImageBackupPath } from './storage';
+import { captureGeometry } from './pageGeometry';
+import { pushUndo } from './pageUndo';
 
 export class ReplaceError extends Error {
 	status: number;
@@ -133,7 +135,11 @@ export async function replaceImage(opts: {
 	const { data, info } = await encoded.toBuffer({ resolveWithObject: true });
 
 	const bak = await nextImageBackupPath(opts.series.slug, opts.episode.slug, row.filename);
+	const geometry = await captureGeometry(opts.episode.id, row.id);
 	await copyFile(path, bak);
+	await pushUndo(opts.series.slug, opts.episode.slug, {
+		type: 'pixels', imageId: row.id, geometry: { [row.id]: geometry }, description: `Replace page from ${opts.name}`
+	});
 	const tmp = `${path}.tmp.${ext}`;
 	await writeFile(tmp, data);
 	await rename(tmp, path);

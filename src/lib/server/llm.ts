@@ -12,6 +12,7 @@ const SWAP_RETRY_MS = 8000;
 const SWAP_RETRY_LIMIT = 90;
 
 export type DetectedBox = {
+  speaker?: string;
 	id?: string;
 	ocrConfidence?: number;
 	x: number;
@@ -444,6 +445,7 @@ export async function chatCompletions(
 		model?: string;
 	}
 ): Promise<string> {
+	assertGeneralModel(opts.model);
 	const override = currentAssistantHttp();
 	if (override?.profile === 'openai') {
 		return openaiChatCompletions(messages, {
@@ -603,12 +605,12 @@ export function translatePrompt(opts: {
 	seriesNotes: string;
 	prior: string;
 	pageLabel: string;
-	lines: { i: number; lineType: LineType; source: string }[];
+	lines: { i: number; lineType: LineType; source: string; speaker?: string }[];
 	lang?: OcrLang;
 	pageCaption?: string;
 	seriesGlossary?: string;
 }): string {
-	const script = opts.lines.map((l) => `[${l.i}] (${l.lineType}) ${l.source}`).join('\n');
+	const script = opts.lines.map((l) => `[${l.i}] (${l.lineType})${l.speaker ? ` Speaker: ${l.speaker}\nSource:` : ''} ${l.source}`).join('\n');
 	const lang = opts.lang === 'japanese' ? 'japanese' : 'korean';
 	const faithful =
 		lang === 'japanese'
@@ -624,6 +626,7 @@ export function translatePrompt(opts: {
 Rules:
 ${faithful}
 - Natural publishable English, character voice, consistent names.
+- Honor supplied speaker labels and canonical name spellings. Speakers are not necessarily the people addressed. Do not invent unassigned speakers or add speaker labels to the translated lettering.
 - Use only regular ASCII hyphens (-), never em dashes, en dashes, or other Unicode dash variants in English.
 ${sourceHint}
 - Keep the same item count and the same i values.
@@ -755,7 +758,7 @@ async function requestTranslationMap(
 		seriesNotes: opts.seriesNotes,
 		prior: opts.prior,
 		pageLabel: opts.pageLabel,
-		lines: indexes.map((i) => ({ i, lineType: boxes[i].lineType, source: boxes[i].source })),
+		lines: indexes.map((i) => ({ i, lineType: boxes[i].lineType, source: boxes[i].source, speaker: boxes[i].speaker })),
 		lang: opts.lang,
 		pageCaption: opts.pageCaption,
 		seriesGlossary: opts.seriesGlossary
@@ -799,6 +802,8 @@ export async function translateScript(
 	opts: TranslateScriptOpts
 ): Promise<DetectedBox[]> {
 	if (!boxes.length) return boxes;
+	const specialist = translationModel(opts.model);
+	if (specialist) return translateWithSpecialist(specialist, boxes, opts);
 	const nextOpts = { ...opts, seriesGlossary: withSfxGlossary(opts.seriesGlossary, boxes.map((box) => box.source)) };
 	const parsed = new Map<number, { literal: string; translation: string; reasoning: string }>();
 	const need: number[] = [];
@@ -832,6 +837,7 @@ export async function translateScript(
 }
 
 export type ProofreadItem = {
+  speaker?: string;
 	i: number;
 	page: string;
 	lineType: LineType;
@@ -858,6 +864,7 @@ export function proofreadPrompt(opts: {
 	const script = opts.items
 		.map((l) => {
 			const bits = [`[${l.i}] (${l.lineType}) ${l.page}`];
+			if (l.speaker) bits.push(`speaker: ${l.speaker}`);
 			if (l.source) bits.push(`source: ${l.source}`);
 			if (l.literal) bits.push(`literal: ${l.literal}`);
 			bits.push(`current: ${l.current || '(empty)'}`);
@@ -877,6 +884,7 @@ Rules:
 - Prefer natural lettering over word-for-word English. Compress, rephrase, and drop crib artifacts.
 - The Literal line is a crib only. Do not copy it unless it already letters well.
 - Keep glossary names/terms exactly.
+- Honor human-assigned speakers and canonical character-name spellings. Speaker labels identify who speaks, not who is addressed. Do not guess unassigned speakers or change name hyphenation.
 - Same character should sound like the same person across pages.
 - Pronouns, tense, and facts must not contradict scene notes or earlier lines.
 - SFX stay short and punchy. Thoughts stay interior. Narration stays narration.

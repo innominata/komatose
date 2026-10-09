@@ -16,7 +16,7 @@ for artwork credit.
 
 | Step | What happens | Main tools |
 | --- | --- | --- |
-| **Prepare** | Upload raws, reorder, split spreads, auto-crop, auto-align, reslice webtoon strips, add scene notes and series credits. | Organize grid, Nudge page, Scene notes model |
+| **Prepare** | Upload raws, reorder, split spreads, auto-crop, auto-align, split webtoon strips into page-sized images, add scene notes and series credits. | Organize grid, Nudge page, Scene notes model |
 | **Translate** | Detect lettering, read it with two OCR models, draft English. | Transcribe, Translate, Fill missing source & English |
 | **Review** | Approve English, compare model suggestions, ask questions about a region. | AI Review, Revise English, Enquire, Proofread |
 | **Clean** | Mask the lettering, remove it, touch up, approve. | Detect lettering, LaMa / AOT / Qwen-Image-Edit / Codex, clone, blur, restore |
@@ -28,6 +28,18 @@ for artwork credit.
 Upload, order, and organize pages. Each page carries a **scene note** —
 a visual description (no lettering) that translators and models see but that
 is never drawn on the page.
+
+For long manhwa/webtoon strips, choose **Normal pages (1.5× width)** in
+**Slice size**, then **Split strips**. This keeps page images readable for
+proofreading. Custom pixel heights and the original 16,000 px strip size are
+also available. Automatic cuts use only solid-color gaps and allow small height
+overflows to avoid tiny leftover pages. When no nearby gap exists, slicing uses
+the next safe gap and continues with the rest of the strip. Oversized pages,
+including stretches with no safe gap at all, are flagged for manual splitting
+in Jobs; other pages are processed normally. Orange marks manual cuts
+through artwork. Reslicing carries over regions, cleaning layers, masks, saved
+lettering, and valid completion marks. Cuts across existing regions or lettering
+are rejected to keep that work intact. Undo restores the original pages and work.
 
 ![Prepare](docs/images/03-prepare.png)
 
@@ -195,7 +207,11 @@ Listens on `127.0.0.1:3847`. Point Caddy at [`Caddyfile.scan`](Caddyfile.scan)
 for your host and reload it. Set `SCAN_SITE_ADDRESS` for Caddy and
 `SCAN_TRUSTED_ORIGINS` for the app (see [`.env.example`](.env.example)).
 `npm run rebuild` (also **Rebuild and restart** in the top bar, admin only)
-rebuilds and restarts the service.
+rebuilds and restarts the service. Use it when the app is running: replacing
+`build/` with a plain `npm run build` leaves the old process referring to removed
+chunks and can cause HTTP 500 errors until it restarts. For build validation
+without replacing the running app, set `SCAN_BUILD_DIR=/tmp/komatose-build-check`
+when running `npm run build`.
 
 Data lives in `data/` — `scan.db` plus `images/{seriesSlug}/{episodeSlug}/` —
 and is gitignored. Back the two up together. `SCAN_DATA_DIR` and
@@ -237,8 +253,9 @@ uv pip install --python .venv-ocr/bin/python -r ocr/requirements.txt
 Cleaning and segmentation use a second environment (`.venv-workflow`); see the
 [workflow guide](docs/WORKFLOW.md#local-worker-setup). Weights download on
 first use and cache under `~/.cache/huggingface`. Default OCR language is
-Japanese for new projects; pick Korean or Japanese in the editor toolbar
-(`SCAN_OCR_LANG` sets the default).
+Japanese for new series; pick Korean or Japanese under **Settings → Series**.
+Source language and reading direction are saved for the whole series and apply
+to every chapter.
 
 Raise detector confidence (often 0.35–0.45) on manhwa if art is boxed as text;
 set it per chapter next to **Transcribe chapter** or machine-wide in **Admin →

@@ -125,12 +125,16 @@ export function llmListenPort() {
 export function reviewListenPort(id: LocalReviewModelId) {
   const fallback: Record<LocalReviewModelId, number> = {
     'hayai-ocr-v2': 18083,
+    'hayai-ocr-v2.5-nova': 18086,
+    'pp-ocrv5-korean': 18087,
     'manga-ocr': 18085,
     'paddleocr-vl-1.6': 18081,
     'qwen3-vl-8b': 18082,
   };
   const envName: Record<LocalReviewModelId, string> = {
     'hayai-ocr-v2': 'SCAN_REVIEW_HAYAI_PORT',
+    'hayai-ocr-v2.5-nova': 'SCAN_REVIEW_NOVA_PORT',
+    'pp-ocrv5-korean': 'SCAN_REVIEW_PPOCR_KOREAN_PORT',
     'manga-ocr': 'SCAN_REVIEW_MANGA_PORT',
     'paddleocr-vl-1.6': 'SCAN_REVIEW_PADDLE_PORT',
     'qwen3-vl-8b': 'SCAN_REVIEW_QWEN_PORT',

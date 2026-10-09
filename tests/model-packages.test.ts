@@ -67,7 +67,7 @@ test('unknown package is discovered, installed, controlled and tested without re
  assert.equal(await readFile(join(dir,'stopped'),'utf8'), 'yes');
 });
 
-test('adapter changes invalidate passes and can add a task without app changes', async () => {
+test('adapter changes make previous checks warnings and can add a task without app changes', async () => {
  let row = store.findRegistryRow('unknown-reader')!;
  const failed = await probeModelRow(row, 'translate');
  assert.equal(failed.outcome, 'unsupported');
@@ -75,8 +75,8 @@ test('adapter changes invalidate passes and can add a task without app changes',
  await writeFile(join(dir, 'adapter.mjs'), adapter(true));
  packages.discoverModelPackages(true);
  row = store.findRegistryRow(row.id)!;
- assert.equal(rowHasOperation(row,'vision'),false);
- assert.equal(rowHasOperation(row,'translate'),false);
+ assert.equal(rowHasOperation(row,'vision'),true);
+ assert.equal(rowHasOperation(row,'translate'),true);
  const passed = await probeModelRow(row,'translate');
  assert.equal(passed.ok,true,passed.reason);
  row = store.saveProbeResult(row.id,passed);
@@ -84,7 +84,7 @@ test('adapter changes invalidate passes and can add a task without app changes',
  assert.equal((await executeModelTask(row,'translate',{boxes:[{source:'テスト'}]}))[0].translation,'Test.');
 });
 
-test('cosmetic names preserve passes, interruption preserves evidence, model revision invalidates', async () => {
+test('cosmetic names preserve passes, interruption preserves evidence, model revision warns', async () => {
  let row = store.findRegistryRow('unknown-reader')!;
  const fp = row.taskFingerprints!.translate;
  row = store.saveProbeResult(row.id,{ operation:'translate',ok:false,outcome:'cancelled',fingerprint:fp,at:Date.now() });
@@ -94,7 +94,7 @@ test('cosmetic names preserve passes, interruption preserves evidence, model rev
  row = store.findRegistryRow(row.id)!;
  assert.equal(rowHasOperation(row,'translate'),true);
  store.upsertRegistryRow({...row,modelRevision:'new remote version'});
- assert.equal(rowHasOperation(store.findRegistryRow(row.id)!,'translate'),false);
+ assert.equal(rowHasOperation(store.findRegistryRow(row.id)!,'translate'),true);
 });
 
 test('cancellation kills the running command and releases its queue', async () => {

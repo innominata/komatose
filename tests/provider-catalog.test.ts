@@ -13,6 +13,7 @@ import {
 	providersForOperation,
 	selectProvidersForOperation,
 	providerRunGate,
+	proofreadingOperation,
 } from '../src/lib/providerCatalog';
 import { enginesForRegionAiField, REGION_AI_FIELD_OPERATIONS } from '../src/lib/regionAi';
 import { TRANSLATE_ENGINE_LABELS, TRANSLATE_ENGINES, isPageImageOnlyEngine, textEngines } from '../src/lib/types';
@@ -151,6 +152,35 @@ test('run gates require evidence and separate readiness from capabilities', () =
   assert.equal(providerRunGate('proofreader-a', 'pageImageProofread', live).ok, true);
   assert.equal(providerRunGate('codex', 'translate', live).ok, true);
   assert.equal(providerRunGate('', 'translate', live).ok, false);
+});
+
+test('proofreading uses the image workflow for browser services without requiring an English-text test', () => {
+	for (const id of ['proofreader-a', 'proofreader-b']) {
+		assert.equal(providerRunGate(id, 'proofreadEnglish', live).ok, false);
+		const task = proofreadingOperation(id, live);
+		assert.equal(task, 'pageImageProofread');
+		assert.equal(providerRunGate(id, task, live).ok, true);
+	}
+	const custom = [
+		{ id: 'page-service', access: 'proofreader', operations: ['pageImageProofread'] },
+		{ id: 'image-only', pageImageOnly: true, operations: ['pageImageProofread'] },
+		{ id: 'custom-page', operations: ['pageImageProofread'] },
+		{ id: 'both', operations: ['proofreadEnglish', 'pageImageProofread'] },
+		{ id: 'text', operations: ['proofreadEnglish'] },
+		{ id: 'translator-only', operations: ['translate'] },
+	];
+	for (const id of ['page-service', 'image-only', 'custom-page']) {
+		const task = proofreadingOperation(id, custom);
+		assert.equal(task, 'pageImageProofread');
+		assert.equal(providerRunGate(id, task, custom).ok, true);
+	}
+	for (const id of ['both', 'text']) {
+		const task = proofreadingOperation(id, custom);
+		assert.equal(task, 'proofreadEnglish');
+		assert.equal(providerRunGate(id, task, custom).ok, true);
+	}
+	assert.equal(providerRunGate('translator-only', proofreadingOperation('translator-only', custom), custom).ok, false);
+	assert.equal(providerRunGate('unknown', proofreadingOperation('unknown')).ok, false);
 });
 
 test('live registry operations let custom rows be selected and gated', () => {

@@ -22,6 +22,9 @@ import { and, asc, eq } from "drizzle-orm";
 import { toImage, toLine, toSeries, toEpisode } from "./queries";
 import { readWorkingOrOrig } from "./storage";
 import { workCredit } from "../workCredit";
+import { exportDocument } from './exportDocuments';
+import { loadSpeakerAssignments } from './characters';
+import type { CharacterAssignment } from '../characters';
 
 export type ExportPage = {
   image: ImageRow;
@@ -31,6 +34,7 @@ export type ExportPage = {
   dpi: number;
 };
 export type ExportSnapshot = {
+  speakers?: Record<string, CharacterAssignment>;
   schemaVersion: 1;
   revision: number;
   createdAt: number;
@@ -444,6 +448,15 @@ export async function captureExport(
     throw new WorkflowError("JPG quality must be 1–100");
   const imgs = await listImages(episode.id);
   for (const img of imgs) await preparePage(series, episode, img);
+  return readExportSnapshot(series, episode, format, draft, quality, includeMetadata, true);
+}
+
+/** Read saved metadata without preparing pages, writing jobs, or touching artwork. */
+export function captureExportMetadata(series: Series, episode: Episode): ExportSnapshot {
+  return readExportSnapshot(series, episode, 'json', true, 95, true, false);
+}
+
+function readExportSnapshot(series: Series, episode: Episode, format: string, draft: boolean, quality: number, includeMetadata: boolean, requirePrepared: boolean): ExportSnapshot {
   return sqlite.transaction(() => {
     const currentImages = db
       .select()
@@ -480,7 +493,7 @@ export async function captureExport(
         issues,
       );
     if (
-      currentImages.some((image) => {
+      requirePrepared && currentImages.some((image) => {
         const p = getDoc<PageData>(`page:${image.id}`, {}).data;
         return !p.prepared || p.preparedAt !== image.updatedAt;
       })
@@ -497,6 +510,7 @@ export async function captureExport(
       series: currentSeries,
       episode: currentEpisode,
       lines: lns,
+      speakers: Object.fromEntries(loadSpeakerAssignments(episode.id)),
       draft,
       format,
       quality,
@@ -530,7 +544,6 @@ export async function buildExport(
   onPage: (id: string) => void = () => {},
 ) {
   const zip = new JSZip();
-  const manifest = new Map<string, FittedLayout["font"]>();
   for (const [i, page] of snapshot.pages.entries()) {
     const stem = String(snapshot.draft ? i + 1 : page.image.pageNumber);
     if (snapshot.format === "clean")
@@ -561,53 +574,18 @@ export async function buildExport(
             : r.composite;
       zip.file(`${stem}.${snapshot.format}`, bytes);
     }
-    if (snapshot.includeMetadata)
-      for (const region of page.regions)
-        if (region.data.layout)
-          manifest.set(region.data.layout.font.id, region.data.layout.font);
     onPage(page.image.id);
   }
   if (snapshot.includeMetadata)
-    zip.file(
-      "font-manifest.json",
-      JSON.stringify(
-        {
-          fonts: [...manifest.values()],
-          note: "Install these exact font versions to edit without substitution. Raster appearance is embedded. Target-editor reflow must be checked.",
-        },
-        null,
-        2,
-      ),
-    );
+    zip.file('font-manifest.json', exportDocument([snapshot], 'font-manifest.json').text);
   if (snapshot.includeMetadata || snapshot.format === "json")
-    zip.file("chapter.json", JSON.stringify(snapshot, null, 2));
-  const ordered = snapshot.pages.flatMap((p) =>
-    [...p.regions]
-      .sort((a, b) => a.line.sortOrder - b.line.sortOrder)
-      .map((r) => ({ ...r.line, page: p.image.pageNumber })),
-  );
+    zip.file('chapter.json', exportDocument([snapshot], 'chapter.json').text);
   if (snapshot.includeMetadata || snapshot.format === "english")
-    zip.file(
-      "english.txt",
-      ordered
-        .map((l) => `Page ${l.page} · ${l.sortOrder + 1}\n${l.body}`)
-        .join("\n\n"),
-    );
+    zip.file('english.txt', exportDocument([snapshot], 'english.txt').text);
   if (snapshot.includeMetadata || snapshot.format === "bilingual")
-    zip.file(
-      "bilingual.txt",
-      ordered
-        .map(
-          (l) =>
-            `Page ${l.page} · ${l.sortOrder + 1}\n${l.source || "[unreadable]"}\n${l.body}\n[${l.sourceState === "ignored" ? `ignored: ${l.ignoreReason}` : l.status}]`,
-        )
-        .join("\n\n"),
-    );
+    zip.file('bilingual.txt', exportDocument([snapshot], 'bilingual.txt').text);
   if (snapshot.draft && snapshot.includeMetadata)
-    zip.file(
-      "DRAFT.txt",
-      `Draft export from revision ${snapshot.revision}.\n${JSON.stringify(snapshot.issues, null, 2)}`,
-    );
+    zip.file('DRAFT.txt', exportDocument([snapshot], 'DRAFT.txt').text);
   const credit = workCredit(snapshot.series.title);
   if (credit) zip.file("attribution.txt", credit.text);
   return zip.generateAsync({

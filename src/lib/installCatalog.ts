@@ -9,6 +9,7 @@
  */
 
 export const INSTALL_GROUPS = [
+	{ id: 'decider', label: 'Transcription deciders', blurb: 'Choose the exact reading from conflicting OCR results using the lettering crop.' },
 	{
 		id: 'environment',
 		label: 'Runtime environments',
@@ -78,6 +79,8 @@ const GB = 1_000_000_000;
 const MB = 1_000_000;
 
 export const INSTALL_TARGETS: InstallTarget[] = [
+	{ id: 'llama-decider', group: 'environment', label: 'd1 Vulkan runtime', summary: 'Pinned llama.cpp build for decision models, installed alongside other runtimes. Requires git, cmake, a C++ compiler and Vulkan development tools.', diskBytes: 2 * GB, memoryBytes: 0 },
+	{ id: 'd1-3b', group: 'decider', label: 'Liquid AI d1-3B Q8', summary: 'Selects among OCR readings using the crop. Q8 weights and F16 vision projector; does not generate text.', diskBytes: 3_728_774_976, memoryBytes: 5 * GB, installsWith: ['llama-decider'], unlocks: 'decide transcription' },
 	// --- Runtime environments -------------------------------------------------
 	{
 		id: 'env-ocr',
@@ -181,6 +184,26 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'transcription, AI review',
 	},
 	{
+		id: 'hayai-ocr-v2.5-nova',
+		group: 'ocr',
+		label: 'Hayai OCR v2.5 Nova',
+		summary: 'Multilingual comic-crop recognizer with Korean support. Runs on CPU or PyTorch CUDA/ROCm; includes SigLIP2 configuration.',
+		diskBytes: 700 * MB,
+		memoryBytes: 2.5 * GB,
+		requires: ['env-review'],
+		unlocks: 'transcription, source review',
+	},
+	{
+		id: 'pp-ocrv5-korean',
+		group: 'ocr',
+		label: 'PP-OCRv5 Korean',
+		summary: 'Dedicated Korean text-line recognition with a local PP-OCRv5 detector for multiline crops. CPU inference works on AMD systems.',
+		diskBytes: 110 * MB,
+		memoryBytes: 1 * GB,
+		requires: ['env-ocr'],
+		unlocks: 'transcription (Korean), source review',
+	},
+	{
 		id: 'manga-ocr',
 		group: 'ocr',
 		label: 'Manga OCR',
@@ -235,14 +258,23 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'dedicated JP→EN translation',
 	},
 	{
+		id: 'hy-mt2-1.8b-q4',
+		group: 'translate',
+		label: 'Hy-MT2 1.8B Q4',
+		summary: 'Stock Tencent Japanese/Korean → English translator (Q4_K_M GGUF, served by llama-server).',
+		diskBytes: 1_133_080_448,
+		memoryBytes: 1.6 * GB,
+		unlocks: 'dedicated JP/KO→EN translation',
+	},
+	{
 		id: 'hy-mt2-7b-q4',
 		group: 'translate',
 		label: 'Hy-MT2 7B Q4',
 		summary:
-			'Stock Tencent Hy-MT2 7B Japanese → English translator (Q4_K_M GGUF, served by llama-server).',
+			'Stock Tencent Hy-MT2 7B Japanese/Korean → English translator (Q4_K_M GGUF, served by llama-server).',
 		diskBytes: 4_624_648_896,
 		memoryBytes: 6 * GB,
-		unlocks: 'dedicated JP→EN translation',
+		unlocks: 'dedicated JP/KO→EN translation',
 	},
 	{
 		id: 'imsbee-ko-en-translator',
@@ -291,20 +323,20 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		group: 'translate',
 		label: 'TranslateGemma 4B Q4',
 		summary:
-			'Google TranslateGemma 4B Japanese → English translator (Q4_K_M GGUF, served by llama-server).',
+			'Google TranslateGemma 4B Japanese/Korean → English translator (Q4_K_M GGUF, served by llama-server).',
 		diskBytes: 2_489_909_760,
 		memoryBytes: 3.5 * GB,
-		unlocks: 'dedicated JP→EN translation',
+		unlocks: 'dedicated JP/KO→EN translation',
 	},
 	{
 		id: 'translategemma-12b-q4',
 		group: 'translate',
 		label: 'TranslateGemma 12B Q4',
 		summary:
-			'Google TranslateGemma 12B Japanese → English translator (Q4_K_M GGUF, served by llama-server).',
+			'Google TranslateGemma 12B Japanese/Korean → English translator (Q4_K_M GGUF, served by llama-server).',
 		diskBytes: 7_300_794_112,
 		memoryBytes: 9 * GB,
-		unlocks: 'dedicated JP→EN translation',
+		unlocks: 'dedicated JP/KO→EN translation',
 	},
 
 	// --- Image editing --------------------------------------------------------

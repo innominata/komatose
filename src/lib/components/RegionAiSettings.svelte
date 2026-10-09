@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
   import { untrack } from "svelte";
   import AiModelPicker from "./AiModelPicker.svelte";
   import TranslationModelPicker from './TranslationModelPicker.svelte';
@@ -51,6 +52,7 @@
   let liveEngines = $state<TranslateEngineInfo[]>([]);
   let enginesEpoch = 0;
   let localReviewModels = $state<EngineModelOption[]>([]);
+  let deciderDefault = $state<string | null>(null);
   let transcriptionOptions = $state<Array<TranslateEngineInfo & { access?: string }>>([]);
   let proofreaderStatus = $state("");
   let proofreaderBusy = $state(false);
@@ -62,6 +64,8 @@
   let chosenTab = $state("");
   let openHint = $state("");
   const enginesSnapshot = $derived(liveEngines.length ? liveEngines : engines);
+  const deciderOptions = $derived(enginesSnapshot.filter(row => row.operations?.includes('sourceDecide')));
+
   const showProfiles = $derived(
     !tasks?.length ||
       tasks.some((key) =>
@@ -80,8 +84,10 @@
     sourceReviewEngines?: TranslateEngineInfo[];
     localReviewModels?: EngineModelOption[];
     transcriptionModels?: Array<TranslateEngineInfo & { access?: string }>;
+    defaultTranscriptionDecider?: string | null;
   }, epoch: number) {
     if (epoch !== enginesEpoch) return;
+    if (info.defaultTranscriptionDecider !== undefined) deciderDefault = info.defaultTranscriptionDecider;
     if (Array.isArray(info.engines)) {
       liveEngines = info.engines;
       const ops = new Map(info.engines.map((engine) => [engine.id, new Set(engine.operations || [])]));
@@ -349,7 +355,7 @@
     return formatDuration(transcribeSetPageMs(medians as number[], 8));
   });
   const transcriptionHint = $derived(
-    `Chapter transcribe runs this set automatically, in parallel per region (cap ${MAX_TRANSCRIPTION_MODELS}). A strict plurality of comparable source readings is applied; one model is enough.` +
+    `Chapter transcribe runs this set automatically, in parallel per region (cap ${MAX_TRANSCRIPTION_MODELS}). A strict plurality is applied when deciding is off. When enabled, the decider checks every disagreement against the crop; uncertain results stay for review.` +
       (transcriptionPaid ? " The set includes CLI or remote models — those calls are billed." : "") +
       (transcribeEstimate ? ` Est. 8-region page ${transcribeEstimate}.` : ""),
   );
@@ -530,7 +536,7 @@
           {@render help(
             "reviewers",
             "About transcription reviewers",
-            "Review Transcription sends the region image to each reviewer. You can mask that crop with the Clean-step text detector and tidy it with brush/erase before sending. Add up to five distinct models. Each returns an independent transcription. The selected Translation model supplies English separately. Send runs local models only. Grok, Codex, and Cursor each need their own Run button so you can skip them when Hayai or another local reading is already right. Every reviewer’s transcription is kept intact. Local reviews run one at a time.",
+            "Review Transcription sends the region image to each reviewer. You can mask that crop with the Clean-step text detector and tidy it with brush/erase before sending. Add up to five distinct models. Each returns an independent transcription. The selected Translation model supplies English separately. Local models and non-local models with Autorun enabled in Admin → Models run automatically. Other models wait for their Run button. Every reviewer’s transcription is kept intact. Local reviews run one at a time.",
           )}
         </div>
         <div class="reviewer-list">
@@ -574,7 +580,7 @@
           {@render help(
             "revise",
             "About the Review Translation council",
-            "Review Translation sends the source, the current English, nearby lines, scene notes, and matching glossary terms. It does not send the page image. Add up to five text translators. Send runs local models only. Grok, Codex, and Cursor each need their own Run button. Hy-MT samples several wordings; other models translate once. Leave this list empty to use the Translation model plus the Proofreading model when that is a different text translator. Proofreaders stay on page-image proofreading.",
+            "Review Translation sends the source, the current English, nearby lines, scene notes, and matching glossary terms. It does not send the page image. Add up to five text translators. Local models and non-local models with Autorun enabled in Admin → Models run automatically. Other models wait for their Run button. Hy-MT samples several wordings; other models translate once. Leave this list empty to use the Translation model plus the Proofreading model when that is a different text translator. Proofreaders stay on page-image proofreading.",
           )}
         </div>
         {#if draft.reviseModels.length}
@@ -638,11 +644,36 @@
                 disabled={saving || (!draft.transcriptionModels.includes(row.id) && draft.transcriptionModels.length >= MAX_TRANSCRIPTION_MODELS)}
                 onchange={(e) => toggleTranscription(row.id, e.currentTarget.checked)}
               />
-              <span>{row.label}{row.access === "cli" || row.access === "remote_http" ? " (billed)" : ""}{row.available === false ? " (unavailable)" : ""}</span>
+              <span>{row.label}{row.access === "cli" || row.access === "remote_http" ? " (billed)" : ""}{row.available === false ? " (unavailable)" : ""}{#if row.warnings?.length}<small title={row.warnings.join(' ')}> · Test out of date (warning only)</small>{/if}</span>
             </label>
           {:else}
             <p class="status">No model has passed its vision test yet. Run it under Admin → Models → Jobs.</p>
           {/each}
+        </div>
+        <div class="setting-row" style="margin-top:1rem">
+          <label for="transcription-decider">Transcription decider</label>
+          <select id="transcription-decider" disabled={saving}
+            value={draft.transcriptionDecider === undefined ? 'default' : draft.transcriptionDecider === null ? 'off' : draft.transcriptionDecider.engine}
+            onchange={(event) => {
+              const id = event.currentTarget.value;
+              if (id === 'default') delete draft.transcriptionDecider;
+              else draft.transcriptionDecider = id === 'off' ? null : { engine: id, model: '' };
+            }}>
+            <option value="default">Default{deciderDefault ? ` · ${enginesSnapshot.find(row => row.id === deciderDefault)?.label || deciderDefault}` : ' · Off (no default selected)'}</option>
+            <option value="off">Off · use OCR plurality</option>
+            {#each deciderOptions as row (row.id)}<option value={row.id}>{row.label}{row.available === false ? ' (unavailable)' : ''}</option>{/each}
+            {#if draft.transcriptionDecider && !deciderOptions.some(row => row.id === draft.transcriptionDecider?.engine)}
+              <option value={draft.transcriptionDecider.engine}>{draft.transcriptionDecider.engine} (unavailable)</option>
+            {/if}
+          </select>
+          <p class="status">Uses the lettering crop to pick between OCR readings. Abstentions and errors stay for review. Install and test d1 under Admin → Models.</p>
+          <label>Minimum probability <input type="number" min="0" max="1" step="0.01" disabled={saving}
+            value={draft.deciderMinProbability ?? DECIDER_MIN_PROBABILITY}
+            onchange={(event) => draft.deciderMinProbability = Number(event.currentTarget.value)} /></label>
+          <label>Minimum lead <input type="number" min="0" max="1" step="0.01" disabled={saving}
+            value={draft.deciderMinMargin ?? DECIDER_MIN_MARGIN}
+            onchange={(event) => draft.deciderMinMargin = Number(event.currentTarget.value)} /></label>
+          <p class="status">Both thresholds must pass. Probabilities are model scores, not measured OCR accuracy.</p>
         </div>
       </div>
     {/if}

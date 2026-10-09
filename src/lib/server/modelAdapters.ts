@@ -11,8 +11,13 @@ const unsupported = (task: string) => { throw new ModelTaskError('unsupported', 
 export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow, task: ModelTaskId, input: TaskInput, abort?: AbortSignal, retain?: (release: () => void) => void): Promise<any> {
   const adapter = pkg.manifest.adapter.id;
   const opts = { ...input, abort, model: input.model || row.slug };
+  if (adapter === 'systemone') {
+    if (task !== 'sourceDecide') return unsupported(task);
+    return (await import('./transcriptionDecider')).invokeDecider(row, input, abort, retain);
+  }
   if (adapter === 'native-ocr') {
     if (task !== 'vision' && task !== 'sourceReview') return unsupported(task);
+    if (row.languages && !row.languages.includes(input.lang || 'japanese')) throw new ModelTaskError('unsupported', 'This recognizer does not support the requested chapter language');
     const { localTranscription, withLocalReview } = await import('./localReview');
     const source = await withLocalReview(signal => localTranscription(row.id as any, input.jpeg, signal, input.lang), abort);
     return task === 'vision' ? { source, lineType: '""' } : {

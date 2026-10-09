@@ -1,3 +1,4 @@
+import { expandHomePath } from './homePath';
 import { translationModel, translationRuntimeOf } from '../translationModels';
 import { CAPABILITIES, CAPABILITY_VERSION } from '../modelCapabilities';
 import { homedir } from 'node:os';
@@ -120,7 +121,7 @@ const SHARED_TASK_FILES = [
 ];
 /** Implementation files for one builtin adapter. A change restales only that adapter's models. */
 const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
-  'native-ocr': ['src/lib/server/localReview.ts', 'ocr/hayai_review.py', 'ocr/manga_ocr_review.py'],
+  'native-ocr': ['src/lib/server/localReview.ts', 'ocr/hayai_review.py', 'ocr/manga_ocr_review.py', 'ocr/ppocr_korean_review.py', 'ocr/worker.py'],
   'native-translator': ['src/lib/server/specialistTranslation.ts', 'src/lib/server/translationRuntime.ts', 'src/lib/translationModels.json',
     'ocr/ko_en_translate.py', 'ocr/opus_mt_translate.py', 'ocr/sugoi_translate.py', 'ocr/translategemma-ja-en.jinja'],
   'workflow-image': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/detect.ts',
@@ -129,17 +130,19 @@ const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
   'image-editor': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/qwenImageClean.ts', 'src/lib/server/imageEdit.ts'],
   'browser-proofreader': ['src/lib/server/proofreadService.ts'],
   cli: ['src/lib/server/cliTranslate.ts', 'src/lib/server/cliDiscovery.ts', 'src/lib/server/cliAdapters/registry.ts', 'src/lib/server/cliAdapters/types.ts', 'src/lib/server/cliAdapters/command.ts'],
+  systemone: ['src/lib/server/transcriptionDecider.ts', 'src/lib/decider.ts', 'src/lib/server/deciderRuntime.ts', 'src/lib/server/managedModels.ts'],
   openai: ['src/lib/server/llm.ts', 'src/lib/server/openaiHttp.ts', 'src/lib/server/ocrReview.ts', 'src/lib/server/managedModels.ts'],
   'local-chat': ['src/lib/server/llm.ts', 'src/lib/server/openaiHttp.ts', 'src/lib/server/ocrReview.ts', 'src/lib/server/managedModels.ts', 'src/lib/server/localReview.ts'],
 };
 function pythonRuntimeFingerprint(adapter: string | undefined, row: ModelRow) {
   const workflow = adapter === 'workflow-image' || adapter === 'native-detector';
   const translator = translationModel(row.id);
-  const review = adapter === 'native-ocr' && ['hayai-ocr-v2', 'manga-ocr'].includes(row.id)
+  const review = adapter === 'native-ocr' && ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'manga-ocr'].includes(row.id)
     || adapter === 'native-translator' && translator && translationRuntimeOf(translator) === 'pytorch';
-  if (!workflow && !review) return undefined;
-  const python = envVar(workflow ? 'SCAN_WORKFLOW_PYTHON' : 'SCAN_REVIEW_PYTHON') || (adapter === 'native-translator' ? envVar('SCAN_TRANSLATION_PYTHON') : undefined);
-  const environment = python ? resolve(python, '../..') : resolve(process.env.SCAN_ROOT || process.cwd(), workflow ? '.venv-workflow' : '.venv-review');
+  const paddle = adapter === 'native-ocr' && row.id === 'pp-ocrv5-korean';
+  if (!workflow && !review && !paddle) return undefined;
+  const python = envVar(paddle ? 'PADDLEOCR_PYTHON' : workflow ? 'SCAN_WORKFLOW_PYTHON' : 'SCAN_REVIEW_PYTHON') || (adapter === 'native-translator' ? envVar('SCAN_TRANSLATION_PYTHON') : undefined);
+  const environment = python ? resolve(python, '../..') : resolve(process.env.SCAN_ROOT || process.cwd(), paddle ? '.venv-ocr' : workflow ? '.venv-workflow' : '.venv-review');
   try { return fingerprint(JSON.parse(readFileSync(join(environment, '.komatose-runtime.json'), 'utf8'))); }
   catch { return 'legacy'; }
 }
@@ -174,7 +177,7 @@ export function rowTaskFingerprints(row: ModelRow): Record<string, string> {
     try { const s = statSync(path); return [path, s.size, s.mtimeMs]; } catch { return [path, 'missing']; }
   });
   const weights = [row.managedLaunch?.modelPath, row.managedLaunch?.projectorPath, row.managedLaunch?.templatePath].filter(Boolean).map(path => {
-    try { const s = statSync(path!); return [path, s.size, s.mtimeMs]; } catch { return [path, 'missing']; }
+    try { const s = statSync(expandHomePath(path!)); return [path, s.size, s.mtimeMs]; } catch { return [path, 'missing']; }
   });
   const directoryArtifacts: unknown[] = [];
   const installationRoot = process.env.SCAN_DATA_DIR || join(process.env.SCAN_ROOT || process.cwd(), 'data');
@@ -199,6 +202,18 @@ export function rowTaskFingerprints(row: ModelRow): Record<string, string> {
     visit(path);
   }
   const adapterId = builtinAdapterId(row, pkg);
+  if (adapterId === 'systemone') {
+    const base = envVar('SCAN_DECIDER_RUNTIME_DIR') || join(installationRoot, 'runtimes/llama-decider');
+    const models = join(envVar('SCAN_DECIDER_MODELS_DIR') || join(installationRoot, 'models/deciders'), 'd1-3b');
+    try {
+      for (const name of readdirSync(join(base, 'build/bin')).filter(name => name.includes('.so'))) {
+        const path = join(base, 'build/bin', name); const s = statSync(path); directoryArtifacts.push([path, s.size, s.mtimeMs]);
+      }
+    } catch { /* Runtime may not be installed yet. */ }
+    for (const path of [...(row.managedLaunch?.executable ? [expandHomePath(row.managedLaunch.executable)] : []), join(base, 'installed.json'), join(base, 'build/bin/llama-server'), join(models, 'installed.json'), join(models, 'd1-3B-Q8_0.gguf'), join(models, 'mmproj-d1-3B-F16.gguf')]) {
+      try { const s = statSync(path); directoryArtifacts.push([path, s.size, s.mtimeMs]); } catch { directoryArtifacts.push([path, 'missing']); }
+    }
+  }
   const config = { pythonRuntime: pythonRuntimeFingerprint(adapterId, row), directoryArtifacts, weights, slug: row.slug, runtime: row.runtime, access: row.access, cliAdapter: row.cliAdapter,
     http: row.http, launch: row.managedLaunch, preset: row.requestPreset || "generic", revision: row.modelRevision,
     environment: Object.fromEntries((pkg?.manifest.environment || []).map(name => [name, envVar(name)])),
@@ -227,8 +242,9 @@ export function packageRows(existing: ModelRow[]): ModelRow[] {
     const general = ['openai', 'local-chat', 'cli'].includes(adapter || '');
     const qualificationAdapter = general ? 'general' : adapter === 'native-ocr' ? 'ocr' : adapter === 'native-translator' ? 'translator' : 'direct';
     const backend = String(pkg?.manifest.config?.backend || row.id);
-    const implementedTasks = general ? MODEL_TASK_IDS.filter(task => !['textMask', 'segmentBubble', 'inpaint', 'cleaning'].includes(task)
+    const implementedTasks = general ? MODEL_TASK_IDS.filter(task => !['sourceDecide', 'textMask', 'segmentBubble', 'inpaint', 'cleaning'].includes(task)
       && (adapter !== 'cli' || task !== 'detect')).concat(adapter === 'cli' && (row.cliAdapter || pkg?.manifest.config?.provider) === 'codex' ? ['cleaning'] : [])
+      : adapter === 'systemone' ? ['sourceDecide'] as const
       : adapter === 'native-ocr' ? ['vision', 'sourceReview'] as const
       : adapter === 'native-translator' ? ['translate'] as const
       : adapter === 'browser-proofreader' ? ['pageImageProofread'] as const
@@ -240,6 +256,7 @@ export function packageRows(existing: ModelRow[]): ModelRow[] {
     const capabilityFingerprints = Object.fromEntries(CAPABILITIES.map(({ id }) => [id, fingerprint({
       tasks: taskFingerprints, capability: id, version: CAPABILITY_VERSION,
     })]));
-    return { ...row, qualificationAdapter, implementedTasks: [...implementedTasks], taskFingerprints, capabilityFingerprints };
+    const translator = adapter === 'native-translator' ? translationModel(row.id) : undefined;
+    return { ...row, ...(translator ? { languages: [...translator.languages] } : {}), qualificationAdapter, implementedTasks: [...implementedTasks], taskFingerprints, capabilityFingerprints };
   });
 }

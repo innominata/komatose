@@ -29,8 +29,9 @@ import {
 	startDescribePages,
 	undoPageOp
 } from '$lib/server/pageEdit';
-import { previewReslice, startReslice, ResliceError } from '$lib/server/reslice';
-import { readUndoLog } from '$lib/server/pageUndo';
+import { previewReslice, startReslice, parseResliceSize, ResliceError } from '$lib/server/reslice';
+import { readUndoLog, pageUndoSummary } from '$lib/server/pageUndo';
+import { listImages } from '$lib/server/queries';
 import { deletePages, extractPages } from '$lib/server/pageSelection';
 import type { RequestHandler } from './$types';
 
@@ -48,7 +49,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		const user = requireUser(locals.user);
 		const { episode, series } = await requireEpisodeAccess(user, params.eid);
 		const undo = await readUndoLog(series.slug, episode.slug);
-		return json({ ok: true, undoCount: undo.length });
+		return json({ ok: true, undoCount: undo.length, undo: pageUndoSummary(undo.at(-1), await listImages(episode.id)) });
 	} catch (e) {
 		return fail(statusOf(e),messageOf(e),e&&typeof e==='object'&&'current' in e?{current:e.current}:undefined);
 	}
@@ -87,7 +88,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			return json(
 				await previewReslice(
 					ctx,
-					Array.isArray(body.imageIds) ? (body.imageIds as string[]) : undefined
+					Array.isArray(body.imageIds) ? (body.imageIds as string[]) : undefined,
+					parseResliceSize(body)
 				)
 			);
 		}
@@ -98,6 +100,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				: undefined;
 			return json(
 				startReslice(ctx, {
+					...parseResliceSize(body),
 					imageIds: Array.isArray(body.imageIds) ? (body.imageIds as string[]) : undefined,
 					cuts
 				}),
@@ -122,7 +125,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		if (op === 'add-credits') return json({ ok: true, ...await addSeriesCredits(ctx) });
 
 		if (op === 'undo') {
-			const result = await undoPageOp(ctx);
+			if (typeof body.undoToken !== 'string') return fail(409, 'Review the next undo action and confirm it before undoing.');
+			const result = await undoPageOp(ctx, body.undoToken);
 			return json({ ok: true, ...result });
 		}
 		if (op === 'crop') {

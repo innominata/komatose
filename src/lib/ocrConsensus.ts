@@ -9,7 +9,12 @@ export type OcrReading = {
   error?: string;
   translation?: string;
 };
-export type OcrConsensus = { agreed: boolean; source: string; readings: OcrReading[] };
+export type OcrConsensus = { agreed: boolean; source: string; readings: OcrReading[]; decision?: import('./decider').TranscriptionDecision };
+
+/** A decider resolution is distinct from the OCR plurality evidence. */
+export function ocrResolutionAccepted(result: OcrConsensus): boolean {
+  return result.decision ? result.decision.status === 'accepted' : result.agreed;
+}
 
 /** Crop/OCR failed; the region still exists so the disagreement can be reviewed. */
 export function failedOcrConsensus(error: string, modelIds: string[] = OCR_RECOGNIZERS.map((m) => m.id)): OcrConsensus {

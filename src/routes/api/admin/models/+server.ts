@@ -140,6 +140,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 				name: typeof body.name === 'string' ? body.name : undefined,
 				slug: typeof body.slug === 'string' ? body.slug : undefined,
 				disabled: typeof body.disabled === 'boolean' ? body.disabled : undefined,
+				autoRun: typeof body.autoRun === 'boolean' ? body.autoRun : undefined,
 				operations: Array.isArray(body.operations) ? (body.operations as ProviderOperation[]) : undefined,
 				roles: Array.isArray(body.roles) ? ROLES.filter((role) => (body.roles as unknown[]).includes(role)) : undefined,
 				http: body.http && typeof body.http === 'object' ? (body.http as { baseUrl: string; apiKeyEnv: string }) : undefined,

@@ -1,4 +1,4 @@
-import { capabilityPassed, CAPABILITY_REQUIREMENTS, type CapabilityId, type CapabilitySample } from './modelCapabilities';
+import { qualificationAllowsUse, qualificationCurrent, CAPABILITY_REQUIREMENTS, type CapabilityId, type CapabilitySample } from './modelCapabilities';
 import { MODEL_TASK_IDS, type ProbeOutcome } from './modelTasks';
 /**
  * Named translation-assistant rows. Saved TaskEngine.engine is a row id
@@ -98,6 +98,7 @@ export const MODEL_RUNTIMES = [
 	'sugoi-ja-en',
 	'translategemma',
 	'hayai',
+	'pp-ocrv5',
 	'paddleocr-vl',
 	'manga-ocr',
 ] as const;
@@ -146,6 +147,8 @@ export type ModelRow = {
 	seeded: boolean;
 	operationsLocked: boolean;
 	disabled?: boolean;
+	/** Opt non-local models into automatic transcription and translation review. */
+	autoRun?: boolean;
 	probes?: Partial<Record<ProviderOperation, ProbeSample>>;
 };
 
@@ -221,13 +224,22 @@ export const SEED_ROWS: ModelRow[] = [
 		languages: ['japanese'],
 	}),
 	row({
+		id: 'hy-mt2-1.8b-q4',
+		name: 'Hy-MT2 1.8B Q4',
+		slug: 'hy-mt2-1.8b-q4',
+		access: 'local_http',
+		runtime: 'hy-mt',
+		operations: [...CHAT_AND_CLI_OPERATIONS],
+		languages: ['japanese', 'korean'],
+	}),
+	row({
 		id: 'hy-mt2-7b-q4',
 		name: 'Hy-MT2 7B Q4',
 		slug: 'hy-mt2-7b-q4',
 		access: 'local_http',
 		runtime: 'hy-mt',
 		operations: [...CHAT_AND_CLI_OPERATIONS],
-		languages: ['japanese'],
+		languages: ['japanese', 'korean'],
 	}),
 	row({
 		id: 'imsbee-ko-en-translator',
@@ -272,7 +284,7 @@ export const SEED_ROWS: ModelRow[] = [
 		access: 'local_http',
 		runtime: 'translategemma',
 		operations: [...CHAT_AND_CLI_OPERATIONS],
-		languages: ['japanese'],
+		languages: ['japanese', 'korean'],
 	}),
 	row({
 		id: 'translategemma-12b-q4',
@@ -281,7 +293,7 @@ export const SEED_ROWS: ModelRow[] = [
 		access: 'local_http',
 		runtime: 'translategemma',
 		operations: [...CHAT_AND_CLI_OPERATIONS],
-		languages: ['japanese'],
+		languages: ['japanese', 'korean'],
 	}),
 	row({
 		id: 'hayai-ocr-v2',
@@ -290,6 +302,24 @@ export const SEED_ROWS: ModelRow[] = [
 		access: 'local_http',
 		runtime: 'hayai',
 		operations: [...CHAT_AND_CLI_OPERATIONS],
+	}),
+	row({
+		id: 'hayai-ocr-v2.5-nova',
+		name: 'Hayai OCR v2.5 Nova',
+		slug: 'hayai-ocr-v2.5-nova',
+		access: 'local_http',
+		runtime: 'hayai',
+		operations: [...CHAT_AND_CLI_OPERATIONS],
+		languages: ['japanese', 'korean'],
+	}),
+	row({
+		id: 'pp-ocrv5-korean',
+		name: 'PP-OCRv5 Korean',
+		slug: 'pp-ocrv5-korean',
+		access: 'local_http',
+		runtime: 'pp-ocrv5',
+		operations: [...CHAT_AND_CLI_OPERATIONS],
+		languages: ['korean'],
 	}),
 	row({
 		id: 'manga-ocr',
@@ -362,13 +392,14 @@ export function rowHasOperation(row: ModelRow, operation: ProviderOperation | re
 		if (row.implementedTasks && !row.implementedTasks.includes(item)) return false;
 		if (item === 'sourceReview') return rowHasOperation(row, 'vision');
 		const required = row.qualificationAdapter && row.qualificationAdapter !== 'direct' ? CAPABILITY_REQUIREMENTS[item] : undefined;
-		if (required) return required.every(id => capabilityPassed(row, id));
-		const probe = row.probes?.[item];
-		return probe?.ok === true && Boolean(probe.fingerprint) && probe.fingerprint === row.taskFingerprints?.[item];
+		if (required) return required.every(id => qualificationAllowsUse(row, id))
+			|| (!!row.probes?.[item] && !qualificationCurrent(row, item)
+				&& required.every(id => !qualificationCurrent(row, id) || qualificationAllowsUse(row, id)));
+		return qualificationAllowsUse(row, item);
 	});
 }
 
-/** Jobs enabled by current qualification evidence. */
+/** Jobs enabled by current passes or historical checks with a warning. */
 export function allowedOperations(row: ModelRow): ProviderOperation[] {
 	const candidates = new Set<ProviderOperation>(MODEL_TASK_IDS);
 	for (const key of Object.keys(row.probes ?? {})) candidates.add(key as ProviderOperation);
@@ -376,7 +407,7 @@ export function allowedOperations(row: ModelRow): ProviderOperation[] {
 }
 
 export function isOcrSpecialist(row: ModelRow): boolean {
-	return row.runtime === 'hayai' || row.runtime === 'paddleocr-vl' || row.runtime === 'manga-ocr';
+	return row.runtime === 'hayai' || row.runtime === 'paddleocr-vl' || row.runtime === 'manga-ocr' || row.runtime === 'pp-ocrv5';
 }
 
 export function isTranslationSpecialist(row: ModelRow): boolean {
@@ -448,6 +479,7 @@ function mergeSeedWithOverlay(seed: ModelRow, extra: Partial<ModelRow>): ModelRo
 	if (typeof extra.name === 'string' && extra.name.trim()) next.name = extra.name.trim();
 	if (typeof extra.slug === 'string' && extra.slug.trim()) next.slug = extra.slug.trim();
 	if (typeof extra.disabled === 'boolean') next.disabled = extra.disabled;
+	if (typeof extra.autoRun === 'boolean') next.autoRun = extra.autoRun;
 	if (Array.isArray(extra.roles)) next.roles = extra.roles.filter(validRole);
 	// Seeded models are task-agnostic: a saved overlay can no longer put a task
 	// box back on one. The per-task test decides what it can do.
@@ -507,6 +539,7 @@ function overlayRowFromPartial(extra: Partial<ModelRow> & { id: string }, taken:
 		seeded: false,
 		operationsLocked,
 		disabled: extra.disabled === true,
+		autoRun: extra.autoRun === true,
 		probes: extra.probes,
 		probeHistory: extra.probeHistory,
 		capabilities: extra.capabilities,
@@ -736,6 +769,7 @@ export function pickerSeedEngines(rows: ModelRow[] = ALL_SEED_ROWS): Array<{
 	group: ReturnType<typeof accessGroup>;
 	operations: ProviderOperation[];
 	access: ModelAccess;
+	autoRun?: boolean;
 }> {
 	return rows.filter((row) => !row.disabled).map((row) => ({
 		id: row.id,
@@ -745,6 +779,7 @@ export function pickerSeedEngines(rows: ModelRow[] = ALL_SEED_ROWS): Array<{
 		group: accessGroup(row),
 		operations: allowedOperations(row),
 		access: row.access,
+		autoRun: row.autoRun,
 	}));
 }
 

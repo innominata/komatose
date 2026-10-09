@@ -9,9 +9,10 @@ Other task models retain their existing choices.
 | --- | --- | --- | --- |
 | `cat-translate-7b-q4` | CAT-Translate 7B Q4_K_M | Japanese → English | mradermacher imatrix Q4 of cyberagent/CAT-Translate-7b; installer provided |
 | `hy-mt2-manga-v5` | Hy-MT2 1.8B JP Manga Finetune v5 | Japanese → English | Publisher's Q4_K_M GGUF; installer provided |
-| `hy-mt2-7b-q4` | Hy-MT2 7B Q4_K_M | Japanese → English | Tencent's stock Hy-MT2-7B GGUF; installer provided |
-| `translategemma-4b-q4` | TranslateGemma 4B Q4_K_M | Japanese → English | mradermacher Q4_K_M GGUF of google/translategemma-4b-it; installer provided |
-| `translategemma-12b-q4` | TranslateGemma 12B Q4_K_M | Japanese → English | mradermacher Q4_K_M GGUF of google/translategemma-12b-it; installer provided |
+| `hy-mt2-1.8b-q4` | Hy-MT2 1.8B Q4_K_M | Japanese/Korean → English | Tencent official GGUF; installer provided |
+| `hy-mt2-7b-q4` | Hy-MT2 7B Q4_K_M | Japanese/Korean → English | Tencent's stock Hy-MT2-7B GGUF; installer provided |
+| `translategemma-4b-q4` | TranslateGemma 4B Q4_K_M | Japanese/Korean → English | mradermacher Q4_K_M GGUF of google/translategemma-4b-it; installer provided |
+| `translategemma-12b-q4` | TranslateGemma 12B Q4_K_M | Japanese/Korean → English | mradermacher Q4_K_M GGUF of google/translategemma-12b-it; installer provided |
 | `shisa-v2.1-qwen3-8b-q4` | Shisa v2.1 Qwen3 8B Q4_K_M | Japanese → English | mradermacher Q4_K_M GGUF of shisa-ai/shisa-v2.1-qwen3-8b; installer provided |
 | `sugoi-v4-ja-en` | Sugoi v4 Ja→En | Japanese → English | CTranslate2 packaging of Ming Shiba's Sugoi v4; installer provided. NTT license |
 | `imsbee-ko-en-translator` | Imsbee Ko→En Translator (sentence-base) | Korean → English | Publisher's 1.07 GB PyTorch checkpoint; installer provided |
@@ -37,6 +38,7 @@ packages Ming Shiba's Sugoi v4 under that repo's NTT license. Both reject Korean
 ```bash
 python3 scripts/install-translation-models.py --model cat-translate-7b-q4
 python3 scripts/install-translation-models.py --model hy-mt2-manga-v5
+python3 scripts/install-translation-models.py --model hy-mt2-1.8b-q4
 python3 scripts/install-translation-models.py --model hy-mt2-7b-q4
 python3 scripts/install-translation-models.py --model translategemma-4b-q4
 python3 scripts/install-translation-models.py --model translategemma-12b-q4
@@ -45,7 +47,7 @@ python3 scripts/install-translation-models.py --model sugoi-v4-ja-en
 python3 scripts/install-translation-models.py --model imsbee-ko-en-translator
 ```
 
-Hy-MT downloads the publisher's 1.13 GB GGUF, pinned to revision
+Hy-MT manga v5 downloads the publisher's 1.13 GB GGUF, pinned to revision
 `e17bc6a8dd92ddf930bd7858ceb916117ee5f916`. Shisa downloads the 5.03 GB
 `shisa-v2.1-qwen3-8b.Q4_K_M.gguf` from `mradermacher/shisa-v2.1-qwen3-8b-GGUF`,
 pinned to revision `9b9187f69adca28b8e2b9490b2c151fcb85c0df6`. Sugoi downloads the
@@ -63,10 +65,11 @@ there. Point `SCAN_TRANSLATION_PYTHON` or `SCAN_REVIEW_PYTHON` at that interpret
 if it is not `.venv-review/bin/python`. Use **Refresh models** after installation.
 
 Managed translators load on demand, serialize requests, keep only one translation
-model loaded, and unload after five idle minutes. CPU is the default so installation
-does not change the existing GPU allocation. Set `SCAN_TRANSLATION_DEVICE` to a
-llama.cpp device such as `Vulkan1` for Hy-MT if that device has capacity, or `cuda`
-for the PyTorch Korean translator. Changing managed models unloads the previous
+model loaded, and unload after five idle minutes. Each translator uses its saved
+compute-device choice, with Auto choosing an available device. `SCAN_TRANSLATION_DEVICE`
+can set the Auto choice for GGUF translators (for example `Vulkan2` on a machine
+with that device, or `none` for CPU). The PyTorch Korean translator uses its own
+CPU/CUDA/ROCm device settings. Changing managed models unloads the previous
 translator; the primary Qwen and OCR services are independent.
 
 Optional settings:
@@ -114,12 +117,12 @@ with a warning tint when the current draft does not use that English.
 Hy-MT manga v5 uses the publisher's terminology block with the series glossary, its native
 Japanese-to-English instruction, and recommended sampling (`temperature=0.15`,
 `top_k=20`, `top_p=0.6`, `min_p=0`, `repeat_penalty=1.05`). Korean input is rejected.
-Stock Hy-MT2 7B uses Tencent's own instruction and sampling (`temperature=0.7`,
+Stock Hy-MT2 1.8B and 7B support Japanese and Korean and use Tencent's own instruction and sampling (`temperature=0.7`,
 `top_k=20`, `top_p=0.8`, `repeat_penalty=1.05`), with the glossary in that model's
 terminology block. CAT-Translate uses CyberAgent's instruction, `Translate the following Japanese text into English. Output only the translation`, and the source line, decoded greedily. Without that second sentence, short lines repeat until the output limit. A glossary ahead of the instruction makes it repeat the instruction instead of translating. TranslateGemma sends the source line alone and is decoded greedily. llama.cpp
 cannot compile Google's template, so the server uses
 [translategemma-ja-en.jinja](../ocr/translategemma-ja-en.jinja), which emits the
-same Japanese-to-English instruction from a plain user string.
+same instruction from a plain user string, with Japanese (`ja`) or Korean (`ko`) selected per request. The server can switch chapter languages without reloading the model. Korean OCR that puts each Hangul syllable on its own line is joined before translation; the saved transcription is preserved.
 Shisa is a Qwen3 chat model, so it gets a system message that forbids extra
 scene-writing, tight sampling (`temperature=0.15`, `top_k=20`, `top_p=0.6`), and
 a 96-token cap. llama-server applies the Qwen3 chat template with `--reasoning off`.
@@ -159,7 +162,10 @@ node --import tsx scripts/smoke-translation-models.ts hy-mt2-manga-v5
 node --import tsx scripts/smoke-translation-models.ts imsbee-ko-en-translator
 ```
 
-The smoke test uses a temporary database and never modifies chapter text. Hy-MT was
+The smoke test uses a temporary database and never modifies chapter text. On 9 October
+2026, stock HY-MT2 1.8B/7B and TranslateGemma 4B/12B passed five Korean controls
+(short dialogue, a medical sentence, multiline dialogue and stacked Hangul) and
+two Japanese controls with real local inference. Hy-MT manga v5 was
 tested with real local inference on two Japanese samples, including glossary terms.
 Imsbee's adapter is covered by fixtures; run the smoke test after installing the
 checkpoint to check real Korean inference. Smoke output establishes working
@@ -171,3 +177,5 @@ and native translation requests/results in
 [specialistTranslation.ts](../src/lib/server/specialistTranslation.ts).
 The Korean worker is [ko_en_translate.py](../ocr/ko_en_translate.py). The Sugoi
 worker is [sugoi_translate.py](../ocr/sugoi_translate.py).
+
+Repeat Korean inference checks with `node --import tsx scripts/smoke-translation-models.ts hy-mt2-1.8b-q4 korean` (substitute the 7B or either TranslateGemma ID). The optional third argument also accepts `japanese`.

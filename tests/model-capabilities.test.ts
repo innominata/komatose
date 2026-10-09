@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CAPABILITIES, CAPABILITY_REQUIREMENTS, qualificationChecks, qualificationQueue, type CapabilityId } from '../src/lib/modelCapabilities';
+import { CAPABILITIES, CAPABILITY_REQUIREMENTS, qualificationChecks, qualificationQueue, qualificationWarnings, type CapabilityId } from '../src/lib/modelCapabilities';
 import { rowHasOperation, allowedOperations, type ModelRow } from '../src/lib/modelRegistry';
 import { MODEL_TASK_IDS } from '../src/lib/modelTasks';
 
@@ -106,7 +106,7 @@ test('legacy language passes do not qualify general models; browser services ret
   assert.deepEqual(qualificationChecks(browser), ['pageImageProofread']);
 });
 
-test('evidence survives reloads and transient failures; validation failures and config changes revoke eligibility', async () => {
+test('current failures block use; stale checks warn and configuration changes still invalidate queued requests', async () => {
   let row = general();
   row = store.saveCapabilityResults(row.id, CAPABILITIES.map(({ id }) => pass(row, id)));
   assert.equal(rowHasOperation(row, 'pageImageProofread'), true);
@@ -117,7 +117,8 @@ test('evidence survives reloads and transient failures; validation failures and 
   assert.equal(rowHasOperation(row, 'sourceReview'), true);
   row = store.saveCapabilityResults(row.id, [pass(row, 'conversation')]);
   store.upsertRegistryRow({ ...row, modelRevision: 'changed' });
-  assert.equal(rowHasOperation(general(), 'translate'), false);
+  assert.equal(rowHasOperation(general(), 'translate'), true);
+  assert.ok(qualificationWarnings(general()).some(warning => warning.includes('Translation')));
   let invoked = false;
   await assert.rejects(executeModelTask(row, 'chapterReview', {}, { invoke: async () => { invoked = true; return {}; } }), /changed while this request was queued/);
   assert.equal(invoked, false);
@@ -150,6 +151,7 @@ test('admin API saves shared results and rejects removed language-job checks', a
 
 test('an unqualified default model is tested and recorded before the requested action', async () => {
   const { setModelDefault } = await import('../src/lib/server/modelDefaultStore');
+  store.upsertRegistryRow({ ...general(), capabilities: {}, probes: {} });
   const row = general();
   const boxes = [{ x: 0, y: 0, w: 1, h: 1, source: '次', lineType: '""', literal: '', translation: '', reasoning: '' }];
   setModelDefault('translate', row.id);
@@ -231,4 +233,29 @@ test('cancelled capability requests retain their current evidence and record the
   row = store.saveCapabilityResults(row.id, result.samples);
   assert.equal(rowHasOperation(row, 'chapterReview'), true);
   assert.equal(row.capabilityHistory!.at(-1)!.outcome, 'cancelled');
+});
+
+test('stale successes and failures remain executable without an automatic retest', async () => {
+  const originalFetch = globalThis.fetch;
+  let retests = 0;
+  globalThis.fetch = async () => { retests++; throw new Error('A stale check must not be rerun here'); };
+  try {
+    for (const ok of [true, false]) {
+      const row = store.saveCapabilityResults(general().id, [{ ...pass(general(), 'translation'), fingerprint: 'old-code', ok, outcome: ok ? 'passed' : 'failed_validation' }]);
+      assert.equal(rowHasOperation(row, 'translate'), true);
+      assert.ok(qualificationWarnings(row).some(warning => warning.includes('Translation')));
+      const boxes = [{ source: '다음', x: 0, y: 0, w: 1, h: 1, lineType: '""', literal: '', translation: '', reasoning: '' }];
+      const result = await executeModelTask(row, 'translate', { boxes }, { invoke: async () => [{ translation: 'Next.' }] });
+      assert.equal(result[0].translation, 'Next.');
+    }
+    assert.equal(retests, 0);
+    const reader = store.findRegistryRow('reader')!;
+    const direct = { ...reader, qualificationAdapter: 'direct' as const, probes: { vision: { operation: 'vision' as const, ok: false, at: 1, fingerprint: 'old-code' } } };
+    assert.equal(rowHasOperation(direct, 'vision'), true);
+    assert.equal(rowHasOperation(direct, 'translate'), false);
+    const currentFailed = { ...general(), capabilities: { translation: { ...pass(general(), 'translation'), ok: false, outcome: 'failed_validation' as const } } };
+    assert.equal(rowHasOperation(currentFailed, 'translate'), false);
+    assert.equal(rowHasOperation({ ...currentFailed, probes: { translate: { operation: 'translate', fingerprint: 'legacy', ok: true, at: 1 } } }, 'translate'), false,
+      'a current failure cannot be bypassed by an older job check');
+  } finally { globalThis.fetch = originalFetch; }
 });

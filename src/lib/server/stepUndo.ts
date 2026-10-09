@@ -2,7 +2,7 @@ import { pageStepStamp, type PageData, type PageStep, type RegionData } from "..
 import { sqlite } from "./db";
 import { unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
 import { broadcast } from "./realtime";
-import { getDoc, WorkflowError } from "./workflowStore";
+import { getDoc, putDoc, WorkflowError } from "./workflowStore";
 
 export type PageHistoryStep = PageStep;
 
@@ -28,7 +28,9 @@ export function forgetPageHistory(episodeId: string, imageId: string, step: stri
   return { ok: true, removed };
 }
 
-export function completeOutstandingPages(episodeId: string) {
+export function completeOutstandingPages(episodeId: string, step?: PageStep) {
+  if (step !== undefined && !STEPS.has(step)) throw new WorkflowError("Unknown workflow step");
+  const steps = step ? [step] : STEPS;
   const images = sqlite
     .prepare("SELECT id FROM images WHERE episode_id=? ORDER BY sort_order, id")
     .all(episodeId) as { id: string }[];
@@ -36,12 +38,32 @@ export function completeOutstandingPages(episodeId: string) {
   const removed = sqlite.transaction(() => {
     let count = 0;
     for (const image of images)
-      for (const step of STEPS) if (rememberPageStep(episodeId, image.id, step, false)) count += 1;
+      for (const step of steps) {
+        if (step === 'clean') finishCleaning(episodeId, image.id);
+        if (rememberPageStep(episodeId, image.id, step, false)) count += 1;
+      }
     sqlite.prepare("UPDATE episodes SET revision=revision+1 WHERE id=?").run(episodeId);
     return count;
   })();
   broadcast(episodeId, { type: "workflow:changed", id: `page:${images[0].id}`, revision: 0 });
   return { ok: true, removed, pages: images.length };
+}
+
+/** Approve and apply saved artwork across a chapter, retaining undo history. */
+export function approveAllCleaning(episodeId: string): number {
+  return sqlite.transaction(() => {
+    const images = sqlite.prepare("SELECT id FROM images WHERE episode_id=?").all(episodeId) as { id: string }[];
+    let approved = 0;
+    for (const image of images) {
+      const doc = getDoc<PageData>(`page:${image.id}`, {});
+      if (!doc.data.prepared && !doc.data.cleanBase && !doc.data.cleaned) continue;
+      const data = finishedCleaning(doc.data);
+      if (JSON.stringify(data) === JSON.stringify(doc.data)) continue;
+      putDoc(episodeId, doc.id, data, doc.revision);
+      approved++;
+    }
+    return approved;
+  })();
 }
 
 function clearPageStep(
@@ -58,6 +80,7 @@ function clearPageStep(
   ).map((row) => row.id);
   let count = 0;
   if (step === "clean") {
+    finishCleaning(episodeId, imageId, hashes);
     count += blankDoc(episodeId, `page:${imageId}`, hashes);
     count += deleteRevisions(episodeId, [`page:${imageId}`], hashes);
   }
@@ -70,6 +93,34 @@ function clearPageStep(
     count += deleteRevisions(episodeId, commentIdsFor(lineIds).map((id) => `comment:${id}`), hashes);
   count += rememberPageStep(episodeId, imageId, step, bump) ? 1 : 0;
   return count;
+}
+
+/** Apply and approve the visible artwork before discarding masks and stamping completion. */
+function finishCleaning(episodeId: string, imageId: string, hashes: string[] = []) {
+  const row = sqlite.prepare('SELECT data FROM workflow_docs WHERE id=? AND episode_id=?')
+    .get(`page:${imageId}`, episodeId) as { data: string } | undefined;
+  if (!row) return;
+  const data = finishedCleaning(JSON.parse(row.data) as PageData, hashes);
+  sqlite.prepare('UPDATE workflow_docs SET data=? WHERE id=? AND episode_id=?')
+    .run(JSON.stringify(data), `page:${imageId}`, episodeId);
+}
+
+function finishedCleaning(page: PageData, hashes: string[] = []): PageData {
+  const data = { ...page };
+  if (data.cleaned) {
+    data.cleanBase = data.cleaned;
+    delete data.cleaned;
+    delete data.cleanMethod;
+    delete data.backend;
+  }
+  data.cleanApproved = true;
+  if (data.mask) collectHashes(data.mask, hashes);
+  delete data.mask;
+  delete data.maskDiagnostics;
+  delete data.strokes;
+  delete data.expansion;
+  data.maskApproved = false;
+  return data;
 }
 
 export function rememberPageSteps(episodeId: string, imageId: string) {

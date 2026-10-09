@@ -90,8 +90,7 @@ try {
     return response.json();
   };
   const st = async () => (await context.request.get(workflow)).json();
-  // Clear every readiness blocker so the panel's "Mark every page complete"
-  // becomes the only thing left, as the export readiness rules require.
+  // Resolve content blockers before validating a finished export.
   // The fixture ships without fonts: upload one and point every line type at it.
   const fontUpload = await context.request.post(workflow, {
     multipart: {
@@ -127,7 +126,7 @@ try {
   await op({ action: "renumber" });
   await page.reload();
   await page.getByRole("heading", { name: "Export the chapter" }).waitFor();
-  const markAll = page.getByRole("button", { name: "Mark every page complete", exact: true });
+  const markAll = page.getByRole("button", { name: "Mark all steps done", exact: true });
   await expect(markAll).toBeEnabled({ timeout: 15000 });
   page.once("dialog", (dialog) => dialog.accept());
   await markAll.click();

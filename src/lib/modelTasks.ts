@@ -1,5 +1,8 @@
+import { validateTranscriptionChoice } from './decider';
+
 /** Application task contracts. No model names or capability declarations belong here. */
 export const MODEL_TASKS = [
+  { id: 'sourceDecide', label: 'Decide Transcription', group: 'Transcription', description: 'Choose the exact visible reading from OCR candidates using the crop.' },
   { id: 'translate', label: 'Translate', group: 'Translation', description: 'Translate source text into English.' },
   { id: 'alternatives', label: 'Alternative Translations', group: 'Translation', description: 'Suggest other phrasings for a translation.' },
   { id: 'vision', label: 'Read Text / OCR', group: 'Transcription', description: 'Read the original text from a crop.' },
@@ -39,6 +42,7 @@ export function validateTaskOutput(task: ModelTaskId, output: unknown, schema?: 
   const object = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
   let valid = false;
   switch (task) {
+    case 'sourceDecide': try { validateTranscriptionChoice(output); valid = true; } catch { valid = false; } break;
     case 'translate': valid = Array.isArray(value) && value.length > 0 && value.every(v => object(v) && text(v.translation)); break;
     case 'vision': valid = object(value) && typeof value.source === 'string'; break;
     case 'sourceReview': valid = object(value) && ['readable', 'uncertain', 'unreadable', 'unassessed'].includes(value.status)

@@ -1,4 +1,4 @@
-import type { OcrConsensus } from "../ocrConsensus";
+import { ocrResolutionAccepted, type OcrConsensus } from "../ocrConsensus";
 import { normalizeTranslation } from "../translationText";
 import type { LineRow } from "../types";
 import { db, sqlite } from "./db";
@@ -6,7 +6,7 @@ import { lines } from "./db/schema";
 import { eq } from "drizzle-orm";
 import { toLine } from "./queries";
 import { broadcast } from "./realtime";
-import { applyLonePendingSource, ocrReadingsToSuggest, ocrSuggestionReason } from "./ocrConsensus";
+import { deciderContextCurrent, saveTranscriptionDecision, applyLonePendingSource, ocrReadingsToSuggest, ocrSuggestionReason } from "./ocrConsensus";
 import { ocrTranslatorLabel } from "./ocrReview";
 import { suggest } from "./workflowStore";
 
@@ -61,8 +61,8 @@ export function saveFillMissingSource(
   return sqlite.transaction(() => {
     const row = db.select().from(lines).where(eq(lines.id, line.id)).get();
     if (!row || row.episodeId !== episodeId || row.sourceState === "ignored") return;
-    if ((row.source || "").trim()) return toLine(row);
-    if (result.agreed && result.source.trim()) {
+    if (!deciderContextCurrent(line, result) || JSON.stringify([row.imageId, row.x, row.y, row.w, row.h]) !== JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]) || (row.source || "").trim() || row.status === 'approved' || row.revision !== (line.revision ?? 0)) return toLine(row);
+    if (ocrResolutionAccepted(result) && result.source.trim()) {
       sqlite
         .prepare(
           `UPDATE lines SET source=?,source_state='read',ocr_confidence=NULL,updated_at=?
@@ -72,7 +72,8 @@ export function saveFillMissingSource(
         .run(result.source, Date.now(), row.id, episodeId);
     }
     let saved = toLine(db.select().from(lines).where(eq(lines.id, line.id)).get()!);
-    const applied = result.agreed && !!(saved.source || "").trim();
+    const applied = ocrResolutionAccepted(result) && !!(saved.source || "").trim();
+    saveTranscriptionDecision(episodeId, saved, result, applied);
     const readings = ocrReadingsToSuggest(result, applied);
     for (const reading of readings) {
       suggest(

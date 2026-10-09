@@ -1,12 +1,13 @@
 <script lang="ts">
   import "./studio-controls.css";
+  import ExportDocuments from './ExportDocuments.svelte';
   import type { ImageRow } from "$lib/types";
   import {
     exportBlockers,
     exportRequiresCompletion,
     groupReadinessIssues,
-    onlyStepCompleteBlockers,
     PAGE_STEPS,
+    pageStepLabel,
     type PageData,
     type PageStep,
     type ReadinessIssue,
@@ -14,6 +15,8 @@
   } from "$lib/workflow";
 
   let {
+    seriesId,
+    episodeId,
     issues,
     canClean,
     busy,
@@ -32,6 +35,7 @@
     onapprovetranslations,
     onkeeplayouts,
     onmarkall,
+    onapproveeverything,
     onexport,
     onpreviewshare,
     onissue,
@@ -39,6 +43,8 @@
     pageDocs = {},
     stepDone = () => false,
   }: {
+    seriesId: string;
+    episodeId: string;
     issues: ReadinessIssue[];
     canEdit: boolean;
     canClean: boolean;
@@ -61,7 +67,8 @@
     onapprovegeometry: () => void;
     onapprovetranslations: () => void;
     onkeeplayouts: () => void;
-    onmarkall: () => void;
+    onmarkall: (step?: PageStep) => void;
+    onapproveeverything: () => void;
     onexport: () => void;
     onpreviewshare: (body?: Record<string, unknown>) => void;
     onissue: (issue: ReadinessIssue) => void;
@@ -82,7 +89,6 @@
   const blockers = $derived(exportBlockers(issues));
   const unfinishedSteps = $derived(issues.filter((issue) => issue.code === "step-complete"));
   const needsCompletion = $derived(exportRequiresCompletion(exportFormat, draftExport));
-  const canMarkAll = $derived(onlyStepCompleteBlockers(issues));
   const warnings = $derived(issues.filter((issue) => issue.severity === "warning"));
   const groupedIssues = $derived(groupReadinessIssues(issues));
   const exportBlocked = $derived(
@@ -98,6 +104,7 @@
 </script>
 
 <div class="wf-ui export-layout">
+  <ExportDocuments {seriesId} {episodeId} />
   <div class="export-main">
   <h2>Export the chapter</h2>
   <h4>Ready to publish?</h4>
@@ -108,12 +115,20 @@
     {:else if blockers.length}
       {blockers.length} item{blockers.length === 1 ? "" : "s"} need attention before a finished export.
     {:else if warnings.length}
-      Ready for finished export. {warnings.length} glossary warning{warnings.length === 1 ? "" : "s"} will not block it.
+      Ready for finished export. {warnings.length} warning{warnings.length === 1 ? "" : "s"} will not block it.
     {:else}
       Ready for finished export.
     {/if}
   </p>
   <div class="control-row" data-find="quick-fixes">
+    <button
+      type="button"
+      class="primary"
+      data-find="approve-everything"
+      title="Approve current translations, geometry and artwork, and accept saved layouts for the whole chapter."
+      disabled={!canEdit || !canClean || busy || !images.length}
+      onclick={onapproveeverything}><i class="bi bi-check2-all" aria-hidden="true"></i> Approve everything</button
+    >
     <button
       type="button"
       disabled={!canEdit ||
@@ -132,11 +147,6 @@
         busy ||
         !issues.some((issue) => issue.code === "stale")}
       onclick={onkeeplayouts}><i class="bi bi-pin-angle" aria-hidden="true"></i> Keep current layouts</button
-    ><button
-      type="button"
-      title="Mark every step complete. Revision history stays."
-      disabled={!canEdit || !canClean || busy || !canMarkAll}
-      onclick={onmarkall}><i class="bi bi-check-circle" aria-hidden="true"></i> Mark every page complete</button
     >
   </div>
   {#if exportBlocked && exportBlockReason}
@@ -159,9 +169,26 @@
   </div>
   {#if images.length}
     <h4>Pages marked done</h4>
+    <div class="control-row" data-find="bulk-completion">
+      <button
+        type="button"
+        class="primary"
+        data-find="mark-all-steps-done"
+        title="Mark Translate, Review, Clean and Typeset done on every page. Revision history stays."
+        disabled={!canEdit || !canClean || busy}
+        onclick={() => onmarkall()}><i class="bi bi-check-circle" aria-hidden="true"></i> Mark all steps done</button>
+      {#each PAGE_STEPS as step}
+        <button
+          type="button"
+          data-find={`mark-all-${step}-done`}
+          title={`Mark ${pageStepLabel(step)} done on every page in this chapter.`}
+          disabled={busy || (step === "translate" || step === "review" ? !canEdit : !canClean)}
+          onclick={() => onmarkall(step)}>Mark all {pageStepLabel(step)} done</button>
+      {/each}
+    </div>
     <table class="matrix" data-find="matrix">
       
-      <thead><tr><th>Page</th>{#each PAGE_STEPS as step}<th>{step}</th>{/each}</tr></thead>
+      <thead><tr><th>Page</th>{#each PAGE_STEPS as step}<th>{pageStepLabel(step)}</th>{/each}</tr></thead>
       <tbody>
         {#each images as img, index (img.id)}
           <tr>

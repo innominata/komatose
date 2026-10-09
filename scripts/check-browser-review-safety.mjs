@@ -62,7 +62,7 @@ export async function checkReviewSafety({ page, context, base }) {
   const review = page.getByRole("dialog", { name: "AI source review", exact: true });
   const card = page.locator("#region-card-fixture-line-0-0");
   const close = () => review.getByRole("button", { name: "Close AI dialog" }).click();
-  const runLocal = () => review.getByRole("button", { name: /^(Send to local reviewers|Resubmit)$/ });
+  const runLocal = () => review.getByRole("button", { name: /^(Send to automatic reviewers|Resubmit)$/ });
   const runPaid = name => review.getByRole("button", { name: `Run ${name}`, exact: true });
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForFunction(() => document.body.dataset.studioReady === "1");

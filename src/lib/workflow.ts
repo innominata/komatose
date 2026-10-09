@@ -94,6 +94,7 @@ export const DEFAULT_STYLE: TextStyle = {
 };
 export type Preferences = {
   regionAi?: import("./regionAi").RegionAiSettings;
+  /** Series settings; legacy chapter overrides are ignored. */
   lang: OcrLang;
   direction: "rtl" | "ltr";
   dpi: number | null;
@@ -216,10 +217,14 @@ export type FittedLayout = {
   font: { id: string; hash: string; postscriptName: string };
 };
 export type RegionData = {
+  speaker?: import('./characters').CharacterAssignment;
+  sourceDecision?: import('./decider').TranscriptionDecision;
   detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubbleBounds?: { x: number; y: number; w: number; h: number };
   detectionKind?: "bubble" | "free" | "unknown";
   polygon?: Point[];
+  /** Signature of a polygon in an old page frame; changing the shape invalidates it. */
+  resliceStalePolygon?: string;
   geometryApproved?: boolean;
   geometryConfidence?: number;
   style?: Partial<TextStyle>;

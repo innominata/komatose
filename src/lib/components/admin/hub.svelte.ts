@@ -230,7 +230,7 @@ export function modelStatus(data: HubData | null, row: PublicRow): ModelStatus {
   if (row.readiness) {
     if (!row.readiness.available) return { key: 'missing', tone: 'idle', label: 'Unavailable', detail: row.readiness.reason };
     const running = row.service?.state === 'running' || row.managed?.state === 'running';
-    return { key: 'ready', tone: row.disabled ? 'idle' : 'ok', label: running ? 'Running' : 'Ready', running };
+    return { key: 'ready', tone: row.disabled ? 'idle' : 'ok', label: running ? 'Running' : row.disabled ? 'Ready · hidden from users' : 'Ready', running };
   }
 	const queued = queueFor(data, row.id);
 	if (queued)
@@ -292,7 +292,7 @@ export function usable(data: HubData | null, row: PublicRow): boolean {
 }
 
 export function readyRowsForOp(data: HubData | null, op: ProviderOperation): PublicRow[] {
-	// Ready for a task = installed and its Jobs-panel test passed.
+	// Ready for a task = installed and a current pass or historical check (warning).
 	return (data?.rows || []).filter((row) => usable(data, row) && !row.disabled && rowHasOperation(row, op));
 }
 
@@ -663,8 +663,7 @@ export function listEntries(data: HubData | null): ListEntry[] {
 	const out: ListEntry[] = [];
 	if (!data) return out;
 	for (const row of data.rows) {
-		// The task chips are test results, not a claim about the model: only
-		// tasks whose test passed are shown.
+		// Chips show usable tasks; historical test results remain usable with a warning.
 		const tasks = [
 			...new Set(
 				CHAT_AND_CLI_OPERATIONS.filter(op => rowHasOperation(row, op))

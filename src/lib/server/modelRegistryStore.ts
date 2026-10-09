@@ -145,6 +145,7 @@ export function saveRegistryRows(rows: ModelRow[], catalogs?: ModelCatalogCache[
 			seeded: row.seeded,
 			operationsLocked: row.operationsLocked,
 			disabled: row.disabled,
+			autoRun: row.autoRun,
 			probes: row.probes,
 			probeHistory: row.probeHistory,
 			capabilities: row.capabilities,
@@ -316,6 +317,7 @@ export function updateRegistryRow(id: string, patch: Partial<ModelRow>): ModelRo
 	if (typeof patch.name === 'string' && patch.name.trim()) next.name = patch.name.trim();
 	if (typeof patch.slug === 'string' && patch.slug.trim()) next.slug = patch.slug.trim();
 	if (typeof patch.disabled === 'boolean') next.disabled = patch.disabled;
+	if (typeof patch.autoRun === 'boolean') next.autoRun = patch.autoRun;
 
 	if (Array.isArray(patch.roles)) next.roles = patch.roles;
 	if ((current.access === 'remote_http' || current.runtime === 'openai' || current.runtime === 'llamacpp' || current.runtime === 'qwen3vl') && patch.http) {

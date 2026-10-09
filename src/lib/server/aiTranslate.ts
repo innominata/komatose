@@ -1,4 +1,6 @@
 import { rowHasOperation, isTranslationSpecialist } from '../modelRegistry';
+import { deciderPageStamp } from '../decider';
+import type { PageData } from '../workflow';
 import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
 import { effectiveDefault } from './modelDefaultStore';
 import { normalizeTranslation } from "../translationText";
@@ -20,7 +22,7 @@ import { assertTranslationModelReady } from "./translationRuntime";
 import { imageMessage, localChat, localTranscription, withLocalReview } from "./localReview";
 import { qwen3VlReviewId } from "../qwenModels";
 import { liveAssistantName, resolveLiveAssistant } from "./assistantRoute";
-import { failedOcrConsensus, type OcrConsensus } from "../ocrConsensus";
+import { failedOcrConsensus, ocrResolutionAccepted, type OcrConsensus } from "../ocrConsensus";
 import {
   dropRedundantTranscriptions,
   transcriptionIsEnglish,
@@ -76,6 +78,8 @@ import {
 } from "./ocr";
 import { shouldInvertText } from "./stickyInvert";
 import { glossaryPrompt } from "../glossary";
+import { loadSpeakerAssignments, speakerContextForLines } from './characters';
+import { characterContext, resolveCharacter } from '../characters';
 import { classifyRegionLineType, lookupStandaloneSfx, sfxClassificationSource } from "../sfx";
 import {
   getEpisode,
@@ -217,13 +221,18 @@ async function loadTranslateContext(
   const img = imageId ? imgs.find((i) => i.id === imageId) : null;
   const idx = img ? imgs.findIndex((i) => i.id === img.id) : -1;
   const prefs = preferences(episodeId, seriesId);
+  const contextLines = (await listLines(episodeId)).filter(line => !imageId || line.imageId === imageId);
+  const assigned = loadSpeakerAssignments(episodeId);
   return {
+    speakers: Object.fromEntries(contextLines.filter(line => assigned.has(line.id)).map(line => [line.id, characterContext(resolveCharacter(assigned.get(line.id), s?.glossary || []))])),
     seriesNotes: [s?.notes, prefs.aliases, prefs.translationPreferences]
       .filter(Boolean)
       .join("\n"),
     prior: "",
     seriesGlossary: glossaryPrompt(s?.glossary || [], 80),
-    pageCaption: sceneNotesForPage(imgs, imageId, prefs.chapterSummary),
+    pageCaption: [sceneNotesForPage(imgs, imageId, prefs.chapterSummary),
+      speakerContextForLines(contextLines, s?.glossary || [], assigned)]
+      .filter(Boolean).join('\n\n'),
     pageLabel: img
       ? `${ep?.title || ""} · page ${idx + 1}/${imgs.length}`
       : `${ep?.title || ""} · selection`,
@@ -236,6 +245,11 @@ function chapterTranslator(
   requested?: { engine?: TranslateEngine; model?: string },
 ) {
   return resolveTaskModel(preferences(episodeId, seriesId).regionAi, "translate", requested);
+}
+
+function transcriptionDeciderFor(seriesId: string, episodeId: string) {
+  const settings = regionAiSettings(preferences(episodeId, seriesId).regionAi);
+  return { selection: settings.transcriptionDecider, minProbability: settings.deciderMinProbability, minMargin: settings.deciderMinMargin };
 }
 
 function transcriptionIdsFor(seriesId: string, episodeId: string) {
@@ -262,6 +276,7 @@ async function bindOcrTranslator(
     lang,
     seriesGlossary: ctx.seriesGlossary,
     seriesNotes: ctx.seriesNotes,
+    pageCaption: ctx.pageCaption,
   };
   return {
     label: ocrTranslatorLabel(selected.engine, selected.model),
@@ -413,6 +428,7 @@ async function runTranslate(
   boxes: DetectedBox[],
   opts: {
     requireTranslation?: boolean;
+    speakers?: Record<string, string>;
     seriesNotes: string;
     prior: string;
     pageLabel: string;
@@ -424,7 +440,8 @@ async function runTranslate(
     model?: string;
   },
 ): Promise<DetectedBox[]> {
-  return runTranslationTask({ engine, boxes, ...opts }, translationTaskHandlers);
+  const attributed = boxes.map(box => box.id && opts.speakers?.[box.id] ? { ...box, speaker: opts.speakers[box.id] } : box);
+  return runTranslationTask({ engine, boxes: attributed, ...opts }, translationTaskHandlers);
 }
 
 const sourceTranslations = new Map<string, AbortController>();
@@ -486,6 +503,7 @@ export function startRegionOcr(opts: {
       const imgs = await listImages(opts.episode.id);
       const img = imgs.find((item) => item.id === line.imageId);
       if (!img) throw new AiJobError("Page not found", 404);
+      const sourceStamp = deciderPageStamp(getDoc<PageData>(`page:${img.id}`, {}).data);
       const raw = await readWorkingOrOrig(opts.series.slug, opts.episode.slug, img.filename);
       if (!raw) throw new AiJobError(`Missing image file for ${img.originalName}`, 404);
       const meta = await sharp(raw).metadata();
@@ -503,6 +521,8 @@ export function startRegionOcr(opts: {
       updateJob(jobId, "running", progress);
       appendJobLog(jobId, { step: "Reading text", engine: progress.engine, model: ocrNames, request: progress.message });
       const consensus = await readOcrConsensus(jpeg, abort.signal, defaultTranscriptionRead, ocr.translate, lang, ocrIds, {
+        decider: transcriptionDeciderFor(opts.series.id, opts.episode.id),
+        onDecide: (id) => { progress.message = `Deciding transcription · ${liveAssistantName(id)}`; progress.engine = id; progress.model = liveAssistantName(id); updateJob(jobId, 'running', progress); appendJobLog(jobId, { step: 'Deciding transcription', engine: id, model: progress.model, request: progress.message }); },
         onTranslate: () => {
           progress.message = `Translating transcription · ${ocr.label}`;
           progress.model = ocr.label;
@@ -515,14 +535,15 @@ export function startRegionOcr(opts: {
       const current = db.select().from(lines).where(eq(lines.id, line.id)).get();
       if (!current || current.episodeId !== opts.episode.id)
         throw new AiJobError("Region not found", 404);
-      const saved = saveOcrConsensus(opts.episode.id, toLine(current), consensus, ocr.label);
+      if (consensus.decision) Object.assign(consensus.decision, { pageSourceStamp: sourceStamp, bounds: JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]), sourceRevision: line.revision });
+      const saved = saveOcrConsensus(opts.episode.id, line, consensus, ocr.label);
       let message = saved?.source?.trim()
         ? (saved.body?.trim()
           ? "Region transcribed and translated"
           : "Region transcribed · matching source is ready to translate")
         : "Transcription models disagreed · readings saved as suggestions";
       if (
-        consensus.agreed &&
+        ocrResolutionAccepted(consensus) &&
         saved?.source?.trim() &&
         saved.sourceState === "read" &&
         // The write below is compare-and-set on this revision.
@@ -540,7 +561,7 @@ export function startRegionOcr(opts: {
           const ctx = await loadTranslateContext(opts.series.id, opts.episode.id, saved.imageId ?? undefined);
           const translated = await runTranslate(translator.engine, [{
             x: saved.x ?? 0, y: saved.y ?? 0, w: saved.w ?? 0.2, h: saved.h ?? 0.1,
-            lineType: saved.lineType, source: saved.source, literal: "", translation: "", reasoning: "",
+            id: saved.id, lineType: saved.lineType, source: saved.source, literal: "", translation: "", reasoning: "",
           }], {
             ...ctx, lang, model: translator.model, abort: abort.signal,
             requireTranslation: true, pageLabel: `${opts.episode.title} · region`,
@@ -617,7 +638,7 @@ export function startSourceRetranslation(opts: {
       const ctx = await loadTranslateContext(opts.series.id, opts.episode.id, line.imageId ?? undefined);
       const translated = await runTranslate(model.engine, [{
         x: line.x ?? 0, y: line.y ?? 0, w: line.w ?? 0.2, h: line.h ?? 0.1,
-        lineType: line.lineType, source: line.source || "",
+        id: line.id, lineType: line.lineType, source: line.source || "",
         literal: "", translation: "", reasoning: "",
       }], { ...ctx, lang, model: model.model, abort: abort.signal, requireTranslation: true });
       abort.signal.throwIfAborted();
@@ -1008,6 +1029,7 @@ async function runTranscribeJob(
         continue;
       }
       try {
+        const sourceStamp = deciderPageStamp(getDoc<PageData>(`page:${img.id}`, {}).data);
         const path = imagePath(opts.series.slug, opts.episode.slug, img.filename);
         const raw = await readWorkingOrOrig(
           opts.series.slug,
@@ -1089,7 +1111,9 @@ async function runTranscribeJob(
               ocr.translate,
               job.lang,
               ocrIds,
-              { onTranslate: () => reportStep(job, {
+              { decider: transcriptionDeciderFor(opts.series.id, job.episodeId),
+                onDecide: (id) => reportStep(job, { step: "Deciding transcription", engine: id, model: liveAssistantName(id) }),
+                onTranslate: () => reportStep(job, {
                 step: "Translating transcription",
                 model: ocr.label,
                 engine: "translate",
@@ -1101,6 +1125,7 @@ async function runTranscribeJob(
             console.warn(`[ai-transcribe] OCR failed on ${img.originalName}: ${message}`);
             consensus = failedOcrConsensus(message, ocrIds);
           }
+          if (consensus.decision) consensus.decision.pageSourceStamp = sourceStamp;
           reads.push({ region, consensus });
         }
         const sources = reads.map((item) => item.consensus.readings.map((reading) => reading.source));
@@ -1158,7 +1183,7 @@ async function runTranscribeJob(
               geometryConfidence: item.region.geometryConfidence, geometryApproved: false,
             }, doc.revision);
           }
-          if (!item.consensus.agreed) disagreements += 1;
+          if (!ocrResolutionAccepted(item.consensus)) disagreements += 1;
           saveOcrConsensus(job.episodeId, line, item.consensus, ocr.label);
         }
         pageResult(job.id!, img.id, "completed");
@@ -1788,6 +1813,7 @@ export async function translateRegion(opts: {
     opts.episode.id,
     img.id,
   );
+  if (target && located[0]) located[0].id = target.id;
   const translated = await runTranslate(models.translate.engine, located, {
     ...ctx,
     abort: opts.abort,
@@ -2151,7 +2177,7 @@ async function suggestLineAlternatives(opts: {
   const index = pack.targets.findIndex((l) => l.id === opts.line.id);
   const nearby = pack.items
     .filter((_, i) => index < 0 || (i !== index && Math.abs(i - index) <= 8))
-    .map((l) => `${l.page} (${l.lineType}) ${l.source} → ${l.current}`)
+    .map((l) => `${l.page} (${l.lineType}) Speaker: ${l.speaker || 'unknown'} · ${l.source} → ${l.current}`)
     .join("\n");
   const boxes: DetectedBox[] = [
     {
@@ -2160,6 +2186,7 @@ async function suggestLineAlternatives(opts: {
       w: opts.line.w ?? 0.2,
       h: opts.line.h ?? 0.1,
       lineType: opts.line.lineType,
+      id: opts.line.id,
       source,
       literal: "",
       translation: "",
@@ -2428,6 +2455,7 @@ export async function startFillMissing(opts: {
     const imgs = await listImages(opts.episode.id);
     const img = imgs.find((item) => item.id === line.imageId);
     if (!img) throw new AiJobError("Page not found", 404);
+    const sourceStamp = deciderPageStamp(getDoc<PageData>(`page:${img.id}`, {}).data);
     const raw = await readWorkingOrOrig(opts.series.slug, opts.episode.slug, img.filename);
     if (!raw) throw new AiJobError(`Missing image file for ${img.originalName}`, 404);
     const meta = await sharp(raw).metadata();
@@ -2437,13 +2465,16 @@ export async function startFillMissing(opts: {
     if (bubble.width < 12 || bubble.height < 12) throw new AiJobError("Selection is too small");
     const jpeg = await maskedBubbleCrop(raw, bubble, signal);
     signal.throwIfAborted();
-    return readOcrConsensus(jpeg, signal, defaultTranscriptionRead, ocr.translate, opts.lang, transcriptionIdsFor(opts.series.id, opts.episode.id));
+    const consensus = await readOcrConsensus(jpeg, signal, defaultTranscriptionRead, ocr.translate, opts.lang, transcriptionIdsFor(opts.series.id, opts.episode.id), { decider: transcriptionDeciderFor(opts.series.id, opts.episode.id),
+      onDecide: (id) => tick(`Deciding transcription · ${liveAssistantName(id)}`) });
+    if (consensus.decision) Object.assign(consensus.decision, { pageSourceStamp: sourceStamp, bounds: JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]), sourceRevision: line.revision });
+    return consensus;
   });
   const translateLines = opts.translateLines ?? (async (pageLines, imageId, signal) => {
     const ctx = await loadTranslateContext(opts.series.id, opts.episode.id, imageId ?? undefined);
     const boxes = pageLines.map((line) => ({
       x: line.x ?? 0, y: line.y ?? 0, w: line.w ?? 0.2, h: line.h ?? 0.1,
-      lineType: line.lineType, source: line.source || "",
+      id: line.id, lineType: line.lineType, source: line.source || "",
       literal: "", translation: "", reasoning: "",
     }));
     const translated = await runTranslate(selected.engine, boxes, {

@@ -1,6 +1,6 @@
 {
 	"extends": "./.svelte-kit/tsconfig.json",
-	"exclude": ["node_modules", "build", ".venv-ocr", ".venv-workflow", ".venv-review"],
+	"exclude": ["data", "node_modules", "build", ".venv-ocr", ".venv-workflow", ".venv-review"],
 	"compilerOptions": {
 		"rewriteRelativeImportExtensions": true,
 		"allowJs": true,

@@ -87,7 +87,8 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Page info (file, size)", "Prepare › Edit page › Inspector › Page", "Page menu › Page info", { stage: "prepare", prepView: "page", tab: "page" }, "tab-prepare-page"),
   A("Series pre / post credits", "Prepare › Inspector › Credits, or Settings › Series credits", "Prepare chapter panel", { stage: "prepare", tab: "credits" }, "tab-prepare-credits"),
   A("Add credits to this chapter", "Prepare › Organize › credits slot", "Prepare chapter panel", { stage: "prepare", prepView: "grid" }, "add-credits"),
-  A("Source language, reading direction, DPI", "Settings › Chapter", "Prepare chapter panel › Chapter defaults", set("chapter"), "set-chapter", "japanese korean rtl ltr"),
+  A("Source language and reading direction", "Settings › Series", "Series language & reading direction", set("series"), "set-series", "japanese korean rtl ltr"),
+  A("Chapter DPI", "Settings › Chapter", "Chapter DPI override", set("chapter"), "set-chapter", "density resolution"),
 
   A("Transcribe page / chapter", "Translate › Stage bar (Page / Whole chapter)", "Chapter menu · Page menu · palette · chapter panel", { stage: "translate" }, "transcribe", "ocr detect"),
   A("Translate page / chapter", "Translate › Stage bar", "Chapter menu · Page menu · palette · chapter panel", { stage: "translate" }, "translate"),
@@ -103,6 +104,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Draw region", "Translate/Review › Tool rail (R)", "Palette", { stage: "translate", tool: "region" }, "tool-region"),
   A("Read area with image model", "Translate/Review › Tool rail", "Palette", { stage: "translate", tool: "read-area" }, "tool-read-area", "vision"),
   A("Reorder reading flow", "Translate/Review › Tool rail (O)", "Palette", tr({ tool: "reorder" }), "tool-reorder"),
+  A('Assign character to dialogue', 'Review › Tool rail › Assign character', 'Choose a glossary character, then click regions', { stage: 'review', tool: 'assign-character' }, 'tool-assign-character', 'speaker thought character voice'),
   A("Search source & English across the chapter", "Translate › Regions tab › Search", "Translate inspector", tr(), "search"),
   A("Show unresolved regions only", "Translate › Regions tab", "Translate inspector", tr(), "unresolved"),
   A("Import a script / place unplaced lines", "Inspector › Page & script", "Translate inspector expander", tr({ tab: "page" }), "import-script"),
@@ -127,6 +129,8 @@ export const STUDIO_ACTIONS: StudioAction[] = [
 
   A("Review translations (go to review)", "Review step", "Translate panel button · palette", { stage: "review", tab: "queue" }, "tab-review-queue", "approve queue"),
   A("Proofread edited English", "Review › Stage bar · Translate › More", "Chapter/Page menus · palette · Optional tools", { stage: "review" }, "proofread-english"),
+  A("Proofread entire script", "Review › Stage bar · Translate/Review › More", "Chapter menu", { stage: "review" }, "proofread-script", "whole chapter English text proofreading"),
+  A("View / copy scripts and metadata", "Export › Scripts & metadata", "Bilingual script, English script, JSON, font manifest and readiness notes", { stage: "export" }, "export-documents", "scene notes multiple chapters download text"),
   A("Accept all translations", "Review › Stage bar · Export › Quick fixes", "Export panel", { stage: "review" }, "accept-all"),
   A("Copy raw image", "Review › Stage bar · Typeset › More", "Palette Images group", { stage: "review" }, "copy-raw", "clipboard"),
   A("Copy typeset image", "Review › Stage bar · Typeset › More", "Palette Images group", { stage: "review" }, "copy-typeset", "clipboard"),
@@ -180,7 +184,10 @@ export const STUDIO_ACTIONS: StudioAction[] = [
 
   A("Export readiness / blockers", "Export › Ready to publish?", "Export panel list", { stage: "export" }, "readiness"),
   A("Approve all geometry", "Export › Quick fixes", "Export panel", { stage: "export" }, "approve-all-geometry"),
-  A("Mark every page complete", "Export › Quick fixes", "Export panel", { stage: "export" }, "quick-fixes"),
+  A("Approve everything", "Export › Quick fixes", "Export panel", { stage: "export" }, "approve-everything", "translations geometry cleaning layouts"),
+  A("Mark all steps done", "Export › Pages marked done", "Export panel", { stage: "export" }, "mark-all-steps-done", "mark every page complete"),
+  ...(["translate", "review", "clean", "typeset"] as const).map(step =>
+    A(`Mark all ${studioStepName(step)} done`, "Export › Pages marked done", "Export panel", { stage: "export" }, `mark-all-${step}-done`)),
   A("Pages × steps completion table", "Export › Pages marked done", "(new)", { stage: "export" }, "matrix"),
   A("Format, JPG quality, metadata, draft, Generate ZIP", "Export › Download", "Export panel", { stage: "export" }, "download", "png psd jpg zip"),
   A("Label ZIP as draft", "Export › Download", "Export panel", { stage: "export" }, "draft"),

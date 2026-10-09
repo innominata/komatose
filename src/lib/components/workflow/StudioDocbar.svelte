@@ -181,7 +181,7 @@
           <button
             type="button"
             role="menuitem"
-            disabled={busy || !canUpload || Boolean(proofreadEnglishBlockedReason)}
+            disabled={busy || !canEdit || Boolean(proofreadEnglishBlockedReason)}
             title={proofreadEnglishBlockedReason || undefined}
             onclick={() => {
               openMenu = null;

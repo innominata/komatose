@@ -6,6 +6,8 @@
   import type { TranslateEngineInfo, ImageRow } from "$lib/types";
   import type { CreditKind, SeriesCredits } from "$lib/credits";
   import type { Preferences } from "$lib/workflow";
+  import ResliceSizeControl from "./ResliceSizeControl.svelte";
+  import { validSliceHeight, type ResliceSizing } from "$lib/reslice";
 
   let {
     canUpload,
@@ -14,11 +16,14 @@
     aiRunning,
     hasPage,
     pageUndoCount,
+    pageUndoLabel = 'Undo page edit',
     duplicateWarning,
     numberingStale,
     pendingFiles = $bindable([]),
     stitch = $bindable(false),
     chapterDpi = $bindable(""),
+    resliceSizing = $bindable<ResliceSizing>("pages"),
+    resliceMaxHeight = $bindable<number | undefined>(2048),
     preferences,
     engine,
     model,
@@ -34,7 +39,7 @@
     onreslice,
     ondescribe,
     onsaveregionai,
-    onsaveprefs,
+    onsaveseriesprefs,
     onsavedpi,
     onuploadcredit,
     onclearcredit,
@@ -46,11 +51,14 @@
     aiRunning: boolean;
     hasPage: boolean;
     pageUndoCount: number;
+    pageUndoLabel?: string;
     duplicateWarning: string;
     numberingStale: boolean;
     pendingFiles?: File[];
     stitch?: boolean;
     chapterDpi?: string;
+    resliceSizing?: ResliceSizing;
+    resliceMaxHeight?: number;
     preferences: Preferences;
     engine: string;
     model: string;
@@ -66,11 +74,11 @@
     onreslice: () => void;
     ondescribe: () => void;
     onsaveregionai: (regionAi: RegionAiSettingsData) => Promise<boolean>;
-    onsaveprefs: (data: Record<string, unknown>) => void;
+    onsaveseriesprefs: (data: Record<string, unknown>) => void;
     onsavedpi: () => void;
     onuploadcredit: (kind: CreditKind, file: File) => void;
     onclearcredit: (kind: CreditKind) => void;
-    section?: "full" | "upload" | "credits" | "defaults";
+    section?: "full" | "upload" | "credits" | "defaults" | "series";
   } = $props();
 
   const slots: { kind: CreditKind; label: string }[] = [
@@ -209,13 +217,14 @@
       <button disabled={busy} onclick={() => onpageop({ op: "auto-align" })}
         >Auto-align pages</button
       >
-      <button disabled={busy || aiRunning || !canUpload} onclick={onreslice}
-        >Auto-reslice strips</button
+      <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
+      <button disabled={busy || aiRunning || !canUpload || (resliceSizing === "custom" && !validSliceHeight(resliceMaxHeight))} onclick={onreslice}
+        >Split strips</button
       >
       <button
         disabled={busy || !pageUndoCount}
         onclick={() => onpageop({ op: "undo" })}
-        >Undo page edit ({pageUndoCount})</button
+        >{pageUndoLabel} ({pageUndoCount})</button
       >
     </div>
     <div class="control-row">
@@ -235,15 +244,16 @@
     </div>
     {/if}
   {/if}
-  {#if section === "full" || section === "defaults"}
-  <div class="settings" data-find="set-chapter">
-    <h2>Chapter defaults</h2>
+  {#if section === "full" || section === "series"}
+  <div class="settings" data-find="set-series">
+    <h2>Series language & reading direction</h2>
+    <p>Applies to every chapter in this series, including new chapters.</p>
     <label
       >Source language<select
         value={preferences.lang}
-        disabled={!canEdit}
+        disabled={!canEdit || busy}
         onchange={(e) =>
-          onsaveprefs({
+          onsaveseriesprefs({
             lang: e.currentTarget.value,
             direction: e.currentTarget.value === "japanese" ? "rtl" : "ltr",
           })}
@@ -254,20 +264,26 @@
     ><label
       >Reading direction<select
         value={preferences.direction}
-        disabled={!canEdit}
-        onchange={(e) => onsaveprefs({ direction: e.currentTarget.value })}
+        disabled={!canEdit || busy}
+        onchange={(e) => onsaveseriesprefs({ direction: e.currentTarget.value })}
         ><option value="rtl">Right to left</option><option value="ltr"
           >Left to right</option
         ></select
       ></label
-    ><label
+    >
+  </div>
+  {/if}
+  {#if section === "full" || section === "defaults"}
+  <div class="settings" data-find="set-chapter">
+    <h2>Chapter settings</h2>
+    <label
       >Chapter DPI override<input
         type="number"
         placeholder="Imported density, otherwise 72"
         bind:value={chapterDpi}
       /></label
     ><button disabled={!canEdit || busy} onclick={onsavedpi}
-      >Save chapter defaults</button
+      >Save chapter DPI</button
     >
   </div>
   {/if}

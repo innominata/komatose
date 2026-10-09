@@ -237,7 +237,7 @@ export async function checkRegionAi({
   await expect(modelSettings).toBeHidden();
   await expect(review).toBeVisible();
   await expect(
-    review.getByText("Not run. reviewer-grok-fixture is billed per call", { exact: false }),
+    review.getByText("Not run automatically. Use Run to request reviewer-grok-fixture.", { exact: true }),
   ).toBeVisible();
   await expect(
     review.getByRole("button", { name: "Run reviewer-grok-fixture", exact: true }),
@@ -300,9 +300,14 @@ export async function checkRegionAi({
   await page.setViewportSize(viewport);
   await review.getByRole("button", { name: "View crop at 2×", exact: true }).click();
   await expect(review.getByRole("button", { name: "View crop at 2×", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await review.getByRole("button", { name: "View crop at 1×", exact: true }).click();
+  await review.getByRole("button", { name: "Resubmit", exact: true }).click();
+  await expect.poll(() => requests.filter(item => item.action === "review").length).toBe(4);
+  expect(requests.filter(item => item.action === "review").slice(-2).every(item => item.cropScale === 2)).toBe(true);
+  await expect(review.getByText("Waiting for response…")).toHaveCount(0);
+  await expect(review.getByText("Sent crop: 2×", { exact: true })).toHaveCount(2);
   expect(requests.filter(item => item.action === "review").every(item => item.maskEnabled && item.mask?.startsWith("data:image/png;base64,"))).toBe(true);
   await review.getByLabel("Mask crop with detected text", { exact: true }).uncheck();
+  await expect(review.getByRole("button", { name: "View crop at 2×", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect
     .poll(() =>
       review.locator(".review-crop").evaluate((img) => img.naturalWidth),
@@ -313,13 +318,18 @@ export async function checkRegionAi({
       .filter((r) => r.action === "review")
       .map((r) => r.reviewers.map((m) => m.model || m.engine))
       .sort((a, b) => String(a).localeCompare(String(b))),
-  ).toEqual([["hayai-ocr-v2"], ["paddleocr-vl-1.6"]]);
+  ).toEqual([["hayai-ocr-v2"], ["hayai-ocr-v2"], ["paddleocr-vl-1.6"], ["paddleocr-vl-1.6"]]);
+  await review.getByRole("button", { name: "View crop at 4×", exact: true }).click();
   await review
     .getByRole("button", { name: "Run reviewer-grok-fixture", exact: true })
     .click();
   await expect(
     review.getByText("Grok reading of the crop.", { exact: true }),
   ).toBeVisible();
+  const enlargedRequest = requests.filter(item => item.action === "review").at(-1);
+  expect(enlargedRequest.cropScale).toBe(4);
+  expect(enlargedRequest.maskEnabled).toBe(false);
+  await expect(review.getByText("Sent crop: 4×", { exact: true })).toBeVisible();
   expect(
     requests
       .filter((r) => r.action === "review")
@@ -327,6 +337,8 @@ export async function checkRegionAi({
       .sort((a, b) => String(a).localeCompare(String(b))),
   ).toEqual([
     ["hayai-ocr-v2"],
+    ["hayai-ocr-v2"],
+    ["paddleocr-vl-1.6"],
     ["paddleocr-vl-1.6"],
     ["reviewer-grok-fixture"],
   ]);

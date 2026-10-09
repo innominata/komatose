@@ -119,6 +119,7 @@ export function unsupportedProviderReason(
 
 /** Live picker row. `available` is never invented as true. */
 export type ProviderSelectionOption = {
+	warnings?: string[];
 	id: string;
 	label: string;
 	available: boolean;
@@ -168,6 +169,18 @@ export function singleAvailableEngineFor(
 }
 
 export type ProviderRunGate = { ok: boolean; reason: string };
+
+/** Browser/image-only proofreaders review page images; text models edit English. */
+export function proofreadingOperation(
+	engineId: string | undefined | null,
+	engines: readonly LiveProviderEngine[] = [],
+): 'proofreadEnglish' | 'pageImageProofread' {
+	const live = engines.find(engine => engine.id === engineId);
+	if (isProofreaderProvider(engineId || '') || live?.access === 'proofreader' || live?.pageImageOnly ||
+		(live?.operations?.includes('pageImageProofread') && !live.operations.includes('proofreadEnglish')))
+		return 'pageImageProofread';
+	return 'proofreadEnglish';
+}
 
 export function providerRunGate(
 	engineId: string | undefined | null,

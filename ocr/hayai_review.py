@@ -20,6 +20,7 @@ def _to_device(value, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--model-id", choices=["hayai-ocr-v2", "hayai-ocr-v2.5-nova"], default="hayai-ocr-v2")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--token", required=True)
     parser.add_argument("--threads", type=int, default=8)
@@ -40,8 +41,16 @@ def main():
     device = args.device
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
-    model = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
-                                      local_files_only=True).to(device).eval()
+    if args.model_id.endswith("nova"):
+        model, loading = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
+                                                   local_files_only=True, output_loading_info=True)
+        missing = [key for key in loading.get("missing_keys", []) if key.startswith("vision_encoder.")]
+        if missing:
+            raise RuntimeError("Nova vision weights did not load; check Transformers/checkpoint compatibility: " + ", ".join(missing[:5]))
+        model = model.to(device).eval()
+    else:
+        model = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
+                                          local_files_only=True).to(device).eval()
     tokenizer = PreTrainedTokenizerFast.from_pretrained(model_dir, local_files_only=True)
     processor = AutoProcessor.from_pretrained("google/siglip2-base-patch16-naflex",
                                               local_files_only=True)
@@ -64,7 +73,7 @@ def main():
         def do_GET(self):
             if self.authorized():
                 self.reply(200 if self.path == "/health" else 404,
-                           {"model": "hayai-ocr-v2", "device": device})
+                           {"model": args.model_id, "device": device})
 
         def do_POST(self):
             if not self.authorized():
@@ -81,14 +90,15 @@ def main():
                 inputs = _to_device(processor(images=[image], max_num_patches=512, return_tensors="pt"), device)
                 with torch.inference_mode():
                     output = model.generate(**inputs, tokenizer=tokenizer,
-                                            max_new_tokens=512, num_beams=1)
+                                            max_new_tokens=512, num_beams=1,
+                                            **({"repetition_penalty": 1.0} if args.model_id.endswith("nova") else {}))
                 self.reply(200, {"source": output[0].strip()})
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as exc:
                 self.reply(500, {"error": str(exc)[:1000]})
 
-    print(f"Hayai OCR v2 ready on {device}", flush=True)
+    print(f"{args.model_id} ready on {device}", flush=True)
     HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

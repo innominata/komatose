@@ -6,6 +6,9 @@ import { WorkflowError } from "./workflowStore";
 import { listImages, listLines } from "./queries";
 import { addAcceptedSeriesTerms, currentSeriesGlossary } from "./seriesGlossary";
 import { glossaryPrompt } from "../glossary";
+import { loadSpeakerAssignments } from './characters';
+import { characterLabel, resolveCharacter, type CharacterAssignment } from '../characters';
+import type { GlossaryTerm } from '../types';
 import type { Episode, ImageRow, LineRow, PublicUser, Series } from "../types";
 import type { TaskEngine } from "../aiTasks";
 import { logActivity } from "./activity";
@@ -21,7 +24,7 @@ export type GlossaryMineTerm = {
 };
 
 export const GLOSSARY_MINE_SYSTEM =
-  "You extract series-specific recurring terms from a reviewed bilingual scanlation script. Pick names, places, catchphrases, titles, and honorifics that later chapters should keep consistent. Do not include common words, one-off lines, or terms already listed in the glossary. Return JSON with a terms array.";
+  'You extract series-specific recurring terms from a reviewed bilingual scanlation script. Pick names, places, catchphrases, titles, and honorifics that later chapters should keep consistent. Do not include common words, one-off lines, or terms already listed in the glossary. Return only JSON in this exact shape: {"terms":[{"source":"original-language spelling from the script","translation":"English spelling to keep consistent","kind":"name","reason":"why this term should recur"}]}. Every term must have source, translation, kind, and reason. source must contain the original-language term, not its English name. kind must be name, place, catchphrase, title, or other. Do not use term, type, or note as field names. Return {"terms":[]} only when no new terms qualify.';
 
 export const GLOSSARY_MINE_SCHEMA = {
   type: "object",
@@ -66,7 +69,7 @@ export function glossaryMineBlockers(lines: LineRow[]) {
   );
 }
 
-export function reviewedBilingualScript(lines: LineRow[], images: ImageRow[]): string {
+export function reviewedBilingualScript(lines: LineRow[], images: ImageRow[], speakers = new Map<string, CharacterAssignment>(), characters: GlossaryTerm[] = []): string {
   const pageOf = new Map(images.map((img) => [img.id, img.pageNumber ?? img.sortOrder + 1]));
   return lines
     .filter(isReviewedLine)
@@ -75,28 +78,43 @@ export function reviewedBilingualScript(lines: LineRow[], images: ImageRow[]): s
       const pb = pageOf.get(b.imageId ?? "") ?? 0;
       return pa - pb || a.sortOrder - b.sortOrder;
     })
-    .map((line) => `Page ${pageOf.get(line.imageId ?? "") ?? "?"} · ${line.sortOrder + 1}\n${line.source}\n${line.body}`)
+    .map((line) => `Page ${pageOf.get(line.imageId ?? "") ?? "?"} · ${line.sortOrder + 1}\nSpeaker: ${characterLabel(resolveCharacter(speakers.get(line.id), characters))}\n${line.source}\n${line.body}`)
     .join("\n\n");
 }
 
-export function parseGlossaryMine(value: unknown): GlossaryMineTerm[] {
+export function parseGlossaryMine(value: unknown, sourceTexts: readonly string[] = []): GlossaryMineTerm[] {
   const rec = value && typeof value === "object" ? (value as { terms?: unknown }) : {};
   if (!Array.isArray(rec.terms)) throw new WorkflowError("The model returned no glossary terms.");
   const seen = new Set<string>();
   const terms: GlossaryMineTerm[] = [];
+  const normalizedSources = sourceTexts.map(text => text.normalize("NFKC").replace(/\s+/gu, ""));
   for (const item of rec.terms) {
     if (!item || typeof item !== "object") continue;
     const row = item as Record<string, unknown>;
-    const source = String(row.source || "").trim();
-    const translation = String(row.translation || "").trim();
-    const kind = GLOSSARY_MINE_KINDS.includes(row.kind as GlossaryMineKind)
-      ? (row.kind as GlossaryMineKind)
+    let source = typeof row.source === "string" ? row.source.trim() : "";
+    let translation = typeof row.translation === "string" ? row.translation.trim() : "";
+    // Some JSON-only APIs ignore the schema and put the original spelling at
+    // the start of a note. Recover it only when it occurs in the reviewed source.
+    if (!source && typeof row.term === "string" && typeof row.note === "string") {
+      const separator = row.note.indexOf(" — ");
+      const candidate = separator > 0 ? row.note.slice(0, separator).trim() : "";
+      const normalized = candidate.normalize("NFKC").replace(/\s+/gu, "");
+      if (normalized && normalizedSources.some(text => text.includes(normalized))) {
+        source = candidate;
+        translation = row.term.trim();
+      }
+    }
+    const reportedKind = row.kind ?? (row.type === "character" ? "name" : row.type);
+    const kind = GLOSSARY_MINE_KINDS.includes(reportedKind as GlossaryMineKind)
+      ? (reportedKind as GlossaryMineKind)
       : "other";
-    const reason = String(row.reason || "").trim().slice(0, 400);
+    const reason = String(row.reason || row.note || "").trim().slice(0, 400);
     if (!source || !translation || seen.has(source)) continue;
     seen.add(source);
     terms.push({ source, translation, kind, reason, state: "pending" });
   }
+  if (rec.terms.length && !terms.length)
+    throw new WorkflowError("The model returned glossary candidates without usable source/translation fields. Expected source, translation, kind, and reason; no terms were saved.");
   return terms;
 }
 
@@ -118,7 +136,8 @@ export async function startGlossaryMine(opts: {
       `Finish review first. ${pending.length} region${pending.length === 1 ? "" : "s"} still need source, English, or approval.`,
       409,
     );
-  const script = reviewedBilingualScript(lines, images);
+  const existing = currentSeriesGlossary(opts.series.id);
+  const script = reviewedBilingualScript(lines, images, loadSpeakerAssignments(opts.episode.id), existing);
   if (!script) throw new WorkflowError("This chapter has no approved source and English to mine.");
   if (listJobs(opts.episode.id).some((job) => job.kind === "glossary-mine" && ["running", "queued", "cancelling"].includes(job.state)))
     throw new WorkflowError("Series terms are already being extracted.", 409);
@@ -127,7 +146,6 @@ export async function startGlossaryMine(opts: {
       ? { engine: opts.engine, model: opts.model || "" }
       : regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi).enquire,
   );
-  const existing = currentSeriesGlossary(opts.series.id);
   const jobId = createJob(opts.episode.id, "glossary-mine", { ...model });
   const abort = new AbortController();
   active.set(jobId, abort);
@@ -141,6 +159,7 @@ export async function startGlossaryMine(opts: {
         [
           existing.length ? `Existing series glossary (do not repeat these sources):\n${glossaryPrompt(existing, 80)}` : "No series glossary yet.",
           `Reviewed bilingual script for ${opts.episode.title}:\n${script}`,
+          'Explicitly look for Korean personal names, including given-name-only references and names followed by honorifics. Use the original spelling visible in the source; do not invent a Hangul name from a speaker label. Preserve established series English spellings and hyphenation. A speaker label identifies the speaker, not necessarily a name mentioned in the dialogue. Use kind "name" for people so accepted entries become assignable characters.',
         ].join("\n\n"),
         [],
         abort.signal,
@@ -148,7 +167,8 @@ export async function startGlossaryMine(opts: {
       );
       abort.signal.throwIfAborted();
       const known = new Set(existing.map((t) => t.source.trim()));
-      const terms = parseGlossaryMine(result).filter((t) => !known.has(t.source));
+      const terms = parseGlossaryMine(result, lines.filter(isReviewedLine).map(line => line.source || ""))
+        .filter((t) => !known.has(t.source));
       updateJob(jobId, "completed", {
         terms,
         message: terms.length
@@ -180,12 +200,12 @@ export async function decideGlossaryMineTerms(opts: {
   if (!job) throw new WorkflowError("Glossary job not found", 404);
   const terms = ((job.progress?.terms as GlossaryMineTerm[] | undefined) ?? []).map((term) => ({ ...term }));
   if (!terms.length) throw new WorkflowError("This job has no terms to review");
-  const accepted: { source: string; translation: string }[] = [];
+  const accepted: { source: string; translation: string; kind: string }[] = [];
   for (const choice of opts.decisions) {
     const term = terms.find((t) => t.source === choice.source.trim());
     if (!term || term.state !== "pending") continue;
     term.state = choice.decision === "accept" ? "accepted" : "rejected";
-    if (choice.decision === "accept") accepted.push({ source: term.source, translation: term.translation });
+    if (choice.decision === "accept") accepted.push({ source: term.source, translation: term.translation, kind: term.kind });
   }
   if (accepted.length) addAcceptedSeriesTerms(opts.series.id, accepted);
   const waiting = terms.filter((t) => t.state === "pending").length;

@@ -3,6 +3,13 @@ import { resolveLiveAssistant } from './assistantRoute';
 import { CLI_TRANSLATION_ENGINES, type CliTranslationEngine } from './translationTask';
 import { proofreaderOnlyMessage } from '../proofreaders';
 import { WorkflowError } from './workflowStore';
+import sharp from 'sharp';
+
+/** Inspect every pixel before JPEG conversion: even a tiny mark means content. */
+export async function isSingleColorPage(bytes: Buffer): Promise<boolean> {
+	const { channels } = await sharp(bytes).stats();
+	return channels.every(channel => channel.min === channel.max);
+}
 
 export type DescribePageOpts = {
 	jpeg: Buffer;

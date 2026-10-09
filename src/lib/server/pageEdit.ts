@@ -1,6 +1,7 @@
 import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
 import { captureGeometry, applyPageGeometry, restoreGeometry, transformRaster, type PixelTransform, type GeometrySnapshot, type EdgeColors, type RasterBackground } from "./pageGeometry";
 import { existsSync } from "node:fs";
+import { basename, join } from "node:path";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { and, eq } from "drizzle-orm";
 import sharp from "sharp";
@@ -15,8 +16,8 @@ import { creditRole, isCreditsPage, storyPages } from "../credits";
 import { logActivity } from "./activity";
 import { describePageWithCli, compactSceneNotesWithCli } from "./cliTranslate";
 import { runCompactSceneNotes, type CompactNotesHandlers } from "./compactNotes";
-import { runDescribePage, type DescribePageHandlers } from "./pageDescribe";
-import { db } from "./db";
+import { isSingleColorPage, runDescribePage, type DescribePageHandlers } from "./pageDescribe";
+import { db, sqlite } from "./db";
 import { images, lines } from "./db/schema";
 import { nid, now } from "./ids";
 import {
@@ -33,12 +34,13 @@ import { seriesCreditsOf } from "./seriesCredits";
 import { preferences } from "./workflowService";
 import { getDoc, putDoc, readAsset } from "./workflowStore";
 import type { Preferences } from "../workflow";
-import { popUndo, pushUndo, type PageUndoOp } from "./pageUndo";
+import { popUndo, pushUndo, readUndoLog, pageUndoToken, type PageUndoOp } from "./pageUndo";
 import { listImages, listLines, toImage } from "./queries";
 import { broadcast } from "./realtime";
 import { findWhiteGutter, SOLID_STDEV, splitXFromAt } from "./spreadGutter";
 import {
   imagePath,
+  episodeDir,
   nextImageBackupPath,
   origImagePath,
   readWorkingOrOrig,
@@ -101,6 +103,7 @@ async function commitPixels(
   undo = true,
   transform?: PixelTransform,
   background: RasterBackground = "#ffffff",
+  description = 'Edit page artwork',
 ): Promise<ImageRow> {
   const geometry = transform ? await captureGeometry(ctx.episode.id, img.id) : undefined;
   if (undo) {
@@ -108,6 +111,7 @@ async function commitPixels(
     await pushUndo(ctx.series.slug, ctx.episode.slug, {
       type: "pixels",
       imageId: img.id,
+      description,
       ...(geometry ? { geometry: { [img.id]: geometry } } : {}),
     });
   }
@@ -273,7 +277,7 @@ export async function cropPage(
     .extract({ left, top, width, height })
     .png()
     .toBuffer();
-  const image = await commitPixels(ctx, img, bytes, opts.undo !== false, { sx: 1, sy: 1, dx: -left, dy: -top, width, height });
+  const image = await commitPixels(ctx, img, bytes, opts.undo !== false, { sx: 1, sy: 1, dx: -left, dy: -top, width, height }, '#ffffff', 'Crop page');
   void logActivity({
     seriesId: ctx.series.id,
     episodeId: ctx.episode.id,
@@ -300,7 +304,7 @@ export async function resizePage(
     imagePath(ctx.series.slug, ctx.episode.slug, img.filename),
   );
   const bytes = await sharp(raw).resize(w, h, { fit: "fill" }).png().toBuffer();
-  const image = await commitPixels(ctx, img, bytes, true, { sx: w / img.width, sy: h / img.height, dx: 0, dy: 0, width: w, height: h });
+  const image = await commitPixels(ctx, img, bytes, true, { sx: w / img.width, sy: h / img.height, dx: 0, dy: 0, width: w, height: h }, '#ffffff', `Resize page to ${w} × ${h} pixels`);
   void logActivity({
     seriesId: ctx.series.id,
     episodeId: ctx.episode.id,
@@ -335,7 +339,7 @@ export async function nudgePage(
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new PageEditError("Invalid nudge");
   const transform = { sx: 1, sy: 1, dx: Math.round(dx), dy: Math.round(dy), width, height };
   const bytes = await transformRaster(raw, transform, bg);
-  const image = await commitPixels(ctx, img, bytes, true, transform, bg);
+  const image = await commitPixels(ctx, img, bytes, true, transform, bg, `Nudge page by ${Math.round(dx)}, ${Math.round(dy)} pixels`);
   void logActivity({
     seriesId: ctx.series.id,
     episodeId: ctx.episode.id,
@@ -370,7 +374,7 @@ export async function scalePageToWidth(
     width: targetW,
     height: newH,
   };
-  return commitPixels(ctx, img, bytes, opts.undo !== false, transform, "#ffffff");
+  return commitPixels(ctx, img, bytes, opts.undo !== false, transform, "#ffffff", 'Scale page width');
 }
 
 export async function autoCropPages(
@@ -409,6 +413,7 @@ export async function autoCropPages(
       imageId: changed[0],
       imageIds: changed,
       geometry,
+      description: 'Auto-crop page margins',
     });
   }
   return out;
@@ -472,6 +477,7 @@ export async function autoAlignPages(ctx: Ctx): Promise<ImageRow[]> {
       imageId: changed[0],
       imageIds: changed,
       geometry,
+      description: 'Auto-align pages',
     });
   }
   void logActivity({
@@ -756,6 +762,10 @@ export async function reorderPages(
   order: { id: string; sortOrder: number }[],
 ): Promise<void> {
   const imgs = await listImages(ctx.episode.id);
+  if (order.length !== imgs.length || new Set(order.map(item => item.id)).size !== imgs.length ||
+    order.some(item => !imgs.some(image => image.id === item.id) || !Number.isInteger(item.sortOrder) || item.sortOrder < 0) ||
+    new Set(order.map(item => item.sortOrder)).size !== imgs.length)
+    throw new PageEditError('Order must include each chapter page exactly once');
   await pushUndo(ctx.series.slug, ctx.episode.slug, {
     type: "reorder",
     order: imgs.map((i) => ({ id: i.id, sortOrder: i.sortOrder })),
@@ -929,7 +939,7 @@ async function compactChapterNotes(
   const imgs = await listImages(ctx.episode.id);
   const captions = imgs
     .map((img, i) => ({ i, id: img.id, caption: (img.caption || "").trim(), revision: img.captionRevision ?? 0 }))
-    .filter((row) => row.caption);
+    .filter((row) => row.caption && row.caption !== 'Blank');
   if (!captions.length) return;
   if (jobId)
     updateJob(jobId, "running", {
@@ -1043,8 +1053,9 @@ export async function describePages(
         }
         throw e;
       }
-      const jpeg = await sharp(raw).jpeg({ quality: 75 }).toBuffer();
-      const caption = await runWithJob(
+      const blank = await isSingleColorPage(raw);
+      if (abort?.aborted) throw new Error("Cancelled");
+      const caption = blank ? 'Blank' : await runWithJob(
         {
           jobId: jobId || jobContext()?.jobId || "",
           step: "describe",
@@ -1052,8 +1063,11 @@ export async function describePages(
           engine,
           model,
         },
-        () => describeOne(jpeg, engine, model, abort),
+        async () => describeOne(await sharp(raw).jpeg({ quality: 75 }).toBuffer(), engine, model, abort),
       );
+      if (blank && jobId) appendJobLog(jobId, {
+        step: 'describe', imageId: img.id, request: 'Local single-color check', response: 'Blank · model skipped',
+      });
       if (!caption)
         throw new PageEditError("Describe returned an empty scene note", 502);
       if (abort?.aborted) throw new Error("Cancelled");
@@ -1130,7 +1144,7 @@ export async function revertPageToRaw(
   if (!existsSync(orig))
     throw new PageEditError("This page has no saved raw to revert to", 404);
   const bytes = await readFile(orig);
-  const image = await commitPixels(ctx, img, bytes);
+  const image = await commitPixels(ctx, img, bytes, true, undefined, '#ffffff', 'Revert page to original raw');
   void logActivity({
     seriesId: ctx.series.id,
     episodeId: ctx.episode.id,
@@ -1196,8 +1210,33 @@ async function applyOrder(
 
 export async function undoPageOp(
   ctx: Ctx,
+  expectedUndoToken?: string,
 ): Promise<{ op: PageUndoOp | null; image?: ImageRow; images?: ImageRow[] }> {
-  const op = await popUndo(ctx.series.slug, ctx.episode.slug);
+  const next = (await readUndoLog(ctx.series.slug, ctx.episode.slug)).at(-1);
+  if (expectedUndoToken !== undefined && (!next || pageUndoToken(next) !== expectedUndoToken))
+    throw new PageEditError('The next undo action changed. Review its updated description and confirm again.', 409);
+  if (next?.type === 'reslice') {
+    const savedLines = new Set(next.lines.map(line => line.id));
+    for (const imageId of next.createdIds) {
+      const image = sqlite.prepare('SELECT id FROM images WHERE id=? AND episode_id=?').get(imageId, ctx.episode.id);
+      if (!image) throw new PageEditError('These sliced pages changed. The page edit cannot be undone safely.', 409);
+      const page = sqlite.prepare('SELECT revision,updated_at FROM workflow_docs WHERE id=?').get(`page:${imageId}`) as { revision: number; updated_at: number } | undefined;
+      const live = sqlite.prepare('SELECT id,updated_at FROM lines WHERE image_id=? AND episode_id=?').all(imageId, ctx.episode.id) as { id: string; updated_at: number }[];
+      const changed = (page?.revision ?? 0) > 1 || live.some(line => {
+        const region = sqlite.prepare('SELECT updated_at FROM workflow_docs WHERE id=?').get(`region:${line.id}`) as { updated_at: number } | undefined;
+        return !savedLines.has(line.id) || (page && (line.updated_at > page.updated_at || (region?.updated_at ?? 0) > page.updated_at));
+      });
+      if (changed) throw new PageEditError('These sliced pages contain later work. Undo would detach regions or overwrite saved artwork/lettering, so it was stopped. Your work and undo history are unchanged.', 409);
+    }
+    // Series/chapter renames must not make an old absolute backup path unusable.
+    const localBackup = join(episodeDir(ctx.series.slug, ctx.episode.slug), basename(next.dir));
+    const backup = existsSync(localBackup) ? localBackup : next.dir;
+    for (const image of next.previous) {
+      if (!existsSync(join(backup, image.filename))) throw new PageEditError('The original page backup is missing. Undo was stopped before changing any pages.', 409);
+      if (sqlite.prepare('SELECT 1 FROM images WHERE id=?').get(image.id)) throw new PageEditError('The original pages already exist. Undo was stopped before changing any pages.', 409);
+    }
+  }
+  const op = await popUndo(ctx.series.slug, ctx.episode.slug, expectedUndoToken);
   if (!op) throw new PageEditError("Nothing to undo");
   if (op.type === "combine") {
     await db.insert(images).values(op.removed);
@@ -1239,7 +1278,8 @@ export async function undoPageOp(
   }
   if (op.type === "reslice") {
     const { copyFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
+    const localBackup = join(episodeDir(ctx.series.slug, ctx.episode.slug), basename(op.dir));
+    const backup = existsSync(localBackup) ? localBackup : op.dir;
     for (const id of op.createdIds) {
       const row = await db.select().from(images).where(eq(images.id, id)).get();
       if (row) {
@@ -1264,9 +1304,9 @@ export async function undoPageOp(
         updatedAt: img.updatedAt,
       });
       const dest = imagePath(ctx.series.slug, ctx.episode.slug, img.filename);
-      const src = join(op.dir, img.filename);
+      const src = join(backup, img.filename);
       if (existsSync(src)) await copyFile(src, dest);
-      const origSrc = join(op.dir, `${img.filename}.orig`);
+      const origSrc = join(backup, `${img.filename}.orig`);
       const origDest = origImagePath(ctx.series.slug, ctx.episode.slug, img.filename);
       if (existsSync(origSrc)) await copyFile(origSrc, origDest);
       const row = await db.select().from(images).where(eq(images.id, img.id)).get();
@@ -1281,6 +1321,8 @@ export async function undoPageOp(
         .where(eq(images.id, item.id));
     }
     for (const line of op.lines) {
+      const current = await db.select().from(lines).where(eq(lines.id, line.id)).get();
+      if (!current) continue;
       await db
         .update(lines)
         .set({
@@ -1289,10 +1331,17 @@ export async function undoPageOp(
           y: line.y,
           w: line.w,
           h: line.h,
-          revision: (line.revision ?? 0) + 1,
+          revision: current.revision + 1,
           updatedAt: now(),
         })
         .where(eq(lines.id, line.id));
+      sqlite.prepare("UPDATE suggestions SET base_revision=? WHERE episode_id=? AND line_id=? AND base_revision=? AND state='pending'")
+        .run(current.revision + 1, ctx.episode.id, line.id, current.revision);
+    }
+    for (const img of op.previous) {
+      const snapshot = op.geometry?.[img.id];
+      const row = await db.select().from(images).where(eq(images.id, img.id)).get();
+      if (snapshot && row) await restoreGeometry(ctx.episode.id, toImage(row), snapshot);
     }
     const next = await listImages(ctx.episode.id);
     broadcast(ctx.episode.id, {

@@ -42,14 +42,28 @@ export function qualificationCurrent(row: ModelRow, id: QualificationId) {
   const sample = qualificationSample(row, id);
   return !!sample?.fingerprint && sample.fingerprint === qualificationFingerprint(row, id);
 }
+/** Historical checks describe an earlier implementation; they cannot veto this one. */
+export function qualificationAllowsUse(row: ModelRow, id: QualificationId): boolean {
+  const sample = qualificationSample(row, id);
+  return !!sample && (!qualificationCurrent(row, id) || sample.ok);
+}
+export function qualificationWarnings(row: ModelRow): string[] {
+  const checks = new Set<QualificationId>([...qualificationChecks(row), ...Object.keys(row.probes || {}) as ModelTaskId[]]);
+  const stale = [...checks].filter(id => qualificationSample(row, id) && !qualificationCurrent(row, id));
+  return stale.length ? [`Tests out of date (${stale.map(qualificationLabel).join(', ')}). Outdated results are warnings; retest to update them.`] : [];
+}
 export function qualificationReason(row: ModelRow, task: ModelTaskId): string {
   if (row.implementedTasks && !row.implementedTasks.includes(task)) return 'Not implemented by this adapter';
   const requirements = row.qualificationAdapter && row.qualificationAdapter !== 'direct' ? CAPABILITY_REQUIREMENTS[task] : undefined;
   if (requirements) {
-    const missing = requirements.filter(id => !capabilityPassed(row, id));
+    const stale = requirements.filter(id => qualificationSample(row, id) && !qualificationCurrent(row, id));
+    const missing = requirements.filter(id => !qualificationAllowsUse(row, id));
+    if (!missing.length && stale.length) return `Available · ${stale.map(qualificationLabel).join(' + ')} test out of date (warning only)`;
+    if (row.probes?.[task] && !qualificationCurrent(row, task) && requirements.every(id => !qualificationCurrent(row, id) || qualificationAllowsUse(row, id))) return 'Available · previous job test out of date (warning only)';
     return missing.length ? `Needs ${missing.map(qualificationLabel).join(' + ')}` : `Available from ${requirements.map(qualificationLabel).join(' + ')}`;
   }
   if (task === 'sourceReview') return 'Uses the transcription check';
+  if (qualificationSample(row, task) && !qualificationCurrent(row, task)) return 'Available · test out of date (warning only)';
   return 'Requires a current passing integration check';
 }
 /** One image request yields two separately validated results. */

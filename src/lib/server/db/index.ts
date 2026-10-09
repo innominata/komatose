@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { DB_PATH, ensureDataDirs } from '../paths';
 import * as schema from './schema';
-import { migrateWorkflow, migrateWorkflowV2, migrateReviewTranslations, migrateSeriesGlossary, migrateSeriesCredits, migrateEditorHotPath, migrateLinePlacementRevisions } from './workflowMigration';
+import { migrateWorkflow, migrateWorkflowV2, migrateReviewTranslations, migrateSeriesGlossary, migrateSeriesCredits, migrateEditorHotPath, migrateLinePlacementRevisions, migrateSeriesReadingPreferences } from './workflowMigration';
 
 ensureDataDirs();
 mkdirSync(dirname(DB_PATH), { recursive: true });
@@ -182,6 +182,7 @@ client.exec(`CREATE TABLE IF NOT EXISTS global_font_assets (
 )`);
 migrateEditorHotPath(client);
 migrateLinePlacementRevisions(client);
+migrateSeriesReadingPreferences(client);
 
 export const db = drizzle(client, { schema });
 export { client as sqlite };

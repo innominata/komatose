@@ -1391,6 +1391,16 @@ test("review-step glossary mining proposes new series terms and accepts them for
     parseGlossaryMine({ terms: [{ source: "太郎", translation: "Taro", kind: "name", reason: "hero" }, { source: "", translation: "x" }] }),
     [{ source: "太郎", translation: "Taro", kind: "name", reason: "hero", state: "pending" }],
   );
+  assert.deepEqual(parseGlossaryMine({ terms: [] }), []);
+  const nonstandard = { terms: [
+    { term: "Kim Minji", type: "character", note: "김민지 — protagonist" },
+    { term: "Invented", type: "place", note: "없는장소 — not in the script" },
+  ] };
+  assert.deepEqual(parseGlossaryMine(nonstandard, ["그게 바로 나, 김\n민지이기 때문이다."]), [
+    { source: "김민지", translation: "Kim Minji", kind: "name", reason: "김민지 — protagonist", state: "pending" },
+  ]);
+  assert.throws(() => parseGlossaryMine(nonstandard), /without usable source\/translation fields/);
+  assert.throws(() => parseGlossaryMine({ terms: [{ source: { bad: true }, translation: ["bad"] }] }), /without usable source\/translation fields/);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({
     choices: [{ message: { content: JSON.stringify({ terms: [
@@ -1423,6 +1433,17 @@ test("review-step glossary mining proposes new series terms and accepts them for
         sidebarX: null, sidebarY: null, sidebarW: null, sidebarH: null, sortOrder: 0, createdBy: null, updatedBy: null, updatedAt: 1 },
     ]);
     assert.ok(issues.some((issue) => issue.code === "glossary" && issue.severity === "warning" && /Tokyo/.test(issue.message)));
+    globalThis.fetch = async () => Response.json({
+      choices: [{ message: { content: JSON.stringify({ terms: [{ term: "Unusable candidate", type: "character", note: "No original spelling" }] }) } }],
+    });
+    const malformed = await startGlossaryMine({ series, episode: ep, user, engine: "qwen", model: "glossary-model" });
+    for (let i = 0; i < 500; i++) {
+      job = listJobs(epId).find(j => j.id === malformed.jobId)!;
+      if (!["running", "queued"].includes(job.state)) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(job!.state, "failed", "An unusable response must not report a successful empty extraction");
+    assert.match(job!.error!, /without usable source\/translation fields/);
   } finally {
     globalThis.fetch = originalFetch;
     sqlite.prepare("DELETE FROM episodes WHERE id=?").run(epId);
@@ -3356,7 +3377,7 @@ test("CLI proofreading keeps chapter IDs across pages and chunks and counts only
   await writeFile(fixture, `#!/usr/bin/env node
 const fs = require('node:fs');
 const prompt = fs.readFileSync(0, 'utf8').split('Rewrite these:\\n')[1];
-const items = [...prompt.matchAll(/^\\[(\\d+)\\][^\\n]*\\n(?:source:[^\\n]*\\n)?(?:literal:[^\\n]*\\n)?current: ([^\\n]*)/gm)]
+const items = [...prompt.matchAll(/^\\[(\\d+)\\][^\\n]*\\n(?:speaker:[^\\n]*\\n)?(?:source:[^\\n]*\\n)?(?:literal:[^\\n]*\\n)?current: ([^\\n]*)/gm)]
   .map(([, id, current]) => ({ i: Number(id), literal: '', translation: current.replace('recieve', 'receive').replace('What for reason', 'Why'), reasoning: 'Correct spelling and awkward phrasing' })).reverse();
 fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], JSON.stringify({items}));
 `, { mode: 0o700 });
@@ -3378,6 +3399,13 @@ fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], JSON.stringify({i
     for (let i = 0; i < 35; i++)
       assert.equal(suggestions.find(s => s.line_id === `proof-l1-${i}`)?.body, `Why did I receive letter 1-${i}?`);
     assert.ok((await listLines('proof-e')).every(line => line.body.includes('recieve')), 'corrections remain suggestions');
+    sqlite.prepare("UPDATE lines SET status='approved' WHERE episode_id='proof-e'").run();
+    const wholeScript = await proofreadChapter({ seriesId: 's', episodeId: 'proof-e', engine: 'codex' });
+    assert.deepEqual(wholeScript, { changed: 37, total: 37 }, 'No page filter proofreads the whole chapter, including approved lines');
+    const chapterSuggestions = sqlite.prepare("SELECT line_id,body FROM suggestions WHERE episode_id='proof-e'").all() as { line_id: string; body: string }[];
+    assert.equal(new Set(chapterSuggestions.map(s => s.line_id)).size, 37);
+    assert.equal(chapterSuggestions.find(s => s.line_id === 'proof-l0-0')?.body, 'Why did I receive letter 0-0?');
+    assert.ok((await listLines('proof-e')).every(line => line.status === 'approved' && line.body.includes('recieve')), 'Whole-script proofreading leaves approved text intact until a suggestion is accepted');
     await writeFile(fixture, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.argv[process.argv.indexOf('-o') + 1], JSON.stringify({items: []}));\n`, { mode: 0o700 });
     await assert.rejects(proofreadChapter({ seriesId: 's', episodeId: 'proof-e', engine: 'codex', imageIds: ['proof-p0'] }), /Proofreading returned no text/);
   } finally {
@@ -4058,6 +4086,69 @@ async function llmReply(content: string, delay = 0, signal?: AbortSignal | null)
   return Response.json({ choices: [{ message: { content } }] });
 }
 
+test("single-color page detection checks every channel and preserves tiny marks", async () => {
+  const { isSingleColorPage } = await import('../src/lib/server/pageDescribe');
+  for (const background of ['white', 'black', '#b145ce']) {
+    const bytes = await sharp({ create: { width: 64, height: 2048, channels: 3, background } }).png().toBuffer();
+    assert.equal(await isSingleColorPage(bytes), true, background);
+  }
+  const marked = await sharp({ create: { width: 64, height: 2048, channels: 3, background: 'white' } })
+    .composite([{ input: Buffer.from([254, 255, 255]), raw: { width: 1, height: 1, channels: 3 }, left: 63, top: 2047 }])
+    .png().toBuffer();
+  assert.equal(await isSingleColorPage(marked), false, 'a faint single pixel must not disappear in a resize or threshold');
+  const colored = await sharp(Buffer.from([255, 0, 0, 0, 255, 0]), { raw: { width: 2, height: 1, channels: 3 } }).png().toBuffer();
+  assert.equal(await isSingleColorPage(colored), false, 'constant values within each pixel do not imply a solid image');
+});
+
+test("describe labels solid pages Blank without model calls and preserves them during compaction", async () => {
+  sqlite.prepare("INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('describe-blank-e','s','describe-blank','Blank pages',1,1)").run();
+  const ep = (await getEpisode('describe-blank-e'))!;
+  const { startDescribePages } = await import('../src/lib/server/pageEdit');
+  async function addPage(id: string, background: string, sortOrder: number, marked = false) {
+    let image = sharp({ create: { width: 80, height: 120, channels: 3, background } });
+    if (marked) image = image.composite([{ input: Buffer.from([0, 0, 0]), raw: { width: 1, height: 1, channels: 3 }, left: 79, top: 119 }]);
+    const saved = await saveImageFile({ seriesSlug: series.slug, episodeSlug: ep.slug, sortOrder, originalName: `${id}.png`, bytes: await image.png().toBuffer(), mime: 'image/png' });
+    await db.insert(schema.images).values({ id, episodeId: ep.id, originalName: `${id}.png`, ...saved, sortOrder, caption: '', createdAt: 1, updatedAt: 1 });
+  }
+  await addPage('blank-white', 'white', 0);
+  await addPage('blank-black', 'black', 1);
+  await addPage('blank-color', '#b145ce', 2);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error('Blank pages must not use a model'); };
+  try {
+    const first = startDescribePages({ series, episode: ep, user: testUser }, undefined, true, 'qwen');
+    const firstJob = await waitForJob(ep.id, first.jobId);
+    assert.equal(firstJob.state, 'completed');
+    assert.equal(firstJob.progress.completed, 3);
+    assert.equal(calls, 0, 'also skip scene-note compaction when every page is Blank');
+    assert.deepEqual((await listImages(ep.id)).map(img => img.caption), ['Blank', 'Blank', 'Blank']);
+    assert.ok(firstJob.progress.log.some((entry: any) => entry.response === 'Blank · model skipped'));
+
+    await addPage('blank-marked', 'white', 3, true);
+    let describeCalls = 0;
+    let compactCalls = 0;
+    globalThis.fetch = async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || '{}'));
+      if (String(payload.messages?.[0]?.content || '').startsWith('You edit scanlation scene notes')) {
+        compactCalls++;
+        const prompt = JSON.stringify(payload.messages);
+        assert.doesNotMatch(prompt, /Blank/);
+        return llmReply(JSON.stringify({ chapter: '', pages: [{ i: 3, caption: 'A small mark.' }] }));
+      }
+      describeCalls++;
+      return llmReply('A mark on white.');
+    };
+    const second = startDescribePages({ series, episode: ep, user: testUser }, undefined, true, 'qwen');
+    assert.equal((await waitForJob(ep.id, second.jobId)).state, 'completed');
+    assert.equal(describeCalls, 1);
+    assert.equal(compactCalls, 1);
+    assert.deepEqual((await listImages(ep.id)).map(img => img.caption), ['Blank', 'Blank', 'Blank', 'A small mark.']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("describe creates a job, records LLM I/O, and completes", async () => {
   sqlite
     .prepare(
@@ -4068,6 +4159,7 @@ test("describe creates a job, records LLM I/O, and completes", async () => {
   const bytes = await sharp({
     create: { width: 80, height: 80, channels: 3, background: { r: 240, g: 240, b: 240 } },
   })
+    .composite([{ input: Buffer.from([0, 0, 0]), raw: { width: 1, height: 1, channels: 3 }, left: 0, top: 0 }])
     .png()
     .toBuffer();
   const saved = await saveImageFile({
@@ -4145,6 +4237,7 @@ test("describe with Qwen3-VL uses the local VL server, not the 27B", async () =>
   const bytes = await sharp({
     create: { width: 80, height: 80, channels: 3, background: { r: 18, g: 24, b: 48 } },
   })
+    .composite([{ input: Buffer.from([255, 255, 255]), raw: { width: 1, height: 1, channels: 3 }, left: 0, top: 0 }])
     .png()
     .toBuffer();
   const saved = await saveImageFile({
@@ -4213,6 +4306,7 @@ test("describe cancel and retry still work", async () => {
   const bytes = await sharp({
     create: { width: 40, height: 40, channels: 3, background: { r: 200, g: 200, b: 200 } },
   })
+    .composite([{ input: Buffer.from([0, 0, 0]), raw: { width: 1, height: 1, channels: 3 }, left: 0, top: 0 }])
     .png()
     .toBuffer();
   const saved = await saveImageFile({
@@ -4376,31 +4470,397 @@ test("job log unwraps Cursor envelopes into prompt, result, and usage", async ()
   assert.match(logged.usageText || "", /Token\/s 26\.8tok\/s/);
 });
 
-test("reslice packs at the last white band before 16k and force-cuts solid art", async () => {
-  const { findWhiteRowBands, chooseCuts, RESLICE_MAX_H } = await import(
-    "../src/lib/server/reslice"
-  );
-  const width = 32;
-  const height = 80;
+test("reslice detects only full-width solid-color bands, including black and colored gaps", async () => {
+  const { findSolidRowBands } = await import("../src/lib/server/reslice");
+  const width = 3200, height = 70;
   const raw = Buffer.alloc(width * height * 3, 20);
-  for (let y = 40; y < 56; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 3;
-      raw[i] = raw[i + 1] = raw[i + 2] = 255;
-    }
+  for (let y = 0; y < height; y++) {
+    // Non-solid art, with a one-pixel feature at a position skipped by the old sampler.
+    raw[(y * width + 1601) * 3] = 180;
+    const color = y >= 10 && y < 20 ? [255, 255, 255]
+      : y >= 30 && y < 40 ? [0, 0, 0]
+      : y >= 50 && y < 60 ? [40, 80, 120] : null;
+    if (color) for (let x = 0; x < width; x++)
+      for (let c = 0; c < 3; c++) raw[(y * width + x) * 3 + c] = color[c];
   }
-  const bands = findWhiteRowBands(raw, width, height, 3);
-  assert.equal(bands.length, 1);
-  assert.ok(bands[0].y >= 40 && bands[0].y <= 56);
-  const packed = chooseCuts(400, [{ top: 80, bottom: 90, y: 85 }, { top: 250, bottom: 270, y: 260 }], 300);
+  assert.deepEqual(findSolidRowBands(raw, width, height, 3), [
+    { top: 10, bottom: 20, y: 15 }, { top: 30, bottom: 40, y: 35 },
+    { top: 50, bottom: 60, y: 55 },
+  ]);
+  // Even a single contrasting ink pixel invalidates a row, including at either edge.
+  for (const x of [0, 1601, width - 1]) {
+    const ink = Buffer.alloc(width * 20 * 3, 255);
+    for (let y = 0; y < 20; y++) ink[(y * width + x) * 3] = 0;
+    assert.deepEqual(findSolidRowBands(ink, width, 20, 3), []);
+  }
+  // A vertical gradient is not a solid-color band either.
+  const gradient = Buffer.alloc(width * 20 * 3);
+  for (let y = 0; y < 20; y++) gradient.fill(y * 10, y * width * 3, (y + 1) * width * 3);
+  assert.deepEqual(findSolidRowBands(gradient, width, 20, 3), []);
+});
+
+test("reslice uses safe gaps near the target, retains small overflows, and never force-cuts", async () => {
+  const { chooseCuts, RESLICE_MAX_H } = await import("../src/lib/server/reslice");
+  const packed = chooseCuts(500, [{ top: 80, bottom: 90, y: 85 }, { top: 250, bottom: 270, y: 260 }], 300);
   assert.deepEqual(packed.cuts, [260]);
-  assert.deepEqual(packed.forced, []);
-  const forced = chooseCuts(400, [], 300);
-  assert.deepEqual(forced.cuts, [300]);
-  assert.deepEqual(forced.forced, [300]);
-  const over = chooseCuts(RESLICE_MAX_H + 50, [], RESLICE_MAX_H);
-  assert.deepEqual(over.cuts, [RESLICE_MAX_H]);
-  assert.deepEqual(over.forced, [RESLICE_MAX_H]);
+  assert.equal(packed.manualRequired, false);
+  const missing = chooseCuts(5000, [], 1200);
+  assert.deepEqual(missing.cuts, []);
+  assert.deepEqual(missing.forced, []);
+  assert.equal(missing.manualRequired, true);
+  // A 20px overflow remains on one page, even without a gutter.
+  assert.deepEqual(chooseCuts(1220, [], 1200), { cuts: [], forced: [], manualRequired: false });
+  // Keep the whole panel before a colored gutter just beyond the nominal target.
+  const beyond = chooseCuts(2420, [{ top: 1210, bottom: 1230, y: 1220 }], 1200);
+  assert.deepEqual(beyond.cuts, [1220]);
+  assert.equal(beyond.manualRequired, false);
+  // A gap at 2.5x width still gets used when the target is 1.5x. Continue
+  // producing ordinary pages after it; only the first page needs manual work.
+  const later = chooseCuts(5000, [
+    { top: 1990, bottom: 2010, y: 2000 },
+    { top: 3190, bottom: 3210, y: 3200 },
+    { top: 4390, bottom: 4410, y: 4400 },
+  ], 1200);
+  assert.deepEqual(later.cuts, [2000, 3200, 4400]);
+  assert.deepEqual(later.forced, []);
+  assert.equal(later.manualRequired, true);
+  const { manualSliceRanges } = await import("../src/lib/reslice");
+  assert.deepEqual(manualSliceRanges(5000, later.cuts, 1200), [{ top: 0, bottom: 2000, height: 2000 }]);
+  // An unsplittable trailing stretch does not remove the earlier safe cuts.
+  const tail = chooseCuts(6000, [{ top: 1190, bottom: 1210, y: 1200 }], 1200);
+  assert.deepEqual(tail.cuts, [1200]);
+  assert.deepEqual(manualSliceRanges(6000, tail.cuts, 1200), [{ top: 1200, bottom: 6000, height: 4800 }]);
+  // A gap 20px before the bottom must not create a tiny overflow page.
+  const tinyTail = chooseCuts(2500, [{ top: 2470, bottom: 2490, y: 2480 }], 1200);
+  assert.deepEqual(tinyTail.cuts, []);
+  assert.equal(tinyTail.manualRequired, true);
+  const wideGap = chooseCuts(5000, [{ top: 0, bottom: 5000, y: 2500 }], 1200);
+  assert.deepEqual(wideGap.forced, []);
+  assert.equal(wideGap.manualRequired, false);
+  assert.deepEqual(wideGap.cuts, [1200, 2400, 3600, 4800]);
+  // Even at the 16k target, rebalance in a solid background rather than
+  // moving the final 100px onto its own page.
+  const balanced = chooseCuts(16100, [{ top: 0, bottom: 16100, y: 8050 }], RESLICE_MAX_H);
+  assert.deepEqual(balanced.cuts, [8050]);
+  const smallPages = chooseCuts(600, [{ top: 170, bottom: 190, y: 180 }], 200);
+  assert.equal(smallPages.cuts[0], 180);
+});
+
+test("reslice page sizing validates custom heights and preserves legacy jobs", async () => {
+  const { sliceHeight } = await import("../src/lib/reslice");
+  const { parseResliceSize } = await import("../src/lib/server/reslice");
+  assert.equal(sliceHeight(800, { sizing: "pages" }), 1200);
+  assert.equal(sliceHeight(1200, { sizing: "pages" }), 1800);
+  assert.equal(sliceHeight(800, { sizing: "custom", maxHeight: 2048 }), 2048);
+  assert.equal(sliceHeight(800, { sizing: "strips" }), 16000);
+  assert.equal(sliceHeight(800), 16000);
+  for (const maxHeight of [0, 199, 16001, 1200.5, NaN, "1200", null]) {
+    assert.throws(() => parseResliceSize({ sizing: "custom", maxHeight }), /whole-number/);
+  }
+  assert.throws(() => parseResliceSize({ sizing: ["pages"] }), /Choose normal/);
+  assert.throws(() => parseResliceSize({ sizing: "invalid" }), /Choose normal/);
+});
+
+test("reslice protects current bubble interiors and saved lettering outside the text box", async () => {
+  const { protectedResliceRanges, sliceRegionWork } = await import("../src/lib/server/resliceWork");
+  const { hash } = await import("../src/lib/server/workflowStore");
+  const line = { id: "current-region", x: 0.2, y: 0.3, w: 0.2, h: 0.02,
+    sourceState: "ignored" };
+  const region = { geometryApproved: true, locked: true,
+    polygon: [{ x: 0.15, y: 0.25 }, { x: 0.5, y: 0.25 },
+      { x: 0.5, y: 0.4 }, { x: 0.15, y: 0.4 }],
+    bubbleBounds: { x: 0.1, y: 0.2, w: 0.5, h: 0.3 } };
+  const work: any = { lines: [line], sources: [{ top: 1000, image: { width: 800, height: 5000 },
+    snapshot: { lines: [{ id: line.id, region }] } }] };
+  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2250, bottom: 3000 }]);
+  // Hand-drawn interiors can legitimately extend beyond the text box without
+  // having detector bubble metadata. They must still be kept together.
+  work.sources[0].snapshot.lines[0].region = { ...region, bubbleBounds: undefined };
+  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2250, bottom: 3000 }]);
+  const knownStale = { ...region, resliceStalePolygon: hash(JSON.stringify(region.polygon)) };
+  work.sources[0].snapshot.lines[0].region = knownStale;
+  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2500, bottom: 2600 }]);
+  const edited = { ...knownStale, polygon: region.polygon.map(p => ({ ...p, y: p.y + 0.01 })) };
+  work.sources[0].snapshot.lines[0].region = edited;
+  const [editedRange] = protectedResliceRanges(work);
+  assert.equal(editedRange.top, 2300);
+  assert.ok(Math.abs(editedRange.bottom - 3050) < 1e-9);
+  const transformedEdit = await sliceRegionWork(line as any, work.sources[0],
+    { top: 1000, bottom: 6000, width: 800, height: 5000 }, { width: 800, height: 5000 } as any, 72);
+  assert.equal(transformedEdit.region.resliceStalePolygon, undefined, "editing the shape clears its old-frame classification");
+  // Even if a polygon is stale, the box and its rendered text must stay on the
+  // same page. A cut between them would otherwise clip saved lettering.
+  work.sources[0].snapshot.lines[0].region = { ...region,
+    polygon: region.polygon.map(p => ({ ...p, y: p.y * 20 })),
+    layout: { rows: [{ baseline: 2800 }], size: 14, dpi: 72, style: { ...DEFAULT_STYLE, outlineWidth: 1 } } };
+  const [range] = protectedResliceRanges(work);
+  assert.equal(range.top, 2500 - 29);
+  assert.equal(range.bottom, 3800 + 29);
+  assert.equal(region.locked, true);
+  // The real regression: a page full of polygons in the old coordinate frame,
+  // including one spanning most of the page but incidentally touching its box.
+  const oldPolygons = Array.from({ length: 4 }, (_, i) => ({ ...line, id: `old-frame-${i}`,
+    region: { ...region, bubbleBounds: undefined,
+      polygon: region.polygon.map(p => ({ ...p, y: i === 3 ? (p.y === 0.25 ? 0.02 : 0.98) : p.y - 0.24 })) } }));
+  const oldFrameWork: any = { lines: oldPolygons,
+    sources: [{ top: 1000, image: { width: 800, height: 5000 }, snapshot: { lines: oldPolygons } }] };
+  assert.deepEqual(protectedResliceRanges(oldFrameWork), oldPolygons.map(l => ({ id: l.id, top: 2500, bottom: 2600 })));
+});
+
+test("reslice normal pages match the preview, keep source pixels and regions, and undo", async () => {
+  const { previewReslice, reslicePages } = await import("../src/lib/server/reslice");
+  const { capturePageImages } = await import("../src/lib/server/pageImages");
+  const { undoPageOp } = await import("../src/lib/server/pageEdit");
+  sqlite.prepare("INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('normal-e','s','normal','Normal pages',1,1)").run();
+  const ep = (await getEpisode("normal-e"))!;
+  const ctx = { series, episode: ep, user: testUser };
+  const width = 800, height = 5000;
+  // Distinct row values let us verify every source pixel survives in reading order.
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y++) {
+    const gap = [1150, 2300, 3450, 4600].some(top => y >= top && y < top + 40);
+    pixels.fill(gap ? 255 : 20 + y % 160, y * width * 3, (y + 1) * width * 3);
+  }
+  const saved = await saveImageFile({ seriesSlug: series.slug, episodeSlug: ep.slug,
+    sortOrder: 0, originalName: "strip.png", mime: "image/png",
+    bytes: await sharp(pixels, { raw: { width, height, channels: 3 } }).png().toBuffer() });
+  await db.insert(schema.images).values({ id: "normal-strip", episodeId: ep.id,
+    ...saved, originalName: "strip.png", sortOrder: 0, createdAt: 1, updatedAt: 1 });
+  await db.insert(schema.lines).values({ id: "normal-line", episodeId: ep.id,
+    imageId: "normal-strip", source: "bubble", sourceState: "read", body: "Hi",
+    lineType: '""', status: "none", placed: true, x: 0.1, y: 0.3, w: 0.2,
+    h: 0.02, sortOrder: 0, updatedAt: 1 });
+  // Older edits can leave a polygon in the old strip frame while the current
+  // text box is correctly rebased. It must not suppress every safe gutter.
+  const staleRegion = { locked: true, geometryApproved: true,
+    polygon: [{ x: 0.1, y: 0.22 }, { x: 0.3, y: 0.22 },
+      { x: 0.3, y: 0.28 }, { x: 0.1, y: 0.28 }],
+    bubbleBounds: { x: 0.08, y: 0.29, w: 0.25, h: 0.04 } };
+  putDoc(ep.id, "region:normal-line", staleRegion, 0);
+  for (const [i, [y, top, bottom]] of [[0.1, 0.02, 0.08], [0.55, 0.45, 0.51], [0.82, 0.76, 0.96]].entries()) {
+    const id = `normal-extra-${i}`;
+    await db.insert(schema.lines).values({ id, episodeId: ep.id, imageId: "normal-strip",
+      body: "Kept", source: "Kept source", lineType: '""', placed: true, status: "none",
+      x: 0.1, y, w: 0.2, h: 0.02, sortOrder: i + 1, updatedAt: 1 });
+    putDoc(ep.id, `region:${id}`, { locked: true, geometryApproved: true,
+      polygon: [{ x: 0.1, y: top }, { x: 0.3, y: top },
+        { x: 0.3, y: bottom }, { x: 0.1, y: bottom }] }, 0);
+  }
+  const preview = await previewReslice(ctx, ["normal-strip"], { sizing: "pages" });
+  assert.equal(preview.maxHeight, 1200);
+  assert.deepEqual(preview.cuts, [1170, 2320, 3470, 4620]);
+  assert.deepEqual(preview.forced, []);
+  const custom = await previewReslice(ctx, ["normal-strip"], { sizing: "custom", maxHeight: 2048 });
+  assert.equal(custom.maxHeight, 2048);
+  assert.notDeepEqual(custom.cuts, preview.cuts);
+  assert.deepEqual((await previewReslice(ctx, ["normal-strip"], { sizing: "strips" })).cuts, []);
+  assert.equal(preview.manualRequired, false);
+  const result = await reslicePages(ctx, { sizing: "pages" });
+  assert.deepEqual(result.forced, []);
+  const bounds = [0, ...preview.cuts, height];
+  assert.deepEqual(result.images.map(p => p.height), bounds.slice(1).map((y, i) => y - bounds[i]));
+  assert.ok(result.images.every(p => p.width === width && p.height <= 1200));
+  const output = [];
+  for (const image of result.images) {
+    output.push(await sharp((await readWorkingOrOrig(series.slug, ep.slug, image.filename))!)
+      .removeAlpha().raw().toBuffer());
+  }
+  assert.deepEqual(Buffer.concat(output), pixels);
+  const moved = (await listLines(ep.id))[0];
+  assert.equal(moved.imageId, result.images[1].id);
+  assert.equal(moved.y, (1500 - 1170) / 1150);
+  assert.equal(moved.h, 100 / 1150);
+  const movedRegion = getDoc<any>("region:normal-line", {}).data;
+  assert.equal(movedRegion.locked, true);
+  assert.equal(movedRegion.geometryApproved, true);
+  assert.deepEqual(movedRegion.polygon, staleRegion.polygon.map(p => ({ x: p.x, y: (p.y * height - 1170) / 1150 })));
+  assert.match(movedRegion.resliceStalePolygon, /^[a-f0-9]{64}$/);
+  const repeatedPreview = await previewReslice(ctx, result.images.map(i => i.id), { sizing: "pages" });
+  assert.deepEqual(repeatedPreview.cuts, preview.cuts, "old-frame polygons remain recognizable after the first split");
+  // The proofreader's raw and English attachments inherit the page dimensions.
+  const capture = await capturePageImages(series, ep, result.images[0].id);
+  for (const bytes of [capture.raw, capture.typeset!]) {
+    const meta = await sharp(bytes).metadata();
+    assert.equal(meta.width, width);
+    assert.equal(meta.height, 1170);
+  }
+  await undoPageOp(ctx);
+  assert.deepEqual((await listImages(ep.id)).map(p => p.id), ["normal-strip"]);
+  const restored = (await listLines(ep.id))[0];
+  assert.equal(restored.imageId, "normal-strip");
+  assert.equal(restored.y, 0.3);
+  assert.deepEqual(getDoc<any>("region:normal-line", {}).data, staleRegion);
+});
+
+test("reslice preserves cleaning layers, masks, lettering, approvals, regions, comments and suggestions, including undo", async () => {
+  const { reslicePages, previewReslice } = await import("../src/lib/server/reslice");
+  const { capturePageImages } = await import("../src/lib/server/pageImages");
+  const { pageStepStamp, PAGE_STEPS } = await import("../src/lib/workflow");
+  const { listComments } = await import("../src/lib/server/queries");
+  const { layoutKey } = await import("../src/lib/server/typesetting");
+  const { undoPageOp } = await import("../src/lib/server/pageEdit");
+  const { readAsset } = await import("../src/lib/server/workflowStore");
+  sqlite.prepare("INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('kept-e','s','kept','Keep work',1,1)").run();
+  const ep = (await getEpisode("kept-e"))!;
+  const ctx = { series, episode: ep, user: testUser };
+  const snapshots: { image: ImageRow; page: PageData; region: any; bytes: Record<string, Buffer> }[] = [];
+  const layerKeys = ["original", "prepared", "cleanBase", "cleaned", "previousArtwork", "mask"] as const;
+  for (let i = 0; i < 2; i++) {
+    const width = i ? 120 : 160, height = 900, dpi = i ? 144 : 96;
+    const bytes: Record<string, Buffer> = {};
+    for (const [k, key] of layerKeys.entries()) {
+      const raw = Buffer.alloc(width * height * 3);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const at = (y * width + x) * 3;
+        raw[at] = 20 + i * 40 + k * 20;
+        raw[at + 1] = y % 180;
+        raw[at + 2] = x % 150;
+      }
+      bytes[key] = await sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+    }
+    const saved = await saveImageFile({ seriesSlug: series.slug, episodeSlug: ep.slug,
+      sortOrder: i, originalName: `kept-${i}.png`, bytes: bytes.original, mime: "image/png" });
+    await db.insert(schema.images).values({ id: `kept-p${i}`, episodeId: ep.id, ...saved,
+      dpi, caption: `Scene ${i}`, originalName: `kept-${i}.png`, sortOrder: i, createdAt: 7, updatedAt: 7 });
+    const image = (await listImages(ep.id)).find(p => p.id === `kept-p${i}`)!;
+    const y = i ? 0.05 : 0.2, h = 0.15;
+    await db.insert(schema.lines).values({ id: `kept-r${i}`, episodeId: ep.id, imageId: image.id,
+      source: "Original source", sourceState: "read", body: "Keep these line breaks", status: "approved",
+      lineType: '""', placed: true, x: 0.2, y, w: 0.6, h, sortOrder: i, revision: 3, updatedAt: 7 });
+    const line = (await listLines(ep.id)).find(l => l.id === `kept-r${i}`)!;
+    const style = { ...DEFAULT_STYLE, size: 14, minSize: 6, outlineWidth: 1, rotation: 8 };
+    const textMask = await storeAsset(await sharp({ create: { width, height, channels: 3, background: "white" } })
+      .composite([{ input: await sharp({ create: { width: 8, height: 8, channels: 3, background: "black" } }).png().toBuffer(),
+        left: Math.round(width * 0.2) + 8, top: Math.round(height * y) + 8 }]).png().toBuffer());
+    const region: any = { locked: true, geometryApproved: true, style, textMask,
+      bubbleBounds: { x: 0.2, y, w: 0.6, h },
+      polygon: [{ x: 0.2, y }, { x: 0.8, y }, { x: 0.8, y: y + h }, { x: 0.2, y: y + h }],
+      layout: { rows: [{ text: "Keep these", x: width * 0.2, baseline: height * y + 30, width: 60 },
+        { text: "line breaks", x: width * 0.2, baseline: height * y + 55, width: 60 }],
+        size: 14, dpi, width, height, style, overflow: false, missingGlyphs: [], hyphenated: false,
+        font: { id: "kept-font", hash: "a".repeat(64), postscriptName: "Kept Font" },
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect x="${width * 0.2}" y="${height * y}" width="60" height="50" fill="#ff0000"/></svg>` } };
+    region.layout.key = layoutKey(line, region, image, style, dpi);
+    putDoc(ep.id, `region:${line.id}`, region, 0);
+    await db.insert(schema.comments).values({ id: `kept-comment${i}`, lineId: line.id, userId: testUser.id,
+      body: "Keep this proofreading note", correction: true, createdAt: 7 });
+    const page: PageData = { dpi, preparedAt: 7, maskApproved: true, cleanApproved: true, cleanMethod: "lama",
+      strokes: [{ points: [{ x: 0.2, y }, { x: 0.3, y: y + 0.02 }], radius: 4, erase: false }] };
+    for (const key of layerKeys) page[key] = await storeAsset(bytes[key]);
+    snapshots.push({ image, page, region, bytes });
+  }
+  // A region without page coordinates must still keep its page association.
+  await db.insert(schema.lines).values({ id: "kept-unplaced", episodeId: ep.id, imageId: "kept-p1",
+    body: "Unplaced note", lineType: '""', placed: false, sourceState: "read", revision: 2, updatedAt: 7 });
+  putDoc(ep.id, "region:kept-unplaced", { locked: true }, 0);
+  for (const snap of snapshots) {
+    const lines = (await listLines(ep.id)).filter(l => l.imageId === snap.image.id);
+    const comments = (await listComments(ep.id)).filter(c => lines.some(l => l.id === c.lineId));
+    snap.page.completed = {};
+    for (const step of PAGE_STEPS) snap.page.completed[step] = pageStepStamp(step, snap.page, lines, comments,
+      lines.map(l => ({ id: l.id, data: getDoc<any>(`region:${l.id}`, {}).data })));
+    putDoc(ep.id, `page:${snap.image.id}`, snap.page, 0);
+  }
+  sqlite.prepare("INSERT INTO suggestions(id,episode_id,line_id,base_revision,body,reason,kind,state,created_at) VALUES('kept-suggestion','kept-e','kept-r1',3,'Pending English','Keep me','translation','pending',7)").run();
+  sqlite.prepare("INSERT INTO suggestions(id,episode_id,line_id,base_revision,body,reason,kind,state,created_at) VALUES('kept-stale','kept-e','kept-r1',2,'Already stale','Keep stale','translation','pending',7)").run();
+  const beforeProof = await Promise.all(snapshots.map(s => capturePageImages(series, ep, s.image.id)));
+  // Cuts through a region/lettering are rejected without touching any saved work.
+  await assert.rejects(reslicePages(ctx, { cuts: [200, 1200] }), /existing region or its lettering/);
+  assert.deepEqual((await listImages(ep.id)).map(p => p.id), ["kept-p0", "kept-p1"]);
+  const preview = await previewReslice(ctx, ["kept-p0", "kept-p1"], { sizing: "custom", maxHeight: 600 });
+  assert.equal(preview.manualRequired, true);
+  assert.deepEqual(preview.forced, []);
+  const result = await reslicePages(ctx, { cuts: [600, 1200], sizing: "custom", maxHeight: 600 });
+  assert.deepEqual(result.images.map(p => [p.width, p.height]), [[160, 600], [160, 600], [160, 600]]);
+  assert.equal(result.images[1].caption, "Scene 0\n\nScene 1");
+  const sourcePixels = async (key: string) => Buffer.concat(await Promise.all(snapshots.map(async snap => {
+    let image = sharp(snap.bytes[key]);
+    if (snap.image.width < 160) image = image.extend({ left: 20, right: 20, top: 0, bottom: 0,
+      background: key === "mask" ? "black" : "white" });
+    return image.removeAlpha().raw().toBuffer();
+  })));
+  for (const key of layerKeys) {
+    const output = Buffer.concat(await Promise.all(result.images.map(async image =>
+      sharp(await readAsset(getDoc<any>(`page:${image.id}`, {}).data[key])).removeAlpha().raw().toBuffer())));
+    assert.deepEqual(output, await sourcePixels(key), `${key} pixels survive across both old boundaries`);
+  }
+  const moved = (await listLines(ep.id)).find(l => l.id === "kept-r1")!;
+  assert.equal(moved.imageId, result.images[1].id);
+  assert.equal(moved.source, "Original source");
+  assert.equal(moved.body, "Keep these line breaks");
+  assert.equal(moved.status, "approved");
+  assert.equal(moved.x, (0.2 * 120 + 20) / 160);
+  assert.equal(moved.y, (900 + 0.05 * 900 - 600) / 600);
+  const region = getDoc<any>("region:kept-r1", {}).data;
+  assert.equal(region.locked, true);
+  assert.equal(region.geometryApproved, true);
+  assert.equal(region.layout.size * region.layout.dpi, snapshots[1].region.layout.size * 144);
+  assert.deepEqual(region.layout.rows.map((r: any) => r.text), ["Keep these", "line breaks"]);
+  assert.equal(region.layout.rows[0].x, snapshots[1].region.layout.rows[0].x + 20);
+  assert.equal(region.layout.rows[0].baseline, snapshots[1].region.layout.rows[0].baseline + 300);
+  assert.equal(region.layout.key, layoutKey(moved, region, result.images[1], region.layout.style, 96));
+  assert.deepEqual(region.bubbleBounds, { x: moved.x, y: moved.y, w: moved.w, h: moved.h });
+  assert.equal((await sharp(await readAsset(region.textMask)).metadata()).height, 600);
+  const unplaced = (await listLines(ep.id)).find(l => l.id === "kept-unplaced")!;
+  assert.equal(unplaced.imageId, result.images[1].id);
+  assert.equal(unplaced.placed, false);
+  assert.equal(unplaced.x, null);
+  assert.equal(unplaced.y, null);
+  assert.deepEqual(getDoc<any>("region:kept-unplaced", {}).data, { locked: true });
+  assert.equal((await listComments(ep.id)).length, 2);
+  assert.equal((sqlite.prepare("SELECT base_revision FROM suggestions WHERE id='kept-suggestion'").get() as any).base_revision, moved.revision);
+  assert.equal((sqlite.prepare("SELECT base_revision FROM suggestions WHERE id='kept-stale'").get() as any).base_revision, 2);
+  for (const image of result.images) {
+    const doc = getDoc<PageData>(`page:${image.id}`, {});
+    assert.equal(doc.data.maskApproved, true);
+    assert.equal(doc.data.cleanApproved, true);
+    assert.equal(doc.data.preparedAt, image.updatedAt);
+    const lines = (await listLines(ep.id)).filter(l => l.imageId === image.id);
+    for (const step of PAGE_STEPS) assert.equal(doc.data.completed?.[step], pageStepStamp(step, doc.data, lines,
+      (await listComments(ep.id)).filter(c => lines.some(l => l.id === c.lineId)),
+      lines.map(l => ({ id: l.id, data: getDoc<any>(`region:${l.id}`, {}).data }))));
+    await preparePage(series, ep, image);
+    assert.deepEqual(getDoc<PageData>(doc.id, {}).data, doc.data, "preparing the new page keeps its saved work");
+  }
+  const afterProof = await Promise.all(result.images.map(image => capturePageImages(series, ep, image.id)));
+  const beforePixels = Buffer.concat(await Promise.all(beforeProof.map(async (capture, i) => {
+    let image = sharp(capture.typeset!);
+    if (snapshots[i].image.width < 160) image = image.extend({ left: 20, right: 20, top: 0, bottom: 0, background: "white" });
+    return image.removeAlpha().raw().toBuffer();
+  })));
+  assert.deepEqual(Buffer.concat(await Promise.all(afterProof.map(c => sharp(c.typeset!).removeAlpha().raw().toBuffer()))),
+    beforePixels, "proofreader sees identical cleaned artwork and lettering after reslicing");
+  await undoPageOp(ctx);
+  assert.deepEqual((await listImages(ep.id)).map(p => p.id), ["kept-p0", "kept-p1"]);
+  for (const snap of snapshots) {
+    assert.deepEqual(getDoc<PageData>(`page:${snap.image.id}`, {}).data, snap.page);
+    assert.deepEqual(getDoc<any>(`region:kept-r${snap.image.sortOrder}`, {}).data, snap.region);
+  }
+  assert.equal((await listLines(ep.id)).find(l => l.id === "kept-unplaced")!.imageId, "kept-p1");
+  assert.deepEqual(getDoc<any>("region:kept-unplaced", {}).data, { locked: true });
+  // The automatic no-gap fallback also keeps every saved layer and rendered
+  // letter intact, while flagging only the oversized output for manual work.
+  const automatic = await reslicePages(ctx, { sizing: "custom", maxHeight: 600 });
+  assert.deepEqual(automatic.images.map(p => [p.width, p.height]), [[160, 1800]]);
+  assert.deepEqual(automatic.manualSlices, [{ imageId: automatic.images[0].id, top: 0, bottom: 1800, height: 1800 }]);
+  assert.deepEqual(automatic.forced, []);
+  const automaticPage = getDoc<PageData>(`page:${automatic.images[0].id}`, {}).data;
+  for (const key of layerKeys) {
+    assert.deepEqual(await sharp(await readAsset((automaticPage as any)[key])).removeAlpha().raw().toBuffer(),
+      await sourcePixels(key), `${key} survives the automatic oversized fallback`);
+  }
+  const automaticProof = await capturePageImages(series, ep, automatic.images[0].id);
+  assert.deepEqual(await sharp(automaticProof.typeset!).removeAlpha().raw().toBuffer(), beforePixels);
+  assert.equal(automaticPage.maskApproved, true);
+  assert.equal(automaticPage.cleanApproved, true);
+  assert.ok((await listLines(ep.id)).every(l => l.imageId === automatic.images[0].id));
+  assert.equal(getDoc<any>("region:kept-r1", {}).data.locked, true);
+  await undoPageOp(ctx);
+  assert.deepEqual((await listImages(ep.id)).map(p => p.id), ["kept-p0", "kept-p1"]);
+  for (const snap of snapshots) {
+    assert.deepEqual(getDoc<PageData>(`page:${snap.image.id}`, {}).data, snap.page);
+    assert.deepEqual(getDoc<any>(`region:kept-r${snap.image.sortOrder}`, {}).data, snap.region);
+  }
 });
 
 test("reslice keeps a dark block that straddled the old page boundary", async () => {
@@ -4523,7 +4983,7 @@ test("the reslice preview keeps a tall stitch legible and names its page bands",
   const ep = (await getEpisode("prev-e"))!;
   const ctx = { series, episode: ep, user: testUser };
   const tall = (grey: number) =>
-    sharp({ create: { width: 32, height: 9000, channels: 3, background: { r: grey, g: grey, b: grey } } })
+    sharp({ create: { width: 32, height: 30000, channels: 3, background: { r: grey, g: grey, b: grey } } })
       .png()
       .toBuffer();
   for (const [i, grey] of [200, 120, 60].entries()) {
@@ -4547,40 +5007,34 @@ test("the reslice preview keeps a tall stitch legible and names its page bands",
   }
   const preview = await previewReslice(ctx, ["prev-0", "prev-1", "prev-2"]);
   assert.equal(preview.width, 32);
-  assert.equal(preview.height, 27000);
+  assert.equal(preview.height, 90000);
   // Offsets are cumulative in page order; numbering itself is the client's job, because the
   // sidebar numbers by position and the stored page number can be stale.
   assert.deepEqual(
     preview.pages.map((p) => ({ id: p.id, top: p.top, height: p.height })),
     [
-      { id: "prev-0", top: 0, height: 9000 },
-      { id: "prev-1", top: 9000, height: 9000 },
-      { id: "prev-2", top: 18000, height: 9000 },
+      { id: "prev-0", top: 0, height: 30000 },
+      { id: "prev-1", top: 30000, height: 30000 },
+      { id: "prev-2", top: 60000, height: 30000 },
     ],
   );
   // The preview is the stitch itself, so a click's fraction of height still maps 1:1.
   const meta = await sharp(Buffer.from(preview.preview.split(",")[1], "base64")).metadata();
+  assert.equal(meta.format, "png", "very tall previews exceed JPEG dimensions and use PNG");
   assert.equal(meta.width, 32);
-  assert.equal(meta.height, 27000);
+  assert.equal(meta.height, 90000);
 });
 
-test("reslice force-cuts when a solid block is taller than 16k", async () => {
+test("reslice retains unsplittable art as an oversized page for manual splitting", async () => {
   sqlite
     .prepare(
       "INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('force-e','s','force','Force',1,1)",
     )
     .run();
   const ep = (await getEpisode("force-e"))!;
-  const bytes = await sharp({
-    create: {
-      width: 16,
-      height: 16100,
-      channels: 3,
-      background: { r: 12, g: 12, b: 12 },
-    },
-  })
-    .png()
-    .toBuffer();
+  const raw = Buffer.alloc(16 * 16100 * 3, 12);
+  for (let y = 0; y < 16100; y++) raw[(y * 16 + 8) * 3] = 200;
+  const bytes = await sharp(raw, { raw: { width: 16, height: 16100, channels: 3 } }).png().toBuffer();
   const saved = await saveImageFile({
     seriesSlug: "series",
     episodeSlug: "force",
@@ -4598,17 +5052,26 @@ test("reslice force-cuts when a solid block is taller than 16k", async () => {
     createdAt: 1,
     updatedAt: 1,
   });
-  const { reslicePages, RESLICE_MAX_H } = await import("../src/lib/server/reslice");
-  const result = await reslicePages(
-    { series, episode: ep, user: testUser },
-    { imageIds: ["force-p"] },
-  );
-  assert.deepEqual(result.forced, [RESLICE_MAX_H]);
-  const pages = await listImages(ep.id);
-  assert.equal(pages.length, 2);
-  assert.equal(pages[0].height, RESLICE_MAX_H);
-  assert.equal(pages[1].height, 100);
-  assert.ok(pages.every((p) => p.height <= RESLICE_MAX_H));
+  const { reslicePages, previewReslice } = await import("../src/lib/server/reslice");
+  const { readUndoLog } = await import("../src/lib/server/pageUndo");
+  const ctx = { series, episode: ep, user: testUser };
+  const preview = await previewReslice(ctx, ["force-p"]);
+  assert.equal(preview.manualRequired, true);
+  assert.deepEqual(preview.cuts, []);
+  assert.deepEqual(preview.forced, []);
+  const auto = await reslicePages(ctx, { imageIds: ["force-p"] });
+  assert.deepEqual(auto.images.map(p => p.height), [16100]);
+  assert.deepEqual(auto.forced, []);
+  assert.deepEqual(auto.manualSlices, [{ imageId: auto.images[0].id, top: 0, bottom: 16100, height: 16100 }]);
+  assert.deepEqual(await sharp((await readWorkingOrOrig(series.slug, ep.slug, auto.images[0].filename))!).removeAlpha().raw().toBuffer(), raw);
+  assert.equal((await readUndoLog(series.slug, ep.slug)).length, 1);
+  // Only an explicit manual request may cut through art.
+  const result = await reslicePages(ctx, { imageIds: [auto.images[0].id], sizing: "custom", maxHeight: 1200, cuts: [8000] });
+  assert.deepEqual(result.forced, [8000]);
+  assert.deepEqual(result.images.map(p => p.height), [8000, 8100]);
+  assert.deepEqual(Buffer.concat(await Promise.all(result.images.map(async p =>
+    sharp((await readWorkingOrOrig(series.slug, ep.slug, p.filename))!).removeAlpha().raw().toBuffer()))), raw);
+
 });
 
 test("reslice keeps its slices together and names them after the page they came from", async () => {

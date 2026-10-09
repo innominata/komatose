@@ -50,6 +50,7 @@
     regionLabelScale,
     colorFor = (id) => regionColor(id, builtinRegionKinds()),
     labelFor = (id) => regionKindLabel(id, builtinRegionKinds()),
+    speakerLabelFor = () => '',
     pageImage,
     cloneSource = null,
     cloneOffset = null,
@@ -93,6 +94,7 @@
     reorderFromId = "",
     onreorderclick,
     onstylebrush,
+    onassigncharacter,
     startRotation,
     rotationKey,
     startSkew,
@@ -105,6 +107,8 @@
     step: string;
     pageTool: string;
     tool: string;
+    speakerLabelFor?: (id: string) => string;
+    onassigncharacter?: (id: string) => void;
     zoom: number;
     zooming: boolean;
     compare: boolean;
@@ -142,8 +146,10 @@
       preview: string;
       width: number;
       height: number;
+      maxHeight: number;
       cuts: number[];
       forced: number[];
+      manualRequired: boolean;
       pages: { id: string; number: number; top: number; height: number }[];
     } | null;
     selectedPolygon: Point[];
@@ -566,9 +572,6 @@
     const pull = Math.min(48, len * 0.22);
     return `M ${x1} ${y1} Q ${(x1 + x2) / 2 - (dy / len) * pull} ${(y1 + y2) / 2 + (dx / len) * pull} ${x2} ${y2}`;
   }
-  function sizeStyle(width: number, height: number) {
-    return height / Math.max(1, width) > 2.2 ? `width:${zoom}%` : `height:${zoom}%;width:auto`;
-  }
 </script>
 
 <div class="canvas-scroll" class:zoom-mode={zooming} bind:this={canvasScrollEl} use:scrollAction>
@@ -577,7 +580,7 @@
       bind:this={prepElement}
       class="canvas-page prepare-page"
       class:zoom-tool={zooming}
-      style={pageTool === "reslice" && reslicePreview ? `aspect-ratio:${reslicePreview.width}/${reslicePreview.height};width:${zoom}%` : `aspect-ratio:${page.width}/${page.height};${sizeStyle(page.width, page.height)}`}
+      style={pageTool === "reslice" && reslicePreview ? `aspect-ratio:${reslicePreview.width}/${reslicePreview.height};width:${zoom}%` : `aspect-ratio:${page.width}/${page.height};width:${zoom}%`}
       role="application"
       aria-label="Page preparation canvas"
       oncontextmenu={(e) => openActions(e, page.id)}
@@ -629,7 +632,7 @@
             style={`top:${(cut / reslicePreview.height) * 100}%`}
           ></div>
         {/each}
-        <p class="reslice-hint">Click white rows to add or remove cuts. Apply from the palette. Cuts must keep each slice at or under 16k px.</p>
+        <p class="reslice-hint">Automatic cuts only use solid-color gaps. Target slice height: {reslicePreview.maxHeight}px. {reslicePreview.manualRequired ? "Safe splits are ready. Oversized pages need manual splitting." : "Click to adjust cuts, then Apply."} Orange marks manual cuts through artwork.</p>
       {/if}
       {#if cropDraft}<div
           style={`position:absolute;left:${Math.min(cropDraft.start.x, cropDraft.end.x) * 100}%;top:${Math.min(cropDraft.start.y, cropDraft.end.y) * 100}%;width:${Math.abs(cropDraft.start.x - cropDraft.end.x) * 100}%;height:${Math.abs(cropDraft.start.y - cropDraft.end.y) * 100}%;border:2px solid #68dac5;background:#68dac533;pointer-events:none`}
@@ -642,7 +645,7 @@
       class:brush-tool={!zooming && (tool === "brush" || tool === "erase" || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
       class:click-tool={!zooming && (tool === "bubble-fill" || tool === "mask-grow")}
       class:style-brush-tool={tool === "style-brush"}
-      style={`aspect-ratio:${page.width}/${page.height};${sizeStyle(page.width, page.height)}`}
+      style={`aspect-ratio:${page.width}/${page.height};width:${zoom}%`}
       oncontextmenu={handleContext}
       role="group"
     >
@@ -862,7 +865,8 @@
           {@const missingSource = missing === "source" || missing === "both"}
           {@const missingEnglish = missing === "english" || missing === "both"}
           {@const selectedRegion = lineId === l.id}
-          {@const label = `${i + 1} · ${labelFor(l.lineType)}`}
+          {@const speaker = speakerLabelFor(l.id)}
+          {@const label = `${i + 1} · ${labelFor(l.lineType)}${speaker && ['Review', 'Translate'].includes(step) ? ` · ${speaker}` : ''}`}
           {@const labelWidth = label.length * 6.6 + 12}
           <g
             class:ignored={l.sourceState === "ignored"}
@@ -880,10 +884,10 @@
               stroke-width={lineId === l.id || reorderFromId === l.id ? 3 : 1.5}
               stroke-dasharray={reorderFromId === l.id ? "6 4" : undefined}
               vector-effect="non-scaling-stroke"
-              pointer-events={["select", "reorder", "style-brush"].includes(tool) ? "all" : "none"}
+              pointer-events={["select", "reorder", "style-brush", 'assign-character'].includes(tool) ? "all" : "none"}
               role="button"
               tabindex="0"
-              aria-label={`Region ${i + 1}, ${labelFor(l.lineType)}${overflow ? ", text overflow" : ""}${missing ? `, ${missingRegionCopyLabel(missing)}` : ""}`}
+              aria-label={`Region ${i + 1}, ${labelFor(l.lineType)}${speaker ? `, speaker ${speaker}` : ''}${overflow ? ", text overflow" : ""}${missing ? `, ${missingRegionCopyLabel(missing)}` : ""}`}
               aria-invalid={overflow || undefined}
               aria-describedby={selectedRegion ? `region-label-${l.id}` : undefined}
               aria-pressed={lineId === l.id}
@@ -892,7 +896,7 @@
                 openActions(e, page.id, l.id);
               }}
               onpointerdown={(e) => {
-                if (tool === "reorder" || tool === "style-brush") {
+                if (tool === "reorder" || tool === "style-brush" || tool === 'assign-character') {
                   e.stopPropagation();
                   return;
                 }
@@ -902,12 +906,14 @@
                 e.stopPropagation();
                 if (tool === "reorder") onreorderclick?.(l.id);
                 else if (tool === "style-brush") onstylebrush(l.id);
+                else if (tool === 'assign-character') onassigncharacter?.(l.id);
                 else selectLine(l.id, "page");
               }}
               onkeydown={(e) => {
                 if (e.key !== "Enter") return;
                 if (tool === "reorder") onreorderclick?.(l.id);
                 else if (tool === "style-brush") onstylebrush(l.id);
+                else if (tool === 'assign-character') onassigncharacter?.(l.id);
                 else selectLine(l.id, "page");
               }}
             />
@@ -920,7 +926,7 @@
               <circle r="10" fill={color} stroke="#000" stroke-opacity="0.35" />
               <text y="3.8" text-anchor="middle">{i + 1}</text>
             </g>
-            {#if selectedRegion}
+            {#if selectedRegion || (tool === 'assign-character' && speaker)}
               <clipPath id={`region-label-clip-${l.id}`}>
                 <rect
                   x={(l.x ?? 0) * page.width}
@@ -1121,8 +1127,10 @@
         {#if ovalGuides.length}
           <g class="construction-guides" pointer-events="none">
             {#each ovalGuides as guide}
+              {#each ['guide-outline', 'guide-highlight'] as layer}
               {#if guide.axis === "h"}
                 <line
+                  class={layer}
                   x1="0"
                   y1={guide.at * page.height}
                   x2={page.width}
@@ -1130,12 +1138,14 @@
                 />
               {:else}
                 <line
+                  class={layer}
                   x1={guide.at * page.width}
                   y1="0"
                   x2={guide.at * page.width}
                   y2={page.height}
                 />
               {/if}
+              {/each}
             {/each}
           </g>
         {/if}
@@ -1151,6 +1161,7 @@
     min-width: 0;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     display: flex;
     background: var(--hud-canvas);
     padding: 18px 18px 64px;
@@ -1292,12 +1303,11 @@
     cursor: crosshair;
   }
   .construction-guides line {
-    stroke: #62e5ce;
-    stroke-width: 1;
-    stroke-dasharray: 6 5;
-    opacity: 0.85;
+    stroke-linecap: square;
     vector-effect: non-scaling-stroke;
   }
+  .construction-guides .guide-outline { stroke: #10131a; stroke-width: 5; }
+  .construction-guides .guide-highlight { stroke: #fff34d; stroke-width: 2; stroke-dasharray: 9 5; }
   .empty {
     padding: 35px;
     color: var(--hud-muted);

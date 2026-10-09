@@ -387,6 +387,7 @@ function translationLines(boxes: DetectedBox[], opts: CliJobOpts) {
 		i,
 		lineType: boxes[i].lineType,
 		source: boxes[i].source,
+		speaker: boxes[i].speaker,
 	}));
 }
 

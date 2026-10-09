@@ -1,5 +1,5 @@
 import { qualificationChecks } from '$lib/modelCapabilities';
-import { rowAvailability } from '$lib/server/registryPicker';
+import { rowInstallationAvailability } from '$lib/server/registryPicker';
 import { packageOperation, packageServiceStatus } from '$lib/server/modelSupervisor';
 import { modelPackage } from '$lib/server/modelPackages';
 import { MODEL_TASK_IDS } from '$lib/modelTasks';
@@ -107,7 +107,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			catalogs,
 			rows: await Promise.all(listRegistryRows().map(async row => {
         const pkg = modelPackage(row.id);
-        return { ...publicRow(row), readiness: await rowAvailability(row), packageOperation: packageOperation(row.id), service: pkg ? packageServiceStatus(pkg) : undefined };
+        return { ...publicRow(row), readiness: await rowInstallationAvailability(row), packageOperation: packageOperation(row.id), service: pkg ? packageServiceStatus(pkg) : undefined };
       })),
 			cliTools: listCliToolAdminStatus(),
 			installs: listInstallStatuses(),

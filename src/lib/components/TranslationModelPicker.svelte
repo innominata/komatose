@@ -87,6 +87,7 @@
   <button type="button" disabled={loading} onclick={() => void refresh(true)} aria-label="Refresh translation models">Refresh models</button>
 </div>
 {#if selectedEngine && !selectedEngine.available && selectedEngine.reason}<small>{selectedEngine.reason}</small>{/if}
+{#if selectedEngine?.warnings?.length}<small role="status">{selectedEngine.warnings.join(' ')}</small>{/if}
 {#if estimate}<small>Est. 8-line page {estimate} (from last tests · detection/masking not included)</small>{/if}
 {#if error}<p role="status">{error}</p>{/if}
 

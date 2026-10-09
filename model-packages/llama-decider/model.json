@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "llama-decider",
+  "kind": "runtime",
+  "name": "d1 Vulkan runtime",
+  "revision": "1",
+  "model": "llama-decider",
+  "access": "local_http",
+  "adapter": {
+    "id": "environment"
+  },
+  "dependencies": [],
+  "environment": [
+    "SCAN_DATA_DIR",
+    "SCAN_DECIDER_MODELS_DIR",
+    "SCAN_DECIDER_RUNTIME_DIR"
+  ],
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-decider.py",
+      "--runtime"
+    ]
+  },
+  "service": {
+    "id": "llama-decider",
+    "concurrency": 1
+  }
+}

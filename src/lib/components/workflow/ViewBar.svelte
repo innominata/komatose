@@ -55,7 +55,7 @@
   {/if}
   <span class="vsep"></span>
   <button type="button" class="vb" aria-label="Zoom out" title="Zoom out" onclick={() => onzoom(Math.max(25, zoom - 25))}><i class="bi bi-dash" aria-hidden="true"></i></button>
-  <button type="button" class="vb vb-txt" title="Fit page" onclick={() => onzoom("fit")}>{zoom === 100 ? "Fit" : `${zoom}%`}</button>
+  <button type="button" class="vb vb-txt" title="Fit page width" onclick={() => onzoom("fit")}>{zoom === 100 ? "Fit width" : `${zoom}%`}</button>
   <button type="button" class="vb" aria-label="Zoom in" title="Zoom in" onclick={() => onzoom(Math.min(2000, zoom + 25))}><i class="bi bi-plus" aria-hidden="true"></i></button>
 </div>
 

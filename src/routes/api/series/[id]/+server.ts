@@ -64,9 +64,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 			? parseGlossary(JSON.stringify(body.glossary))
 			: parseGlossary(String(body.glossary));
 		for (const term of glossary) term.edited = true;
-		persistSeriesGlossary(s.id, glossary);
+		const saved = persistSeriesGlossary(s.id, glossary);
 		await logActivity({ seriesId: s.id, userId: user.id, action: 'updated_series_glossary' });
-		return json({ ok: true, glossary });
+		return json({ ok: true, glossary: saved });
 	} catch (e) {
 		return fail(statusOf(e), messageOf(e));
 	}

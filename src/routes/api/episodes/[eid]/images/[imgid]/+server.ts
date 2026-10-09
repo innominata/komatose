@@ -4,7 +4,7 @@ import { replaceImage } from '$lib/server/replaceImage';
 import { deletePages } from '$lib/server/pageSelection';
 import type { RequestHandler } from './$types';
 
-/** Replace the raw in place from an uploaded PSD (flattened) or image. Undo via Clean undo. */
+/** Replace the raw in place from an uploaded PSD (flattened) or image. Undo via Prepare's page-edit stack. */
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
 	try {
 		const user = requireUser(locals.user);

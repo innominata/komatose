@@ -6,13 +6,20 @@ import { completeTranslation, type TranslationRequest } from './translationRunti
 import { appendJobLog, extractJobLogUsage, jobContext } from './jobs';
 
 export function specialistRequest(model: TranslationModel, source: string, opts: TranslateScriptOpts): TranslationRequest {
+  const context = [opts.seriesNotes, opts.pageCaption].filter(Boolean).join('\n\n');
+  const contextPrefix = context ? `Context only (do not translate this context or print speaker labels):\n${context}\n\n` : '';
   const lang = opts.lang ?? 'japanese';
   assertTranslationLanguage(model, lang);
+  // OCR can return vertically stacked Hangul one syllable per line. Preserve
+  // the saved source, but present the reconstructed word to the translator.
+  const characterLines = source.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lang === 'korean' && characterLines.filter(line => /^[가-힣]$/u.test(line)).length >= 2
+      && characterLines.every(line => /^(?:[가-힣]|[!?….,:;~\-]+)$/u.test(line))) source = characterLines.join('');
   if (model.profile === 'hy-manga') {
     const glossary = (opts.seriesGlossary || '').replace(/ → /g, ' translates to ').trim();
     return {
       messages: [{ role: 'user', content:
-        (glossary ? `Reference the following manga translations:\n${glossary}\n\n` : '') +
+        contextPrefix + (glossary ? `Reference the following manga translations:\n${glossary}\n\n` : '') +
         'Translate the following text from Japanese into English as natural, concise manga dialogue. Preserve specific nouns, exact meaning, speaker intent, tone, punctuation, and sound effects. Output only the translated result without any explanation:\n\n' + source.trim(),
       }],
       temperature: opts.temperature ?? 0.15, top_k: 20, top_p: 0.6, min_p: 0, repeat_penalty: 1.05,
@@ -26,7 +33,7 @@ export function specialistRequest(model: TranslationModel, source: string, opts:
       : 'Translate the following text into English. Note that you should only output the translated result without any additional explanation:\n';
     return {
       messages: [{ role: 'user', content:
-        (glossary ? `Reference the following translations:\n${glossary}\n` : '') + instruction + source.trim(),
+        contextPrefix + (glossary ? `Reference the following translations:\n${glossary}\n` : '') + instruction + source.trim(),
       }],
       temperature: 0.7, top_k: 20, top_p: 0.8, repeat_penalty: 1.05,
       samplers: ['penalties', 'top_k', 'top_p', 'temperature'], max_tokens: 512,
@@ -42,7 +49,7 @@ export function specialistRequest(model: TranslationModel, source: string, opts:
     return {
       messages: [{ role: 'user', content: source.trim() }],
       temperature: 0, repeat_penalty: 1, max_tokens: 512,
-      chat_template_kwargs: { source_lang_code: 'ja', target_lang_code: 'en' },
+      chat_template_kwargs: { source_lang_code: lang === 'korean' ? 'ko' : 'ja', target_lang_code: 'en' },
     };
   }
   if (model.profile === 'shisa') {
@@ -50,7 +57,7 @@ export function specialistRequest(model: TranslationModel, source: string, opts:
     return {
       messages: [
         { role: 'system', content: 'You are a Japanese-to-English manga translator. Reply with only the English for the given lettering. No speaker names, stage directions, invented sound effects, quotes around the line, or extra sentences.' },
-        { role: 'user', content: (glossary ? `Glossary:\n${glossary}\n\n` : '') + source.trim() },
+        { role: 'user', content: contextPrefix + (glossary ? `Glossary:\n${glossary}\n\n` : '') + source.trim() },
       ],
       temperature: opts.temperature ?? 0.15, top_k: 20, top_p: 0.6, min_p: 0, repeat_penalty: 1.1,
       samplers: ['penalties', 'top_k', 'top_p', 'temperature'], max_tokens: 96, stop: ['\n\n'],
@@ -115,7 +122,9 @@ export async function translateWithSpecialist(
       logSpecialist(model, box.source, sfx.translation, undefined, { durationMs: 0 });
       continue;
     }
-    const request = specialistRequest(model, box.source, nextOpts);
+    const request = specialistRequest(model, box.source, box.speaker ? {
+      ...nextOpts, pageCaption: [nextOpts.pageCaption, `Speaker of this region (not necessarily the person addressed): ${box.speaker}`].filter(Boolean).join('\n\n'),
+    } : nextOpts);
     const started = Date.now();
     let raw: unknown;
     let body: string | undefined;

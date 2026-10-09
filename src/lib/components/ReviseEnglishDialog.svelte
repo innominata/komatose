@@ -6,6 +6,7 @@
     enginesForRegionAiField,
     isProofreaderTranslator,
     isOnDemandReviewer,
+    isNonLocalReviewer,
     reviseSampleCount,
     sameReviseModel,
     suggestionMatchesLine,
@@ -58,10 +59,10 @@
   let entries = $state<Entry[]>([]);
   let busy = $state(false);
   let revising = $state(false);
-  let localAttempted = $state(false);
+  let automaticAttempted = $state(false);
   let error = $state("");
   const inflight = new Set<AbortController>();
-  const localIndexes = $derived(
+  const automaticIndexes = $derived(
     translators.flatMap((model, i) => (isOnDemandReviewer(model, engines) ? [] : [i])),
   );
   const extraEngines = $derived(
@@ -92,7 +93,7 @@
         role: "assistant" as const,
         label: modelLabel(model),
         content: onDemand
-          ? `Not run. ${modelLabel(model)} is billed per call — run it only if the local drafts need another opinion.`
+          ? `Not run automatically. Use Run to request ${modelLabel(model)}.`
           : samples > 1
             ? `Waiting to sample ${samples} fast translations.`
             : "Waiting to translate with glossary and nearby lines.",
@@ -139,7 +140,7 @@
     error = "";
     busy = false;
     revising = false;
-    localAttempted = false;
+    automaticAttempted = false;
     line = target;
     translators = uniqueModels([...council, ...extras]);
     if (!extraDraft.engine && extraEngines[0])
@@ -150,16 +151,16 @@
       error = "Add source text before revising English.";
       return;
     }
-    if (localIndexes.length) await reviseLocal();
+    if (automaticIndexes.length) await reviseAutomatic();
   }
-  async function reviseLocal() {
-    if (!localIndexes.length) {
+  async function reviseAutomatic() {
+    if (!automaticIndexes.length) {
       error =
-        "Add a local translator under Council settings, or press Run on Grok, Codex, or Cursor.";
+        "Choose a local translator or enable Autorun for a model in Admin → Models. You can also use its Run button.";
       return;
     }
-    localAttempted = true;
-    await runModels(localIndexes);
+    automaticAttempted = true;
+    await runModels(automaticIndexes);
   }
   async function reviseOne(index: number) {
     if (!translators[index] || entries[index]?.pending) return;
@@ -188,8 +189,8 @@
     error = "";
     const controller = new AbortController();
     inflight.add(controller);
-    const runningLocal = selected.some(({ model }) => !isOnDemandReviewer(model, engines));
-    if (runningLocal) revising = true;
+    const runningAutomatic = selected.some(({ model }) => !isOnDemandReviewer(model, engines));
+    if (runningAutomatic) revising = true;
     if (entries.length !== translators.length) entries = idlePanels(translators);
     const updatePanel = (index: number, entry: Entry) => {
       if (!controller.signal.aborted)
@@ -269,7 +270,7 @@
       }
     } finally {
       inflight.delete(controller);
-      if (runningLocal && !controller.signal.aborted) {
+      if (runningAutomatic && !controller.signal.aborted) {
         revising = entries.some(
           (entry, i) => entry.pending && !isOnDemandReviewer(translators[i], engines),
         );
@@ -330,7 +331,8 @@
         text translator. Fast models (Hy-MT) sample several wordings. Thinking
         models translate once from this source, using matching glossary terms, the
         current draft, nearby lines, and scene notes. Proofreaders stay on
-        page-image proofreading. Grok, Codex, and Cursor stay idle until you press Run.
+        page-image proofreading. Non-local models run automatically when Autorun
+        is enabled in Admin → Models; otherwise use their Run button.
       </p>
       <div class="extra-row">
         <AiModelPicker
@@ -363,7 +365,7 @@
           <p>
             {#if entry.pending}<span role="status">{entry.content}</span>{:else}{entry.content}{/if}
           </p>
-          {#if isOnDemandReviewer(translators[i], engines)}
+          {#if isNonLocalReviewer(translators[i], engines)}
             <div class="actions">
               <button
                 disabled={busy || entry.pending}
@@ -407,11 +409,11 @@
     </div>
   </div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if localIndexes.length}
+  {#if automaticIndexes.length}
     <button
       disabled={busy || revising}
-      onclick={() => void reviseLocal()}
-      >{localAttempted ? "Revise with local models again" : "Send to local translators"}</button
+      onclick={() => void reviseAutomatic()}
+      >{automaticAttempted ? "Revise with automatic models again" : "Send to automatic translators"}</button
     >
   {/if}
 </dialog>

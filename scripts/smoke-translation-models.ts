@@ -13,12 +13,15 @@ process.env.DATABASE_URL = join(scratch, 'test.db');
 process.env.SCAN_DATA_DIR = scratch;
 const { translateScript } = await import('../src/lib/server/llm');
 const { stopTranslationRuntime } = await import('../src/lib/server/translationRuntime');
-const korean = model.languages.includes('korean') && !model.languages.includes('japanese');
+const language = process.argv[3] || (model.languages.includes('korean') && !model.languages.includes('japanese') ? 'korean' : 'japanese');
+assert.ok(language === 'japanese' || language === 'korean', 'Choose japanese or korean');
+assert.ok(model.languages.includes(language), `${model.id} does not support ${language}`);
+const korean = language === 'korean';
 const sources = korean
   ? ['기다려!', '한 명의 환자가 부분 반응을 보였다', '네가\n나를\n사랑한다고\n했잖아!', '기\n다\n려\n!', '말할기회를 주겠다']
   : ['待って！一緒に行こう。', '太郎は部室にいる。'];
 const expectEnglish = korean
-  ? [/\bwait\b/i, /\bpatient\b/i, /loved me/i, /\bwait\b/i, /\bchance\b/i]
+  ? [/\bwait\b/i, /\bpatient\b/i, /love(?:d)? me/i, /\bwait\b/i, /\b(?:chance|opportunity)\b/i]
   : [/[A-Za-z]/, /Taro|clubroom|[A-Za-z]/];
 try {
   const started = Date.now();

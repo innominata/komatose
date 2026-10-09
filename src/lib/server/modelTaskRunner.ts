@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { validateTranscriptionChoice } from '../decider';
 import { acquireModelUse } from './modelUsage';
 import { rowHasOperation, type ModelRow } from '../modelRegistry';
 import { ModelTaskError, taskLabel, validateTaskOutput, type ModelTaskId } from '../modelTasks';
@@ -56,6 +57,10 @@ export async function executeModelTask(row: ModelRow, task: ModelTaskId, input: 
     else output = await invokeBuiltinAdapter(pkg, row, task, input, opts.abort, release => releases.push(release));
   opts.abort?.throwIfAborted();
   validateTaskOutput(task, output, opts.diagnostic && opts.independentDiagnosticFields ? { required: [] } : input.schema);
+  if (task === 'sourceDecide') {
+    try { validateTranscriptionChoice(output, input.candidates); }
+    catch (e) { throw new ModelTaskError('failed_validation', (e as Error).message); }
+  }
   if (task === 'translate' && Array.isArray(input.boxes)) {
     if (output.length !== input.boxes.length) throw new ModelTaskError('failed_validation', 'Translation results do not match the submitted items');
     output = output.map((item: any, index: number) => ({ ...input.boxes[index], ...item }));

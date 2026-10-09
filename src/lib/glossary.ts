@@ -1,5 +1,16 @@
 import type { GlossaryTerm } from './types';
 
+/** Preserve character metadata through all glossary edit, merge and prompt paths. */
+function glossaryMetadata(rec: Record<string, unknown>): Partial<GlossaryTerm> {
+	const aliases = Array.isArray(rec.aliases) ? [...new Set(rec.aliases.filter((v): v is string => typeof v === 'string').map(v => v.trim().slice(0, 100)).filter(Boolean))].slice(0, 30) : [];
+	return {
+		...(typeof rec.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(rec.id) ? { id: rec.id } : {}),
+		...(rec.kind === 'character' ? { kind: 'character' as const } : {}),
+		...(aliases.length ? { aliases } : {}),
+		...(typeof rec.notes === 'string' && rec.notes.trim() ? { notes: rec.notes.trim().slice(0, 2000) } : {}),
+	};
+}
+
 export function parseGlossary(raw: string | null | undefined): GlossaryTerm[] {
 	if (!raw || !raw.trim()) return [];
 	try {
@@ -13,6 +24,7 @@ export function parseGlossary(raw: string | null | undefined): GlossaryTerm[] {
 			const translation = String(rec.translation || '').trim();
 			if (!source && !translation) continue;
 			out.push({
+				...glossaryMetadata(rec),
 				source,
 				translation,
 				edited: Boolean(rec.edited)
@@ -28,6 +40,7 @@ export function serializeGlossary(terms: GlossaryTerm[]): string {
 	return JSON.stringify(
 		terms
 			.map((t) => ({
+				...glossaryMetadata(t),
 				source: t.source.trim(),
 				translation: t.translation.trim(),
 				...(t.edited ? { edited: true } : {})
@@ -61,13 +74,13 @@ export function mergeGlossaryLists(...lists: GlossaryTerm[][]): GlossaryTerm[] {
 			const source = term.source.trim();
 			const translation = term.translation.trim();
 			if (!source && !translation) continue;
-			const i = out.findIndex((t) => t.source.trim() === source);
+			const i = out.findIndex((t) => (term.id && t.id === term.id) || (source ? t.source.trim() === source : !t.source.trim() && t.translation.trim() === translation));
 			if (i === -1) {
-				out.push({ source, translation, ...(term.edited ? { edited: true } : {}) });
+				out.push({ ...glossaryMetadata(term), source, translation, ...(term.edited ? { edited: true } : {}) });
 				continue;
 			}
 			if (!term.edited || out[i].edited) continue;
-			out[i] = { source, translation: translation || out[i].translation, edited: true };
+			out[i] = { ...out[i], ...glossaryMetadata(term), source, translation: translation || out[i].translation, edited: true };
 		}
 	}
 	return out;
@@ -87,7 +100,7 @@ export function acceptGlossaryTerm(
 	if (terms[i].edited) return { terms, changed: false };
 	if (terms[i].translation === dest && terms[i].edited) return { terms, changed: false };
 	const next = terms.slice();
-	next[i] = { source: src, translation: dest, edited: true };
+	next[i] = { ...next[i], source: src, translation: dest, edited: true };
 	return { terms: next, changed: true };
 }
 
@@ -124,10 +137,13 @@ export function glossaryMismatches(
 
 export function glossaryPrompt(terms: GlossaryTerm[], limit = 80): string {
 	if (!terms.length) return '';
-	const edited = terms.filter((t) => t.edited && t.source && t.translation);
-	const rest = terms.filter((t) => !t.edited && t.source && t.translation);
-	const picked = [...edited, ...rest.slice(-Math.max(0, limit - edited.length))].slice(0, limit);
-	return picked.map((t) => `${t.source} → ${t.translation}`).join('\n');
+	const characters = terms.filter(t => t.kind === 'character' && t.translation);
+	const edited = terms.filter((t) => t.kind !== 'character' && t.edited && t.source && t.translation);
+	const rest = terms.filter((t) => t.kind !== 'character' && !t.edited && t.source && t.translation);
+	const picked = [...characters, ...edited, ...rest.slice(-Math.max(0, limit - edited.length - characters.length))].slice(0, Math.max(limit, characters.length));
+	return picked.map((t) => t.kind === 'character'
+		? `Character: ${t.source || '(original name not recorded)'} → ${t.translation}. Keep this exact spelling, spacing and hyphenation; do not re-romanize. Preserve full-name versus given-name usage from the source.${t.aliases?.length ? ` Other spellings to recognize: ${t.aliases.join(', ')}.` : ''}${t.notes ? ` Character notes: ${t.notes}` : ''}`
+		: `${t.source} → ${t.translation}`).join('\n');
 }
 
 /** Series terms whose source appears in this balloon. Longer phrases first. */
@@ -148,6 +164,7 @@ export function glossaryHits(terms: GlossaryTerm[], source: string): GlossaryTer
 		if (seen.has(key)) continue;
 		seen.add(key);
 		out.push({
+			...glossaryMetadata(term),
 			source: key,
 			translation: term.translation.trim(),
 			...(term.edited ? { edited: true } : {}),

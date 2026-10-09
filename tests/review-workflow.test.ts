@@ -123,7 +123,7 @@ test('automatic OCR reuses one page mask and both recognizers receive only the k
   } finally { fixture.restore(); }
 });
 
-test('source review API masks by default and honors an explicit opt-out or edited mask', async () => {
+test('source review API applies native masks then sends crops at the selected 1x, 2x or 4x scale', async () => {
   const { POST } = await import('../src/routes/api/episodes/[eid]/region-ai/+server');
   const { localMaskFixture } = await import('./local-ocr-fixture');
   const fixture = await localMaskFixture();
@@ -139,26 +139,54 @@ test('source review API masks by default and honors an explicit opt-out or edite
     if (String(url).endsWith('/models')) return Response.json({ data: [] });
     if (!String(url).endsWith('/chat/completions')) return Response.json({}, { status: 503 });
     const body = JSON.parse(String(init?.body));
-    const image = body.messages[1].content.find((part: any) => part.type === 'image_url');
+    const image = Array.isArray(body.messages[1].content)
+      ? body.messages[1].content.find((part: any) => part.type === 'image_url') : undefined;
+    if (!image) return Response.json({ choices: [{ message: { content: JSON.stringify({ translation: 'Text' }) } }] });
     sent.push(Buffer.from(image.image_url.url.split(',')[1], 'base64'));
     return Response.json({ choices: [{ message: { content: JSON.stringify({ status: 'readable', source: '原文', translation: 'Text', answer: 'Read the lettering.' }) } }] });
   };
   try {
     const edited = await sharp({ create: { width: 60, height: 60, channels: 3, background: 'white' } }).png().toBuffer();
-    for (const extra of [{}, { maskEnabled: false }, { mask: edited.toString('base64') }]) {
+    const halfMask = await sharp({ create: { width: 60, height: 60, channels: 3, background: 'black' } })
+      .composite([{ input: await sharp({ create: { width: 30, height: 60, channels: 3, background: 'white' } }).png().toBuffer(), left: 30, top: 0 }])
+      .png().toBuffer();
+    const cases = [{}, { maskEnabled: false }, { mask: edited.toString('base64') },
+      { mask: edited.toString('base64'), cropScale: 2 }, { mask: edited.toString('base64'), cropScale: 4 },
+      { maskEnabled: false, cropScale: 2 }, { maskEnabled: false, cropScale: 4 },
+      { mask: halfMask.toString('base64'), cropScale: 4 }];
+    for (const extra of cases) {
       const response = await POST({ locals: { user: { id: 'human', username: 'Human', role: 'admin' } }, params: { eid: 'e' },
         request: new Request('http://fixture/region-ai', { method: 'POST', body: JSON.stringify({ action: 'review', lineId: line.id,
           expectedRevision: line.revision, reviewers: [{ engine: 'qwen', model: 'review-mask-fixture' }], ...extra }) }) } as any);
-      assert.equal(response.status, 200, await response.text());
+      const result = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(result));
+      assert.equal(result.cropScale, 'cropScale' in extra ? extra.cropScale : 1);
+      assert.equal(result.results[0].error, undefined, JSON.stringify(result));
     }
-    assert.equal(sent.length, 3);
+    assert.equal(sent.length, cases.length);
+    for (const [i, extra] of cases.entries()) {
+      const info = await sharp(sent[i]).metadata();
+      const scale = 'cropScale' in extra ? extra.cropScale! : 1;
+      assert.equal(info.width, 60 * scale);
+      assert.equal(info.height, 60 * scale);
+    }
     const first = await sharp(sent[0]).removeAlpha().raw().toBuffer();
     assert.ok(first[0] > 245, 'automatic mask removes surrounding artwork');
     assert.ok(Math.abs(first[(30 * 60 + 30) * 3] - 170) < 5, 'mask is applied to source pixels, not the cleaned page');
-    for (const bytes of sent.slice(1)) {
+    for (const bytes of sent.slice(1, -1)) {
       const pixels = await sharp(bytes).removeAlpha().raw().toBuffer();
       assert.ok(Math.abs(pixels[0] - 170) < 5, 'opt-out and edited mask preserve their chosen pixels');
     }
+    const enlarged = await sharp(sent.at(-1)!).removeAlpha().raw().toBuffer();
+    assert.ok(enlarged[(120 * 240 + 30) * 3] > 245, 'masked-out pixels stay white after 4x enlargement');
+    assert.ok(Math.abs(enlarged[(120 * 240 + 180) * 3] - 170) < 5, 'native mask alignment is preserved at 4x');
+    for (const cropScale of [0, 3, 8, -1, 1.5, '4', {}, true]) {
+      const response = await POST({ locals: { user: { id: 'human', username: 'Human', role: 'admin' } }, params: { eid: 'e' },
+        request: new Request('http://fixture/region-ai', { method: 'POST', body: JSON.stringify({ action: 'review', lineId: line.id,
+          expectedRevision: line.revision, reviewers: [{ engine: 'qwen', model: 'review-mask-fixture' }], cropScale }) }) } as any);
+      assert.equal(response.status, 400, await response.text());
+    }
+    assert.equal(sent.length, cases.length, 'invalid scales must not send a model request');
     assert.equal((await fixture.calls()).length, 1);
     assert.deepEqual(getDoc<any>('page:review-mask-p', {}).data, { cleanBase: cleaned, prepared: cleaned });
     assert.equal((await current(line.id)).source, '', 'review still only proposes changes');
@@ -566,7 +594,9 @@ test('read-drawing API validates drawings and requires current evidence for the 
   });
   assert.equal(junk.status, 400);
   sqlite.prepare("INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('handwrite-ko','s','handwrite-ko','KO',1,1)").run();
-  putDoc('handwrite-ko', 'chapter:handwrite-ko', { lang: 'korean' }, 0);
+  // Source language belongs to the series, including the handwriting guard.
+  const savedSeriesSettings = getDoc<any>('series:s', {});
+  putDoc(null, savedSeriesSettings.id, { ...savedSeriesSettings.data, lang: 'korean' }, savedSeriesSettings.revision);
   await db.insert(lines).values({
     id: 'handwrite-ko-l', episodeId: 'handwrite-ko', source: '', body: '', lineType: 'plain',
     sourceState: 'unreadable', updatedBy: 'human', sortOrder: 0, updatedAt: 1,
@@ -578,6 +608,7 @@ test('read-drawing API validates drawings and requires current evidence for the 
     expectedRevision: koLine.revision,
     image: 'x',
   });
+  putDoc(null, savedSeriesSettings.id, savedSeriesSettings.data, savedSeriesSettings.revision + 1);
   assert.equal(korean.status, 400);
   assert.match(await korean.text(), /Japanese/);
   const ink = await sharp({ create: { width: 16, height: 16, channels: 3, background: 'white' } })

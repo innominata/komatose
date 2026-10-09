@@ -4,6 +4,7 @@ import { jobSnapshot, startAiProofread } from '$lib/server/aiTranslate';
 import { parseTranslateEngine } from '$lib/server/cliTranslate';
 import { fail, messageOf, requireEdit, requireEpisodeAccess, requireUser, statusOf } from '$lib/server/http';
 import { parseOcrLang } from '$lib/server/ocr';
+import { preferences } from '$lib/server/workflowService';
 import { listLines, listImages } from '$lib/server/queries';
 import type { RequestHandler } from './$types';
 
@@ -30,7 +31,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			episode,
 			user,
 			engine: parseTranslateEngine(body.engine),
-			lang: parseOcrLang(body.lang),
+			lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
 			model: typeof body.model === 'string' ? body.model : undefined
 		});
 		return json({ ok: true, job }, { status: 202 });

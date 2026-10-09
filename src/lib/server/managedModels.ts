@@ -1,3 +1,4 @@
+import { modelPackage } from './modelPackages';
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { randomUUID, createHash } from "node:crypto";
@@ -414,6 +415,9 @@ async function startRow(row: ModelRow, e: Entry, signal: AbortSignal) {
       ...llamaServerEnv(recipe.executable),
       SCAN_MANAGED_OWNER: token,
     }, recipe.projectorPath && device.kind === 'gpu' ? device.name : undefined);
+    // d1's fused RMS norm stalls RADV's ACO shader compiler on RX 7900 XTX.
+    // Keep this workaround on the decision adapter's owned process only.
+    if (modelPackage(row.id)?.manifest.adapter.id === 'systemone') launchEnv.GGML_VK_DISABLE_FUSION = '1';
     for (const key of Object.keys(launchEnv))
       if (key.startsWith("LLAMA_ARG_")) delete launchEnv[key];
     if (row.requestPreset === "qwen-thinking")

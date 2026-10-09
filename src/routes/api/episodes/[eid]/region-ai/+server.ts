@@ -1,4 +1,5 @@
 import { shareRegionComparison } from '$lib/server/sharedComparison';
+import { characterContext, resolveCharacter } from '$lib/characters';
 import { holdManagedModel } from '$lib/server/managedModels';
 import { resolveLiveAssistant } from '$lib/server/assistantRoute';
 import { json } from "@sveltejs/kit";
@@ -29,10 +30,12 @@ import {
   croppedPageMask,
   detectReviewMask,
   parseReviewMaskPng,
+  parseReviewCropScale,
   regionReviewCrop,
 } from "$lib/server/reviewMask";
 import { saveCleanExample, parseComparisonFormat, regionComparison } from "$lib/server/regionCompare";
-import { WorkflowError } from "$lib/server/workflowStore";
+import { getDoc, WorkflowError } from "$lib/server/workflowStore";
+import type { RegionData } from '$lib/workflow';
 import { preferences } from "$lib/server/workflowService";
 import { regionAiSettings } from "$lib/regionAi";
 import { glossaryPrompt } from "$lib/glossary";
@@ -73,13 +76,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       return json({ mask: `data:image/png;base64,${mask.toString("base64")}` });
     }
     if (b.action === "review") {
+      const cropScale = parseReviewCropScale(b.cropScale);
       const reviewers = validateReviewers(b.reviewers, b.selectedReviewer);
       await reserve(reviewers);
       if (!page) throw new WorkflowError("Region needs image bounds");
       const mask = b.mask != null ? parseReviewMaskPng(b.mask)
         : b.maskEnabled === false ? undefined
         : await detectReviewMask(series, episode, line, page, b.expansion, request.signal);
-      const crop = await regionReviewCrop(series, episode, line, page, mask);
+      const crop = await regionReviewCrop(series, episode, line, page, mask, cropScale);
       const results = [];
       // Sequential calls also support local servers that load one model at a time.
       for (const model of reviewers) {
@@ -93,6 +97,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
             lang: prefs.lang,
             seriesGlossary: glossaryPrompt(series.glossary || [], 80),
             seriesNotes: [series.notes, prefs.aliases, prefs.translationPreferences].filter(Boolean).join("\n"),
+            pageCaption: `Human-assigned speaker (not the person addressed): ${characterContext(resolveCharacter(getDoc<RegionData>(`region:${line.id}`, {}).data.speaker, series.glossary))}`,
           });
           request.signal.throwIfAborted();
           results.push({
@@ -105,7 +110,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           results.push({ model, error: messageOf(e), cards: [] });
         }
       }
-      return json({ results });
+      return json({ results, cropScale });
     }
     if (b.action === "read-drawing") {
       const prefs = preferences(episode.id, series.id);

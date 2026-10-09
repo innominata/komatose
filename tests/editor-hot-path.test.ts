@@ -177,6 +177,40 @@ test("editor hot path keeps current pages fast, polls jobs, and drops finished u
   assert.equal((sqlite.prepare("SELECT id FROM lines WHERE id='r2'").get() as { id: string }).id, "r2");
 });
 
+test("bulk region removal is atomic and preserves unselected pages and deleted text history", async () => {
+  const { removePageRegions } = await import("../src/lib/server/workflowService");
+  const image = { episodeId: "chapter", width: 10, height: 10, createdAt: 1, updatedAt: 1 };
+  for (const id of ["bulk-p1", "bulk-p2", "bulk-keep"]) {
+    db.insert(images).values({ ...image, id, filename: `${id}.png`, originalName: `${id}.png`, sortOrder: 10 }).run();
+    db.insert(lines).values({ id: `${id}-region`, episodeId: "chapter", imageId: id,
+      body: `English ${id}`, source: `Source ${id}`, updatedAt: 1 }).run();
+    putDoc("chapter", `page:${id}`, { cleaned: "saved-cleaned-artwork" }, 0);
+  }
+  db.insert(lines).values({ id: "bulk-unplaced", episodeId: "chapter", body: "Unplaced", updatedAt: 1 }).run();
+  const remaining = () => (sqlite.prepare("SELECT id FROM lines WHERE id LIKE 'bulk-%' ORDER BY id").all() as { id: string }[]).map(row => row.id);
+  const before = remaining();
+  sqlite.exec(`CREATE TRIGGER reject_bulk_delete BEFORE DELETE ON lines WHEN OLD.image_id='bulk-p2'
+    BEGIN SELECT RAISE(ABORT, 'fixture deletion failure'); END;`);
+  try {
+    assert.throws(() => removePageRegions("chapter", ["bulk-p1", "bulk-p2"]), /fixture deletion failure/);
+    assert.deepEqual(remaining(), before, "a failed page must roll back the whole selection");
+    assert.equal((sqlite.prepare("SELECT count(*) n FROM workflow_revisions WHERE entity_id='bulk-p1-region'").get() as { n: number }).n, 0);
+  } finally {
+    sqlite.exec("DROP TRIGGER reject_bulk_delete");
+  }
+  assert.deepEqual(removePageRegions("chapter", ["bulk-p1", "bulk-p2", "bulk-p1"]), ["bulk-p1-region", "bulk-p2-region"]);
+  assert.deepEqual(remaining(), ["bulk-keep-region", "bulk-unplaced"]);
+  for (const id of ["bulk-p1", "bulk-p2", "bulk-keep"]) {
+    assert.ok(sqlite.prepare("SELECT id FROM images WHERE id=?").get(id));
+    assert.equal(getDoc<PageData>(`page:${id}`, {}).data.cleaned, "saved-cleaned-artwork");
+  }
+  const history = sqlite.prepare("SELECT data FROM workflow_revisions WHERE entity_id='bulk-p1-region'").get() as { data: string };
+  assert.deepEqual(JSON.parse(history.data).body, "English bulk-p1");
+  assert.deepEqual(JSON.parse(history.data).source, "Source bulk-p1");
+  assert.equal(JSON.parse(history.data).deleted, 1);
+  assert.deepEqual(removePageRegions("chapter", ["bulk-p1", "bulk-p2"]), []);
+});
+
 test("placement edits advance revisions, preserve history, and reject stale writes", async () => {
   const { migrateLinePlacementRevisions } = await import("../src/lib/server/db/workflowMigration");
   // Simulate an existing installation with the original trigger definitions.

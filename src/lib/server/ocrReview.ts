@@ -21,6 +21,7 @@ export type OcrTranslateOpts = {
   model?: string;
   seriesGlossary?: string;
   seriesNotes?: string;
+  pageCaption?: string;
 };
 
 /** Injected so tests can distinguish CLI, specialist, and generic OCR local paths. */
@@ -86,7 +87,9 @@ export async function translateOcrGenericLocal(
       { role: 'user', content: JSON.stringify({
         transcription: box.source,
         language: opts.lang ? sourceLangLabel(opts.lang) : undefined,
+        ...(box.speaker ? { speaker: box.speaker } : {}),
         ...(glossary ? { glossary } : {}),
+        ...([opts.seriesNotes, opts.pageCaption].filter(Boolean).length ? { context: [opts.seriesNotes, opts.pageCaption].filter(Boolean).join('\n\n') } : {}),
       }) },
     ], {
       model: opts.model,
@@ -137,6 +140,7 @@ export async function translateOcrSource(
     engine: opts.engine ?? DEFAULT_CHAT_MODEL_ID,
     boxes: [ocrSourceBox(source)],
     seriesNotes: opts.seriesNotes || '',
+    pageCaption: opts.pageCaption,
     prior: '',
     pageLabel: 'OCR',
     lang: opts.lang,

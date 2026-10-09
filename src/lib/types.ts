@@ -11,6 +11,11 @@ import {
 export type EpisodeStatus = 'raws' | 'translating' | 'proofing' | 'cleaning' | 'typesetting' | 'done';
 
 export type GlossaryTerm = {
+	id?: string;
+	kind?: 'character';
+	/** Alternate English spellings to recognize, not alternate output spellings. */
+	aliases?: string[];
+	notes?: string;
 	source: string;
 	translation: string;
 	edited?: boolean;
@@ -261,7 +266,11 @@ export const TRANSLATE_ENGINES = [...PROVIDER_IDS];
 export const TRANSLATE_ENGINE_LABELS: Record<string, string> = { ...PROVIDER_LABELS };
 
 export type TranslateEngineInfo = {
+	warnings?: string[];
 	access?: string;
+	cliAdapter?: string;
+	slug?: string;
+	autoRun?: boolean;
 	id: string;
 	label: string;
 	available: boolean;

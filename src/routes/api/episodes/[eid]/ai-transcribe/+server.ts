@@ -21,6 +21,7 @@ import {
   statusOf,
 } from "$lib/server/http";
 import { parseOcrLang } from "$lib/server/ocr";
+import { preferences } from "$lib/server/workflowService";
 import { listImages } from "$lib/server/queries";
 import { OCR_LANGS, OCR_LANG_LABELS } from "$lib/types";
 import type { RequestHandler } from "./$types";
@@ -28,14 +29,14 @@ import type { RequestHandler } from "./$types";
 export const GET: RequestHandler = async ({ locals, params }) => {
   try {
     const user = requireUser(locals.user);
-    const { episode } = await requireEpisodeAccess(user, params.eid);
+    const { episode, series } = await requireEpisodeAccess(user, params.eid);
     return json({
       job: jobSnapshot(episode.id),
       engines: await engineReadiness(),
       detectors: listDetectors(),
       detection: resolveDetector(episode.id),
       langs: OCR_LANGS.map((id) => ({ id, label: OCR_LANG_LABELS[id] })),
-      lang: parseOcrLang(undefined),
+      lang: preferences(episode.id, series.id).lang,
     });
   } catch (e) {
     return fail(statusOf(e), messageOf(e));
@@ -66,7 +67,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           expectedRevision: Number.isInteger(body.expectedRevision)
             ? Number(body.expectedRevision)
             : undefined,
-          lang: parseOcrLang(body.lang),
+          lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
         }),
         { status: 202 },
       );
@@ -86,7 +87,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       user,
       detectorSetup,
       detectConf: parseDetectConf(body.detectConf),
-      lang: parseOcrLang(body.lang),
+      lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
       imageIds: pageIds.length ? pageIds : undefined,
     });
     return json({ ok: true, job }, { status: 202 });

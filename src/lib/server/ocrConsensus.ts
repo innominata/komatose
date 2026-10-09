@@ -1,4 +1,8 @@
-import { compareOcrReadings, failedOcrConsensus, ocrComparableKey, type OcrConsensus, type OcrReading } from '../ocrConsensus';
+import { decideTranscription, acceptedDecisionSource, type DeciderOptions } from './transcriptionDecider';
+import { deciderPageStamp } from '../decider';
+import type { PageData, RegionData } from '../workflow';
+import { putDoc } from './workflowStore';
+import { compareOcrReadings, ocrResolutionAccepted, failedOcrConsensus, ocrComparableKey, type OcrConsensus, type OcrReading } from '../ocrConsensus';
 import { classifyRegionLineType, sfxClassificationSource, type RegionTypeHints } from '../sfx';
 import { collapseSuggestions } from '../regionAi';
 import { normalizeTranslation } from '../translationText';
@@ -135,7 +139,7 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
     = (source, signal, lang) => translateOcrSource(source, signal, { lang }),
   lang?: OcrLang,
   modelIds?: string[],
-  hooks?: { onTranslate?: () => void }): Promise<OcrConsensus> {
+  hooks?: { onTranslate?: () => void; onDecide?: (modelId: string) => void; decider?: DeciderOptions }): Promise<OcrConsensus> {
   const ids = transcriptionModelIds(modelIds);
   const run = async (signal: AbortSignal) => {
     const readings: OcrReading[] = await mapPool(ids, OCR_CONCURRENCY, async (id) => {
@@ -152,6 +156,8 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
       }
     });
     const result = compareOcrReadings(readings);
+    result.decision = await decideTranscription(crop, readings, signal, lang, hooks?.decider, hooks?.onDecide);
+    if (result.decision) result.source = acceptedDecisionSource(result.decision);
     const translations = new Map<string, string>();
     let announced = false;
     for (const reading of result.readings) {
@@ -166,7 +172,7 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
         reading.translation = translations.get(reading.source);
       } catch (error) {
         signal.throwIfAborted();
-        if (!result.agreed) throw error;
+        if (!result.decision && !result.agreed) throw error;
         reading.translation = '';
       }
     }
@@ -233,8 +239,10 @@ function sfxHints(lineId: string): RegionTypeHints {
  * whichever of source and English is still empty, then drop the suggestion.
  */
 export function applyLonePendingSource(episodeId: string, lineId: string): boolean {
+  const decision = getDoc<RegionData>(`region:${lineId}`, {}).data.sourceDecision;
+  if (decision && decision.status !== 'accepted') return false;
   const row = db.select().from(lines).where(eq(lines.id, lineId)).get();
-  if (!row || row.episodeId !== episodeId || row.sourceState === 'ignored') return false;
+  if (!row || row.episodeId !== episodeId || row.sourceState === 'ignored' || row.status === 'approved') return false;
   if ((row.source || '').trim()) return false;
   const machine = row.updatedBy === 'ai-ocr' && row.status !== 'approved';
   const blank = !(row.body || '').trim();
@@ -259,6 +267,18 @@ export function applyLonePendingSource(episodeId: string, lineId: string): boole
   return true;
 }
 
+export function deciderContextCurrent(line: LineRow, result: OcrConsensus) {
+  const stamp = result.decision?.pageSourceStamp;
+  return stamp === undefined || stamp === deciderPageStamp(getDoc<PageData>(`page:${line.imageId}`, {}).data);
+}
+
+export function saveTranscriptionDecision(episodeId: string, line: LineRow, result: OcrConsensus, applied: boolean) {
+  const doc = getDoc<RegionData>(`region:${line.id}`, {});
+  if (!result.decision && !doc.data.sourceDecision) return;
+  putDoc(episodeId, doc.id, { ...doc.data, sourceDecision: result.decision ? { ...result.decision,
+    applied, bounds: result.decision.bounds ?? JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]), sourceRevision: result.decision.sourceRevision ?? line.revision } : undefined }, doc.revision);
+}
+
 /** Save both independent readings without replacing a person's edits or running a council. */
 export function saveOcrConsensus(
   episodeId: string,
@@ -269,13 +289,13 @@ export function saveOcrConsensus(
   return sqlite.transaction(() => {
     const row = db.select().from(lines).where(eq(lines.id, line.id)).get();
     if (!row || row.episodeId !== episodeId || row.sourceState === 'ignored') return;
-    const editable = row.revision === (line.revision ?? 0) && row.status !== 'approved' &&
+    const editable = deciderContextCurrent(line, result) && JSON.stringify([row.imageId, row.x, row.y, row.w, row.h]) === JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]) && row.revision === (line.revision ?? 0) && row.status !== 'approved' &&
       (row.updatedBy === 'ai-ocr' || (!row.source?.trim() && !row.body.trim()));
     const english = normalizeTranslation(winnerEnglish(result));
     if (editable) {
       const sameSource = (row.source || '') === result.source;
-      const body = result.agreed ? (english || (sameSource ? (row.body || '') : '')) : '';
-      const status = result.agreed
+      const body = ocrResolutionAccepted(result) ? (english || (sameSource ? (row.body || '') : '')) : '';
+      const status = ocrResolutionAccepted(result)
         ? (english ? 'needs_work' : (sameSource && (row.body || '').trim() ? (row.status || 'none') : 'none'))
         : 'needs_work';
       const lineType = correctedRegionLineType(
@@ -285,11 +305,12 @@ export function saveOcrConsensus(
         sfxHints(row.id),
       );
       sqlite.prepare(`UPDATE lines SET source=?,source_state=?,body=?,ocr_confidence=NULL,status=?,line_type=COALESCE(?, line_type),updated_at=?
-        WHERE id=? AND episode_id=? AND revision=?`).run(result.source, result.agreed ? 'read' : 'unreadable',
+        WHERE id=? AND episode_id=? AND revision=?`).run(result.source, ocrResolutionAccepted(result) ? 'read' : 'unreadable',
         body, status, lineType, Date.now(), row.id, episodeId, row.revision);
     }
     let saved = toLine(db.select().from(lines).where(eq(lines.id, line.id)).get()!);
-    const winnerSaved = result.agreed && !!result.source.trim() && (saved.source || '') === result.source;
+    const winnerSaved = ocrResolutionAccepted(result) && !!result.source.trim() && (saved.source || '') === result.source;
+    saveTranscriptionDecision(episodeId, saved, result, editable && winnerSaved);
     const suggestionIds: string[] = [];
     const suggestReadings = winnerSaved
       ? ocrReadingsToSuggest(result, true)

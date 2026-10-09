@@ -23,6 +23,12 @@ export async function builtinPackageReadiness(pkg: DiscoveredPackage): Promise<{
   const row = findRegistryRow(pkg.manifest.id);
   if (!row) return { available: false, reason: 'Model configuration missing' };
   const adapter = pkg.manifest.adapter.id;
+  if (adapter === 'systemone') {
+    const { deciderInstalled } = await import('./deciderRuntime');
+    const weights = deciderInstalled(row.id);
+    const runtime = deciderInstalled('llama-decider');
+    return { available: weights.installed && runtime.installed, reason: weights.detail || runtime.detail };
+  }
   if (adapter === 'native-ocr' || adapter === 'local-chat') {
     const { installedLocalReviewModels } = await import('./localReview');
     return { available: installedLocalReviewModels().some(m => m.id === row.id), reason: 'Install this model package if its weights are missing' };
@@ -93,12 +99,30 @@ async function runSetup(pkg: DiscoveredPackage, signal?: AbortSignal, progress?:
 
 export async function operateBuiltinPackage(pkg: DiscoveredPackage, action: string, signal?: AbortSignal, progress?: (s: string) => void): Promise<any> {
   if (action === 'install') {
-    await runSetup(pkg, signal, progress);
-    const status = await operateBuiltinPackage(pkg, 'installation-status', signal, progress);
-    if (!status.installed) throw new ModelTaskError('error', status.reason || 'Installer finished, but installation checks did not pass');
-    return status;
+    let release: (() => void) | undefined;
+    if (['d1-3b', 'llama-decider'].includes(pkg.manifest.id)) {
+      const { lockModelLifecycle } = await import('./modelUsage');
+      const { managedModelStatus } = await import('./managedModels');
+      release = lockModelLifecycle('d1-3b');
+      try {
+        const row = findRegistryRow('d1-3b');
+        if (row?.managedLaunch && ['running', 'starting', 'stopping'].includes(managedModelStatus(row).state))
+          throw new ModelTaskError('error', 'Stop d1 before reinstalling its model or runtime');
+      } catch (e) { release(); throw e; }
+    }
+    try {
+      await runSetup(pkg, signal, progress);
+      if (pkg.manifest.id === 'd1-3b') (await import('./modelInstall')).ensureInstalledModelRows('d1-3b');
+      const status = await operateBuiltinPackage(pkg, 'installation-status', signal, progress);
+      if (!status.installed) throw new ModelTaskError('error', status.reason || 'Installer finished, but installation checks did not pass');
+      return status;
+    } finally { release?.(); }
   }
   if (action === 'installation-status') {
+    if (['d1-3b', 'llama-decider'].includes(pkg.manifest.id)) {
+      const status = (await import('./deciderRuntime')).deciderInstalled(pkg.manifest.id);
+      return { installed: status.installed, reason: status.detail };
+    }
     if (pkg.manifest.id === 'env-workflow') {
       const root = process.env.SCAN_ROOT || process.cwd();
       const requirements = resolve(root, 'ocr/requirements-workflow.txt');

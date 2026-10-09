@@ -126,7 +126,7 @@
   <section class="sec" data-find="clean-finish">
     <h3><span class="stepn">4</span> Finish</h3>
     <button type="button" class="primary block" data-find="approve-clean" disabled={!canClean || busy || !pageDoc?.data.cleaned} onclick={() => onapproveclean?.()}><i class="bi bi-check2-square" aria-hidden="true"></i> Approve cleaned page &amp; next</button>
-    <button type="button" class="block" data-find="apply-pass" disabled={!canClean || busy} onclick={() => onapplypass?.()}><i class="bi bi-layers" aria-hidden="true"></i> Keep result &amp; start another pass</button>
+    <button type="button" class="block" data-find="apply-pass" disabled={!canClean || busy || strokeCount > 0 || !pageDoc?.data.cleaned} onclick={() => onapplypass?.()}><i class="bi bi-layers" aria-hidden="true"></i> Keep result &amp; start another pass</button>
     <p class="muted" data-find="save-sample">Passes stack. The raw original never changes; Undo steps back one pass.</p>
   </section>
   <details class="sec hw">

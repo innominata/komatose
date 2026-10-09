@@ -27,7 +27,8 @@ export async function probeModelRow(row: ModelRow, operation: ModelTaskId = 'tra
     const fixtures = await contract.fixtures();
     // Detect: try every fixture (dialogue + SFX). One pass is enough; only fail if all miss.
     // Other multi-fixture tasks (translate) still stop on the first pass.
-    const tryAll = operation === 'detect' && fixtures.length > 1;
+    const requireAll = operation === 'sourceDecide';
+    const tryAll = (operation === 'detect' || requireAll) && fixtures.length > 1;
     let lastFailure: unknown;
     const passed: { label: string; value: unknown }[] = [];
     for (const [index, input] of fixtures.entries()) {
@@ -49,11 +50,12 @@ export async function probeModelRow(row: ModelRow, operation: ModelTaskId = 'tra
     }
     passed.push({ label, value });
     } catch (error) {
+      if (requireAll) throw error;
       if (!(error instanceof ModelTaskError) || !['unsupported', 'failed_validation'].includes(error.outcome)) throw error;
       lastFailure = error;
     }
     }
-    if (tryAll && passed.length) {
+    if (tryAll && passed.length && (!requireAll || passed.length === fixtures.length)) {
       const value = passed[0].value;
       return { operation, fingerprint, ok: true, outcome: 'passed', at: Date.now(), ms: Date.now() - started,
         reason: `Passed ${passed.map((item) => item.label).join(' + ')} fixture${passed.length === 1 ? '' : 's'}`,

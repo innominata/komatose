@@ -22,6 +22,8 @@
     payload?: Record<string, unknown>;
     progress?: {
       message?: string;
+      manualRequired?: boolean;
+      manualSlices?: { imageId: string; height: number }[];
       completed?: number;
       total?: number;
       imageIndex?: number;
@@ -57,6 +59,7 @@
     onclear,
     onclearall,
     onopencritique,
+    onmanualreslice,
   }: {
     jobs?: Job[];
     mode?: "collapsed" | "shown" | "maximized";
@@ -69,6 +72,7 @@
     onclear: () => void;
     onclearall: () => void;
     onopencritique: (jobId: string) => void;
+    onmanualreslice?: (jobId: string, imageId?: string) => void;
   } = $props();
 
   const running = $derived(
@@ -82,6 +86,8 @@
   );
   const open = $derived(mode !== "collapsed");
   const latestCritique = $derived(latestPageProofreadJob(jobs));
+  const latestReslice = $derived(jobs.find(j => j.kind === "reslice"));
+  const manualReslice = $derived(["completed", "failed"].includes(latestReslice?.state ?? "") && latestReslice?.progress?.manualRequired ? latestReslice : null);
   let flashing = $state(false);
 
   $effect(() => {
@@ -210,6 +216,11 @@
     {/if}
     {#if failed}<span class="job-fail"><i class="bi bi-x-circle" aria-hidden="true"></i> {failed} failed</span>{/if}
     <span class="spacer"></span>
+    {#if !open && manualReslice && onmanualreslice}
+      <button class="link" type="button" onclick={(e) => {
+        e.stopPropagation(); onmanualreslice?.(manualReslice!.id);
+      }}>Split manually</button>
+    {/if}
     {#if latestCritique}
       <button
         class="link"
@@ -265,7 +276,15 @@
             {#if ["running", "queued"].includes(job.state)}
               <button type="button" class="small" onclick={() => oncancel(job.id)}>Cancel</button>
             {/if}
-            {#if ["failed", "interrupted", "cancelled"].includes(job.state) && retryKinds.includes(job.kind)}
+            {#if job.kind === "reslice" && job.progress?.manualRequired && onmanualreslice}
+              {#if job.progress.manualSlices?.length}
+                {#each job.progress.manualSlices as slice}
+                  <button type="button" class="small accent" onclick={() => onmanualreslice?.(job.id, slice.imageId)}>Split manually · {slice.height}px</button>
+                {/each}
+              {:else}
+                <button type="button" class="small accent" onclick={() => onmanualreslice?.(job.id)}>Split manually</button>
+              {/if}
+            {:else if ["failed", "interrupted", "cancelled"].includes(job.state) && retryKinds.includes(job.kind)}
               <button type="button" class="small accent" onclick={() => onretry(job.id)}>Retry unfinished work</button>
             {/if}
             {#if job.kind === "page-proofread"}

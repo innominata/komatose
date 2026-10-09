@@ -3,6 +3,8 @@ import { QWEN3_VL_ID, QWEN3_VL_LABEL } from './qwenModels';
 /** These models are installed separately and are available for region AI Review. */
 export const LOCAL_REVIEW_MODELS = [
   { id: 'hayai-ocr-v2', label: 'Hayai OCR v2', transcriptionOnly: true },
+  { id: 'hayai-ocr-v2.5-nova', label: 'Hayai OCR v2.5 Nova', transcriptionOnly: true },
+  { id: 'pp-ocrv5-korean', label: 'PP-OCRv5 Korean', transcriptionOnly: true },
   { id: 'manga-ocr', label: 'Manga OCR', transcriptionOnly: true },
   { id: 'paddleocr-vl-1.6', label: 'PaddleOCR-VL-1.6', transcriptionOnly: true },
   { id: QWEN3_VL_ID, label: QWEN3_VL_LABEL, transcriptionOnly: false },

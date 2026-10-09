@@ -6,6 +6,7 @@
     | "read-area"
     | "reorder"
     | "style-brush"
+    | "assign-character"
     | "brush"
     | "erase"
     | "bubble-fill"
@@ -33,6 +34,7 @@
   type ToolDef = { id: PaletteId; icon: string; title: string; key?: string };
 
   const ALL: Record<PaletteId, ToolDef> = {
+    'assign-character': { id: 'assign-character', icon: 'bi-person-badge', title: 'Assign character' },
     select: { id: "select", icon: "bi-cursor", title: "Select (V)", key: "V" },
     region: {
       id: "region",
@@ -157,7 +159,7 @@
       ];
     if (step === "Translate" || step === "Review")
       return canEdit
-        ? [ALL.select, ALL.region, ALL.reorder, ALL["read-area"], zoom]
+        ? [ALL.select, ALL.region, ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), ALL["read-area"], zoom]
         : [ALL.select, zoom];
     if (step === "Clean")
       return canClean

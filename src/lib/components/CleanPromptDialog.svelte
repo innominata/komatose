@@ -93,9 +93,6 @@
   class="hud-modal hud-dialog-controls clean-prompt"
   bind:this={dialog}
   aria-labelledby="clean-prompt-title"
-  onclick={(e) => {
-    if (e.target === dialog) cancel();
-  }}
   oncancel={(e) => {
     e.preventDefault();
     cancel();

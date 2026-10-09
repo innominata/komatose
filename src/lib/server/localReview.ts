@@ -62,15 +62,21 @@ state.lifecycle ??= new Map();
 const root = () => process.env.SCAN_ROOT || ROOT;
 const modelDir = () => process.env.SCAN_REVIEW_MODELS_DIR || join(DATA_DIR, 'models/review');
 const python = () => process.env.SCAN_REVIEW_PYTHON || join(root(), '.venv-review/bin/python');
+const pythonForReview = (id: LocalReviewModelId) => id === 'pp-ocrv5-korean'
+  ? process.env.PADDLEOCR_PYTHON || join(root(), '.venv-ocr/bin/python') : python();
 const llama = () => process.env.SCAN_REVIEW_LLAMA_SERVER || llamaServerBin() || join(homedir(), 'llama.cpp/build-vulkan/bin/llama-server');
 // A plain object keeps keyof equal to the python ids; the annotation would widen it to
 // every LocalReviewModelId and collapse LlamaReviewModelId to never.
 const PYTHON_REVIEW_SCRIPTS = {
   'hayai-ocr-v2': 'hayai_review.py',
+  'hayai-ocr-v2.5-nova': 'hayai_review.py',
+  'pp-ocrv5-korean': 'ppocr_korean_review.py',
   'manga-ocr': 'manga_ocr_review.py',
 } satisfies Partial<Record<LocalReviewModelId, string>>;
 const files: Record<LocalReviewModelId, string[]> = {
   'hayai-ocr-v2': ['model.safetensors', 'config.json', 'modeling_hayai.py', 'configuration_hayai.py', 'tokenizer.json'],
+  'hayai-ocr-v2.5-nova': ['model.safetensors', 'config.json', 'modeling_hayai.py', 'configuration_hayai.py', 'tokenizer.json'],
+  'pp-ocrv5-korean': ['recognizer/inference.pdiparams', 'recognizer/inference.json', 'recognizer/inference.yml', 'detector/inference.pdiparams', 'detector/inference.json', 'detector/inference.yml'],
   'manga-ocr': ['model.safetensors', 'config.json', 'preprocessor_config.json', 'tokenizer_config.json', 'vocab.txt'],
   'paddleocr-vl-1.6': ['PaddleOCR-VL-1.6-GGUF.gguf', 'PaddleOCR-VL-1.6-GGUF-mmproj.gguf', 'chat_template.jinja'],
   'qwen3-vl-8b': ['Qwen3-VL-8B-Instruct-Q8_0.gguf', 'mmproj-F16.gguf'],
@@ -79,14 +85,14 @@ const pythonReviewModel = (id: LocalReviewModelId) => id in PYTHON_REVIEW_SCRIPT
 /** The python review script for an id, if that id runs through python rather than llama. */
 const pythonReviewScript = (id: LocalReviewModelId): string | undefined =>
   id in PYTHON_REVIEW_SCRIPTS ? PYTHON_REVIEW_SCRIPTS[id as keyof typeof PYTHON_REVIEW_SCRIPTS] : undefined;
-export type TranscriptionModelId = 'hayai-ocr-v2' | 'manga-ocr' | 'paddleocr-vl-1.6';
+export type TranscriptionModelId = Exclude<LocalReviewModelId, 'qwen3-vl-8b'>;
 const failure = (message: string, status = 409) => Object.assign(new Error(message), { status });
 
 export function installedLocalReviewModels() {
   try {
     const installed = JSON.parse(readFileSync(join(modelDir(), 'installed.json'), 'utf8'));
     return LOCAL_REVIEW_MODELS.filter(model => installed[model.id] &&
-      existsSync(pythonReviewModel(model.id) ? python() : llama()) &&
+      existsSync(pythonReviewModel(model.id) ? pythonForReview(model.id) : llama()) &&
       files[model.id].every(file => existsSync(join(modelDir(), model.id, file))))
       .map(model => reviewResolved(model.id).kind === 'gpu' ? { ...model, label: `${model.label} · GPU` } : model);
   } catch { return []; }
@@ -106,6 +112,7 @@ function lifecycle(id: string): Lifecycle {
  * present now. Komatose GPU mode keeps its pinned cards as the Auto answer.
  */
 export function reviewResolved(id: LocalReviewModelId): ResolvedDevice {
+  if (id === 'pp-ocrv5-korean') return { kind: 'cpu', label: 'CPU', reason: 'PaddlePaddle recognizer runs on CPU, including AMD systems' };
   const need = estimateNeedMiB(files[id].map(file => join(modelDir(), id, file)), pythonReviewModel(id) ? 1536 : 768);
   const pinned = komatoseGpuEnabled();
   if (pythonReviewModel(id))
@@ -139,8 +146,8 @@ export function stopLocalReviewModels() {
   state.services.clear();
 }
 /** Called after runtime requests drain. External resident services are not ours to retire. */
-export async function retirePythonReviewWorkers() {
-  const ids = Object.keys(PYTHON_REVIEW_SCRIPTS) as LocalReviewModelId[];
+export async function retirePythonReviewWorkers(runtime: 'env-review' | 'env-ocr' = 'env-review') {
+  const ids = Object.keys(PYTHON_REVIEW_SCRIPTS).filter(id => (id === 'pp-ocrv5-korean') === (runtime === 'env-ocr')) as LocalReviewModelId[];
   if (ids.some(id => state.services.get(id)?.adopted)) throw failure('Stop the externally owned Python review server before upgrading its runtime');
   await Promise.all(ids.map(id => terminateOwned(id)));
 }
@@ -207,6 +214,7 @@ function childEnv(id: LocalReviewModelId): NodeJS.ProcessEnv {
     const device = reviewResolved(id);
     return mmprojDeviceEnv(vulkanLlamaEnv(base), device.kind === 'gpu' ? device.name : undefined);
   }
+  if (id === 'pp-ocrv5-korean') return { ...base, CUDA_VISIBLE_DEVICES: '', HIP_VISIBLE_DEVICES: '', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: 'True' };
   if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(base, python());
   return torchDeviceEnv(reviewResolved(id), base);
 }
@@ -309,7 +317,7 @@ async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise
   if (!installedLocalReviewModels().some(model => model.id === id))
     throw new Error(`${id} is not installed. Run scripts/install-review-models.py with the review Python environment.`);
   let existing = state.services.get(id);
-  if (existing && !existing.adopted && pythonReviewModel(id) && existing.runtimePath && existing.runtimePath !== pythonRuntimePath(python())) {
+  if (existing && !existing.adopted && pythonReviewModel(id) && existing.runtimePath && existing.runtimePath !== pythonRuntimePath(pythonForReview(id))) {
     await terminateOwned(id);
     existing = undefined;
   }
@@ -347,11 +355,12 @@ async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise
   const token = randomBytes(24).toString('hex');
   const threads = String(Math.max(1, Math.min(32, Number(process.env.SCAN_REVIEW_THREADS) || 8)));
   const script = pythonReviewScript(id);
-  if (script) await ensureTorchProbe('env-review');
+  if (script && id !== 'pp-ocrv5-korean') await ensureTorchProbe('env-review');
   const device = reviewResolved(id);
   const args = script
     ? [join(root(), 'ocr', script), '--model-dir', dir, '--port', String(port), '--token', token, '--threads', threads,
-      '--device', device.kind === 'gpu' ? 'cuda' : 'cpu']
+      '--device', device.kind === 'gpu' ? 'cuda' : 'cpu',
+      ...(id.startsWith('hayai-ocr-') ? ['--model-id', id] : [])]
     : llamaArgs(id as LlamaReviewModelId, dir, port, token, threads, device);
   const logs = join(root(), 'data/logs');
   mkdirSync(logs, { recursive: true });
@@ -360,7 +369,7 @@ async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise
   const gpu = komatoseGpuEnabled();
   let child: ChildProcess;
   try {
-    child = spawn(script ? python() : llama(), args, {
+    child = spawn(script ? pythonForReview(id) : llama(), args, {
       cwd: root(), stdio: ['ignore', log, log], env: childEnv(id),
       detached: gpu,
     });
@@ -369,7 +378,7 @@ async function startService(id: LocalReviewModelId, abort: AbortSignal): Promise
   let spawnError: Error | undefined;
   child.on('error', error => { spawnError = error; });
   writeSavedToken(id, token);
-  const instance: Service = { child, url: bindUrl(port), token, ready: Promise.resolve(), runtimePath: script ? pythonRuntimePath(python()) : undefined };
+  const instance: Service = { child, url: bindUrl(port), token, ready: Promise.resolve(), runtimePath: script ? pythonRuntimePath(pythonForReview(id)) : undefined };
   state.services.set(id, instance);
   instance.ready = (async () => {
     try {
@@ -477,8 +486,9 @@ export function paddleOcrPrompt(lang?: OcrLang) {
 }
 
 export async function localTranscription(id: TranscriptionModelId, crop: Buffer, abort: AbortSignal, lang?: OcrLang) {
+  if (id === 'pp-ocrv5-korean' && lang && lang !== 'korean') throw failure('PP-OCRv5 Korean supports Korean chapters only', 400);
   if (id === 'paddleocr-vl-1.6') return localChat(id, [imageMessage(crop, paddleOcrPrompt(lang))], abort, undefined, 1024);
-  const result = await request(id, '/ocr', { image: crop.toString('base64') }, abort);
+  const result = await withPythonRuntime(id === 'pp-ocrv5-korean' ? 'env-ocr' : 'env-review', () => request(id, '/ocr', { image: crop.toString('base64'), language: lang }, abort));
   if (typeof result.source !== 'string') throw new Error(`${id} returned no transcription`);
   return result.source.trim();
 }
@@ -640,7 +650,7 @@ export function operateReviewServer(id: string, action: 'start' | 'stop' | 'rest
   // A managed host runs the one server for this model; its lifecycle is the
   // review lifecycle here, so Setup buttons drive the managed model directly.
   const host = managedReviewHost(modelId);
-  entry.promise = withPythonRuntime('env-review', async () => {
+  entry.promise = withPythonRuntime(modelId === 'pp-ocrv5-korean' ? 'env-ocr' : 'env-review', async () => {
     try {
       if (host) {
         operateManagedModel(host.id, action);

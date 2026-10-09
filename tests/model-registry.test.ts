@@ -20,7 +20,7 @@ import {
 	SEED_ROWS,
 	truncateOutputPreview,
 } from '../src/lib/modelRegistry';
-import { enginesForRegionAiField } from '../src/lib/regionAi';
+import { enginesForRegionAiField, isNonLocalReviewer, isOnDemandReviewer } from '../src/lib/regionAi';
 import { providerRunGate, selectProvidersForOperation } from '../src/lib/providerCatalog';
 import { compareOcrReadings } from '../src/lib/ocrConsensus';
 import {
@@ -802,6 +802,38 @@ test('legacy host aliases cannot be used as new row ids and still resolve to the
 	assert.equal(grok.row.access, 'cli');
 });
 
+test('added CLI models remain installed for administration while hidden from chapter pickers', async () => {
+  const { rowAvailability, rowInstallationAvailability } = await import('../src/lib/server/registryPicker');
+  const overrides = ['CODEX_BIN', 'CURSOR_BIN', 'CURSOR_AGENT_BIN'] as const;
+  const saved = overrides.map(key => process.env[key]);
+  const added: ModelRow[] = [];
+  try {
+    for (const key of overrides) process.env[key] = process.execPath;
+    for (const [adapter, slug, label] of [
+      ['codex', 'gpt-6-luna', 'GPT-6-Luna'],
+      ['cursor', 'claude-haiku-5-5-low', 'Claude Haiku 5.5 Low'],
+      ['cursor', 'claude-haiku-5-5-max', 'Claude Haiku 5.5 Max'],
+    ] as const) {
+      const row = store.addCliSlug(adapter, slug, label);
+      added.push(row);
+      assert.equal(row.disabled, true);
+      assert.equal((await rowInstallationAvailability(row)).available, true);
+      assert.deepEqual(await rowAvailability(row), { available: false, reason: 'Disabled' });
+      assert.equal(rowAllowedForRole(row, 'admin'), false);
+      const shown = store.updateRegistryRow(row.id, { disabled: false });
+      assert.equal((await rowAvailability(shown)).available, true);
+      assert.equal(rowAllowedForRole(shown, 'admin'), true);
+      store.updateRegistryRow(row.id, { disabled: true });
+    }
+  } finally {
+    for (const row of added) store.removeOverlayRow(row.id);
+    overrides.forEach((key, index) => {
+      if (saved[index] === undefined) delete process.env[key];
+      else process.env[key] = saved[index];
+    });
+  }
+});
+
 test('any registry row can be hidden from pickers without deleting it', () => {
 	store.invalidateRegistryCache();
 	const added = store.addCliSlug('grok', 'polluting-slug', 'Polluting');
@@ -966,4 +998,90 @@ test('long model identifiers survive normal routing, Test overrides and legacy h
 	assert.equal(resolveAssistant('long-identifier', '', rows).slug, slug);
 	assert.equal(resolveAssistant('long-identifier', slug, rows).slug, slug);
 	assert.equal(hydrateTaskEngine({ engine: 'grok', model: slug }, rows).model, slug);
+});
+
+test('review Autorun persists per non-local model without invalidating qualification', async () => {
+	const cli = store.addCliSlug('codex', 'autorun-cli-fixture', 'Autorun CLI fixture');
+	const remote = store.createRemoteHttpRow({
+		id: 'autorun-remote-fixture', name: 'Autorun remote fixture', slug: 'remote-slug',
+		baseUrl: 'https://autorun.example/v1', apiKeyEnv: 'OPENAI_API_KEY',
+	});
+	const cliModel = { engine: cli.id, model: '' };
+	const remoteModel = { engine: remote.id, model: '' };
+	const localModel = { engine: QWEN3_VL_ID, model: '' };
+	const { validateReviewers } = await import('../src/lib/server/regionAi');
+	try {
+		store.updateRegistryRow(cli.id, { disabled: false });
+		let rows = store.listRegistryRows();
+		assert.equal(isOnDemandReviewer(cliModel, rows), true);
+		assert.equal(isOnDemandReviewer(remoteModel, rows), true);
+		assert.equal(isOnDemandReviewer(localModel, rows), false);
+		assert.throws(() => validateReviewers([cliModel]), /Select a paid reviewer/);
+		assert.deepEqual(validateReviewers([cliModel], cliModel), [cliModel]);
+		const before = store.findRegistryRow(cli.id)!;
+		store.updateRegistryRow(cli.id, { autoRun: true });
+		store.updateRegistryRow(remote.id, { autoRun: true });
+		store.invalidateRegistryCache();
+		rows = store.listRegistryRows();
+		const after = store.findRegistryRow(cli.id)!;
+		assert.equal(after.autoRun, true);
+		assert.deepEqual(after.capabilityFingerprints, before.capabilityFingerprints);
+		assert.deepEqual(after.taskFingerprints, before.taskFingerprints);
+		assert.equal(pickerSeedEngines(rows).find(row => row.id === cli.id)?.autoRun, true);
+		assert.equal(isOnDemandReviewer(cliModel, rows), false);
+		assert.equal(isOnDemandReviewer(remoteModel, rows), false);
+		assert.equal(isNonLocalReviewer(cliModel, rows), true, 'Manual reruns remain available');
+		assert.deepEqual(validateReviewers([localModel, cliModel, remoteModel]), [localModel, cliModel, remoteModel]);
+		assert.equal(isOnDemandReviewer({ engine: cli.id, model: 'different-slug' }, rows), true);
+		assert.throws(() => validateReviewers([{ engine: cli.id, model: 'different-slug' }]), /Select a paid reviewer/);
+		assert.equal(isOnDemandReviewer({ engine: 'codex', model: cli.slug }, rows), false);
+		assert.equal(isOnDemandReviewer({ engine: 'cursor', model: cli.slug }, rows), true, 'Autorun does not leak across CLI providers');
+		store.updateRegistryRow(cli.id, { autoRun: false });
+		store.invalidateRegistryCache();
+		assert.equal(store.findRegistryRow(cli.id)?.autoRun, false);
+		assert.throws(() => validateReviewers([localModel, cliModel]), /Select a paid reviewer/);
+	} finally {
+		store.removeOverlayRow(cli.id);
+		store.removeOverlayRow(remote.id);
+	}
+});
+
+test('seed overlays retain an explicit review Autorun preference', () => {
+	const rows = mergeRegistry({ rows: [{ id: QWEN3_VL_ID, autoRun: true }] });
+	assert.equal(rows.find(row => row.id === QWEN3_VL_ID)?.autoRun, true);
+});
+
+test('translation review uses saved Autorun rather than a client-supplied flag', async () => {
+	const remote = store.createRemoteHttpRow({
+		id: 'autorun-translation-fixture', name: 'Autorun translation fixture', slug: 'translation-slug',
+		baseUrl: 'https://translation.example/v1', apiKeyEnv: 'AUTORUN_FIXTURE_KEY',
+	});
+	const { reviseEnglish } = await import('../src/lib/server/reviseEnglish');
+	const opts = {
+		model: { engine: remote.id, model: '', autoRun: true },
+		line: { source: '' }, series: {}, episode: {},
+	// The empty source stops this gate test before chapter context is accessed.
+	} as unknown as Parameters<typeof reviseEnglish>[0];
+	const originalFetch = globalThis.fetch;
+	const originalKey = process.env.AUTORUN_FIXTURE_KEY;
+	process.env.AUTORUN_FIXTURE_KEY = 'fixture-key';
+	let readinessCalls = 0;
+	globalThis.fetch = async () => {
+		readinessCalls++;
+		return new Response(JSON.stringify({ data: [] }), { status: 200 });
+	};
+	try {
+		assert.match((await reviseEnglish(opts)).error!, /Run button/);
+		assert.equal(readinessCalls, 0, 'Manual models are rejected before reaching the provider');
+		store.updateRegistryRow(remote.id, { autoRun: true });
+		assert.match((await reviseEnglish(opts)).error!, /Add source text/);
+		assert.ok(readinessCalls > 0, 'Saved Autorun passes the gate and checks readiness');
+		store.updateRegistryRow(remote.id, { autoRun: false });
+		assert.match((await reviseEnglish(opts)).error!, /Run button/);
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (originalKey === undefined) delete process.env.AUTORUN_FIXTURE_KEY;
+		else process.env.AUTORUN_FIXTURE_KEY = originalKey;
+		store.removeOverlayRow(remote.id);
+	}
 });

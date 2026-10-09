@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "pp-ocrv5-korean",
+  "name": "PP-OCRv5 Korean",
+  "revision": "1",
+  "model": "pp-ocrv5-korean",
+  "access": "local_http",
+  "adapter": {
+    "id": "native-ocr"
+  },
+  "config": {},
+  "service": {
+    "id": "pp-ocrv5-korean"
+  },
+  "setup": {
+    "executable": "{root}/.venv-ocr/bin/python",
+    "args": [
+      "{root}/scripts/install-review-models.py",
+      "--model",
+      "pp-ocrv5-korean"
+    ],
+    "executableEnv": "PADDLEOCR_PYTHON"
+  },
+  "dependencies": [
+    "env-ocr"
+  ],
+  "environment": [
+    "SCAN_REVIEW_MODELS_DIR",
+    "PADDLEOCR_PYTHON"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/review",
+      "rootEnv": "SCAN_REVIEW_MODELS_DIR",
+      "subdirectory": "pp-ocrv5-korean"
+    }
+  ]
+}

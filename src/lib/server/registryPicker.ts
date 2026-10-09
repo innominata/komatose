@@ -11,6 +11,7 @@ import { missingApiKeyMessage } from './openaiHttp';
 import { installedLocalReviewModels } from './localReview';
 import { listTranslationModels } from './translationRuntime';
 import { translationModel } from '../translationModels';
+import { qualificationWarnings } from '../modelCapabilities';
 import { medianMs } from '../modelEstimate';
 import { estimateForOperation } from '../modelEstimate';
 
@@ -19,16 +20,24 @@ export type RegistryPickerRow = {
 	label: string;
 	available: boolean;
 	reason?: string;
+	warnings?: string[];
 	pageImageOnly?: boolean;
 	group: ReturnType<typeof accessGroup>;
 	operations: ProviderOperation[];
 	slug: string;
 	access: ModelRow['access'];
+	cliAdapter?: ModelRow['cliAdapter'];
+	autoRun?: boolean;
 	estimates?: Record<string, { label: string; ms: number; medianMs: number }>;
 };
 
 export async function rowAvailability(row: ModelRow): Promise<{ available: boolean; reason?: string }> {
  if (row.disabled) return { available: false, reason: 'Disabled' };
+ return rowInstallationAvailability(row);
+}
+
+/** Installation checks for administration, independent of chapter picker visibility. */
+export async function rowInstallationAvailability(row: ModelRow): Promise<{ available: boolean; reason?: string }> {
  const { packageForRow } = await import('./modelTaskRunner');
  try {
   const pkg = packageForRow(row);
@@ -79,11 +88,14 @@ export async function registryPickerRows(role?: Role | null, operation?: Provide
 			label: row.name,
 			available: live.available,
 			reason: live.reason,
+			warnings: qualificationWarnings(row),
 			pageImageOnly: row.access === 'proofreader',
 			group: accessGroup(row),
 			operations,
 			slug: row.slug,
 			access: row.access,
+			cliAdapter: row.cliAdapter,
+			autoRun: row.autoRun,
 			estimates: estimatesOf(row),
 		});
 	}

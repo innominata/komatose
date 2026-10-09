@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { glossaryCharacters, characterLabel, resolveCharacter, type CharacterAssignment } from '$lib/characters';
   import "./studio-controls.css";
+  import TranscriptionDecisionView from "../TranscriptionDecision.svelte";
+  import type { TranscriptionDecision } from "$lib/decider";
   import type { Snippet } from "svelte";
   import { collapseSuggestions, isSourceSuggestion } from "$lib/regionAi";
   import { compactSuggestionReason } from "$lib/suggestionReason";
@@ -37,7 +40,11 @@
     selected,
     suggestions,
     overflow = false,
+    decision,
+    decisionStale = false,
     glossary = [],
+    speaker,
+    onassigncharacter,
     regionKinds = builtinRegionKinds(),
     color = "#2de2c5",
     dimensions = "",
@@ -66,7 +73,11 @@
     selected: boolean;
     suggestions: RegionSuggestion[];
     overflow?: boolean;
+    decision?: TranscriptionDecision;
+    decisionStale?: boolean;
     glossary?: GlossaryTerm[];
+    speaker?: CharacterAssignment;
+    onassigncharacter?: (line: LineRow, characterId: string | null) => void;
     regionKinds?: RegionKind[];
     color?: string;
     dimensions?: string;
@@ -165,6 +176,16 @@
     <button type="button" class="rid" onclick={() => onselect(line.id, "list")}>#{pageIndex}</button>
     <button class="icon-btn" aria-label="Region actions" title="Region actions" data-find="region-actions" onclick={(e) => onactions(e, line.imageId!, line.id)}><i class="bi bi-three-dots" aria-hidden="true"></i></button>
   </header>
+  {#if onassigncharacter}
+    <label class="speaker-pick">Speaker<select aria-label="Region speaker" value={speaker?.characterId ?? ''} disabled={!canEdit || busy}
+      onchange={e => onassigncharacter?.(line, e.currentTarget.value || null)}>
+      <option value="">Unknown / unassigned</option>
+      {#if speaker && !glossaryCharacters(glossary).some(character => character.id === speaker.characterId)}
+        <option value={speaker.characterId}>{characterLabel(resolveCharacter(speaker, glossary))} (removed from glossary)</option>
+      {/if}
+      {#each glossaryCharacters(glossary) as character (character.id)}<option value={character.id}>{characterLabel(character)}</option>{/each}
+    </select></label>
+  {/if}
   {#if line.sourceState === "ignored"}
     <div class="alert muted"><i class="bi bi-slash-circle" aria-hidden="true"></i> Ignored{line.ignoreReason ? `: ${line.ignoreReason}` : ""}</div>
   {/if}
@@ -253,6 +274,7 @@
       ><i class="bi bi-chat-dots" aria-hidden="true"></i> Enquire</button
     >
   </div>
+  {#if decision}<TranscriptionDecisionView {decision} stale={decisionStale || decision.bounds !== JSON.stringify([line.imageId, line.x, line.y, line.w, line.h]) || decision.sourceRevision !== line.revision} />{/if}
   {#if children}
     {@render children(suggestionList)}
   {:else}
@@ -273,6 +295,8 @@
   }
   header { display: flex; align-items: center; gap: 8px; }
   .type-col { display: grid; justify-items: start; gap: 2px; }
+  .speaker-pick { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; color: var(--hud-muted); }
+  .speaker-pick select { flex: 1; min-width: 0; }
   .type-pick { width: auto; border-left: 4px solid var(--c); padding: 3px 6px; font-size: 12px; }
   .dims { color: var(--hud-muted); font-size: 11px; line-height: 1.2; padding-left: 4px; }
   .muted { color: var(--hud-muted); }

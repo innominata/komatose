@@ -4,6 +4,7 @@
   type ToolDef = { id: PaletteId; icon: string; title: string; group: string };
 
   const ALL: Record<string, ToolDef> = {
+    'assign-character': { id: 'assign-character', icon: 'bi-person-badge', title: 'Assign character', group: '' },
     select: { id: "select", icon: "bi-cursor", title: "Select (V)", group: "" },
     region: { id: "region", icon: "bi-bounding-box", title: "Draw region (R)", group: "" },
     "read-area": { id: "read-area", icon: "bi-eye", title: "Read area with image model", group: "" },
@@ -51,7 +52,7 @@
     if (step === "Prepare")
       return [ALL.select, ...(canUpload ? [ALL.crop, ALL.split, ALL.reslice] : []), zoom];
     if (step === "Translate" || step === "Review")
-      return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, zoom] : [ALL.select, zoom];
+      return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), zoom] : [ALL.select, zoom];
     if (step === "Clean")
       return canClean
         ? [

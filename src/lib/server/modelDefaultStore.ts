@@ -60,6 +60,7 @@ const IMAGE_TASKS = new Set<ModelTaskId>(['detect', 'textMask', 'segmentBubble',
  */
 export function isDefaultModelForTask(row: { id: string }, task: ModelTaskId): boolean {
 	if (modelDefaultFor(task) === row.id) return true;
+	if (task === 'sourceDecide') return false;
 	if ((task === 'vision' || task === 'sourceReview') && (DEFAULT_TRANSCRIPTION_MODEL_IDS as readonly string[]).includes(row.id)) return true;
 	return !modelDefaultFor(task) && !IMAGE_TASKS.has(task) && row.id === DEFAULT_CHAT_MODEL_ID;
 }

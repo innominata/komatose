@@ -1,5 +1,6 @@
 <script lang="ts">
   import "./studio-controls.css";
+  import type { TranscriptionDecision } from "$lib/decider";
   import PageInspector from "../PageInspector.svelte";
   import RegionCard, { type RegionSuggestion } from "./RegionCard.svelte";
   import RegionDetails from "./RegionDetails.svelte";
@@ -26,7 +27,11 @@
     japanese = false,
     suggestions,
     regionOverflow,
+    regionDecision = () => undefined,
+    regionDecisionStale = () => false,
     glossary = [],
+    speakerFor = () => undefined,
+    onassigncharacter,
     regionKinds = builtinRegionKinds(),
     selected,
     comments,
@@ -83,7 +88,11 @@
     japanese?: boolean;
     suggestions: RegionSuggestion[];
     regionOverflow: (id: string) => boolean;
+    regionDecision?: (line: LineRow) => TranscriptionDecision | undefined;
+    regionDecisionStale?: (line: LineRow) => boolean;
     glossary?: GlossaryTerm[];
+    speakerFor?: (id: string) => import('$lib/characters').CharacterAssignment | undefined;
+    onassigncharacter?: (line: LineRow, characterId: string | null) => void;
     regionKinds?: RegionKind[];
     selected: LineRow | undefined;
     comments: CommentRow[];
@@ -191,7 +200,11 @@
     selected={lineId === l.id}
     suggestions={suggestions.filter((s) => s.line_id === l.id)}
     overflow={regionOverflow(l.id)}
+    decision={regionDecision(l)}
+    decisionStale={regionDecisionStale(l)}
     {glossary}
+    speaker={speakerFor(l.id)}
+    {onassigncharacter}
     {regionKinds}
     color={colorFor(l.lineType)}
     dimensions={regionSize(l)}

@@ -208,3 +208,53 @@ END;
     db.prepare("INSERT INTO schema_versions VALUES(8,?)").run(Date.now());
   })();
 }
+
+/** Promote legacy chapter language/direction once, then use only series settings. */
+export function migrateSeriesReadingPreferences(db: Database.Database) {
+  if (db.prepare("SELECT 1 FROM schema_versions WHERE version=9").get()) return;
+  db.transaction(() => {
+    type Doc = { id: string; episode_id: string | null; revision: number; data: string; undo: string; redo: string };
+    const seriesRows = db.prepare("SELECT id FROM series ORDER BY id").all() as { id: string }[];
+    const findSeries = db.prepare("SELECT * FROM workflow_docs WHERE id=?");
+    const findChapters = db.prepare(`SELECT d.* FROM workflow_docs d
+      JOIN episodes e ON e.id=d.episode_id
+      WHERE e.series_id=? AND d.id='chapter:' || e.id
+      ORDER BY d.updated_at DESC, e.id`);
+    const save = db.prepare(`INSERT INTO workflow_docs(id,episode_id,revision,data,undo,redo,updated_at)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+      revision=excluded.revision,data=excluded.data,undo=excluded.undo,updated_at=excluded.updated_at`);
+    const history = db.prepare(`INSERT INTO workflow_revisions(episode_id,entity_id,revision,data,created_at)
+      VALUES(?,?,?,?,?)`);
+    const now = Date.now();
+    const write = (id: string, old: Doc | undefined, data: Record<string, unknown>) => {
+      const revision = (old?.revision ?? 0) + 1;
+      const undo = [...JSON.parse(old?.undo ?? "[]"), JSON.parse(old?.data ?? "{}")];
+      const encoded = JSON.stringify(data);
+      save.run(id, old?.episode_id ?? null, revision, encoded, JSON.stringify(undo), old?.redo ?? "[]", now);
+      if (old?.episode_id) history.run(old.episode_id, id, revision, encoded, now);
+    };
+    const isLang = (v: unknown) => v === "japanese" || v === "korean";
+    const isDirection = (v: unknown) => v === "rtl" || v === "ltr";
+    for (const series of seriesRows) {
+      const id = `series:${series.id}`;
+      const old = findSeries.get(id) as Doc | undefined;
+      const data: Record<string, unknown> = JSON.parse(old?.data ?? "{}");
+      const chapters = (findChapters.all(series.id) as Doc[]).map(doc => ({ doc, data: JSON.parse(doc.data) as Record<string, unknown> }));
+      // Explicit series choices win. Otherwise preserve the most recently saved
+      // valid chapter choice, with deterministic ordering for equal timestamps.
+      const lang = isLang(data.lang) ? data.lang : chapters.find(c => isLang(c.data.lang))?.data.lang ?? "japanese";
+      const direction = isDirection(data.direction) ? data.direction
+        : chapters.find(c => isDirection(c.data.direction))?.data.direction ?? (lang === "korean" ? "ltr" : "rtl");
+      let changed = data.lang !== lang || data.direction !== direction;
+      if (changed) write(id, old, { ...data, lang, direction });
+      for (const chapter of chapters) {
+        if (!Object.hasOwn(chapter.data, "lang") && !Object.hasOwn(chapter.data, "direction")) continue;
+        const { lang: _lang, direction: _direction, ...rest } = chapter.data;
+        write(chapter.doc.id, chapter.doc, rest);
+        changed = true;
+      }
+      if (changed) db.prepare("UPDATE episodes SET revision=revision+1 WHERE series_id=?").run(series.id);
+    }
+    db.prepare("INSERT INTO schema_versions VALUES(9,?)").run(now);
+  })();
+}

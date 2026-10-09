@@ -1,3 +1,6 @@
+import { deciderInstalled, deciderRuntimeDir, deciderModelsDir, deciderBinary } from './deciderRuntime';
+import { modelDefaultFor, setModelDefault } from './modelDefaultStore';
+import { activeModelUses, lockModelLifecycle } from './modelUsage';
 import { maintainPythonRuntime } from './pythonRuntimeMaintenance';
 import { modelPackage } from './modelPackages';
 import { operatePackage } from './modelSupervisor';
@@ -137,6 +140,10 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 	let bin = 'python3';
 	let args: string[] = [];
 	switch (target.id) {
+		case 'llama-decider':
+		case 'd1-3b':
+			args = script('install-decider.py', target.id === 'llama-decider' ? ['--runtime'] : []);
+			break;
 		case 'env-ocr':
 		case 'env-review':
 		case 'env-workflow':
@@ -163,14 +170,17 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			args = script('install-coo.py');
 			break;
 		case 'hayai-ocr-v2':
+		case 'hayai-ocr-v2.5-nova':
+		case 'pp-ocrv5-korean':
 		case 'manga-ocr':
 		case 'paddleocr-vl-1.6':
 		case 'qwen3-vl-8b':
-			bin = pythonFor(['env-review', 'env-ocr', 'env-workflow']);
+			bin = pythonFor(target.id === 'pp-ocrv5-korean' ? ['env-ocr'] : ['env-review', 'env-ocr', 'env-workflow']);
 			args = script('install-review-models.py', ['--model', target.id]);
 			break;
 		case 'cat-translate-7b-q4':
 		case 'hy-mt2-manga-v5':
+		case 'hy-mt2-1.8b-q4':
 		case 'hy-mt2-7b-q4':
 		case 'imsbee-ko-en-translator':
 		case 'opus-mt-ja-en':
@@ -230,12 +240,17 @@ function reviewDir(): string {
 	return envVar('SCAN_REVIEW_MODELS_DIR') || join(DATA_DIR, 'models/review');
 }
 
-/** Weights marker + at least one model file, without requiring llama-server. */
+/** Weights marker + model assets, without requiring a running inference server. */
 function reviewWeightsInstalled(id: string): boolean {
 	try {
 		const marker = JSON.parse(readFileSync(join(reviewDir(), 'installed.json'), 'utf8')) as Record<string, unknown>;
 		if (!marker[id]) return false;
 		const dir = join(reviewDir(), id);
+		if (id === 'pp-ocrv5-korean') return ['recognizer', 'detector'].every(part =>
+			['inference.pdiparams', 'inference.json', 'inference.yml'].every(file => {
+				const stat = statSync(join(dir, part, file));
+				return stat.isFile() && stat.size > 0;
+			}));
 		return existsSync(dir) && readdirSync(dir).some((name) => {
 			try {
 				return statSync(join(dir, name)).isFile();
@@ -293,6 +308,7 @@ function cooInstalled(): boolean {
 
 export function targetInstalled(target: InstallTarget): { installed: boolean; detail?: string } {
 	switch (target.id) {
+		case 'llama-decider': case 'd1-3b': return deciderInstalled(target.id);
 		case 'env-ocr':
 		case 'env-review':
 		case 'env-workflow': {
@@ -338,6 +354,8 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 		case 'coo':
 			return cooInstalled() ? { installed: true } : { installed: false, detail: 'Checkpoint not downloaded' };
 		case 'hayai-ocr-v2':
+		case 'hayai-ocr-v2.5-nova':
+		case 'pp-ocrv5-korean':
 		case 'manga-ocr':
 		case 'paddleocr-vl-1.6':
 		case 'qwen3-vl-8b':
@@ -485,6 +503,10 @@ export function startInstall(targetId: string, upgradeRuntime = false): InstallJ
           await retirePythonReviewWorkers();
           await stopTranslationRuntime();
         }
+        if (targetId === 'env-ocr') {
+          const { retirePythonReviewWorkers } = await import('./localReview');
+          await retirePythonReviewWorkers('env-ocr');
+        }
       }
       controller.signal.throwIfAborted();
 	const child = spawn(bin, args, { cwd: ROOT, env: process.env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -629,6 +651,10 @@ export function planInstallSteps(ids: string[]): { plan: InstallQueueItem[]; ski
 		}
     const pkg = modelPackage(id);
     if (pkg) {
+      if (ahead && !ENV_IDS.includes(id) && !blockerFor(ahead) && targetInstalled(ahead).installed) {
+        skipped.push(id);
+        continue;
+      }
       if (!planned.has(id)) {
         planned.add(id);
         plan.push({ key: id, kind: pkg.manifest.kind === 'runtime' ? 'env' : 'model', label: pkg.manifest.name,
@@ -736,6 +762,16 @@ function afterInstallDone(targetId: string) {
 
 /** The registry work an install completion performs. Exported so tests can run it. */
 export function ensureInstalledModelRows(targetId: string) {
+	if (targetId === 'd1-3b' && deciderInstalled('d1-3b').installed && deciderInstalled('llama-decider').installed) {
+		const row = findRegistryRow('d1-3b');
+		if (row && !row.managedLaunch) {
+			upsertRegistryRow({ ...row, runtime: 'llamacpp', modelRevision: 'bb1e436ea78eb96a3f1acb6da865f70c2fbeb563',
+				managedLaunch: toHomeLaunch({ preset: 'generic', executable: deciderBinary(),
+					modelPath: join(deciderModelsDir(), 'd1-3B-Q8_0.gguf'), projectorPath: join(deciderModelsDir(), 'mmproj-d1-3B-F16.gguf'),
+					port: 18093, device: 'auto', contextSize: 8192, gpuLayers: 999, slots: 1, startOnBoot: false, extraArgs: [] }),
+				http: { baseUrl: '', apiKeyEnv: '' }, requestPreset: 'generic' });
+		}
+	}
 	if (targetId === 'env-review' || targetId === 'env-workflow')
 		invalidateTorchProbe(targetId === 'env-review' ? 'env-review' : 'env-workflow');
 	if (targetId === 'qwen3.8-27b') ensureChatRow();
@@ -873,6 +909,10 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 	const paths: UninstallPath[] = [];
 	const alsoRemoves: string[] = [];
 	const warnings: string[] = [];
+	if (targetId === 'd1-3b' || targetId === 'llama-decider') {
+		paths.push(describePath(targetId === 'd1-3b' ? deciderModelsDir() : deciderRuntimeDir(), targetId === 'd1-3b' ? 'Decider weights and install receipt' : 'Dedicated decider runtime and source'));
+		return { paths, alsoRemoves, warnings };
+	}
 	if (targetId.startsWith('env-')) {
 		paths.push(describePath(join(ROOT, `.venv-${targetId.slice(4)}`), `Python environment ${targetId.slice(4)}`));
 		return { paths, alsoRemoves, warnings };
@@ -917,7 +957,7 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 			paths.push(describePath(join(DATA_DIR, 'models/coo'), 'Its model directory'));
 		return { paths, alsoRemoves, warnings };
 	}
-	const REVIEW_IDS = ['hayai-ocr-v2', 'manga-ocr', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];
+	const REVIEW_IDS = ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'pp-ocrv5-korean', 'manga-ocr', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];
 	if (REVIEW_IDS.includes(targetId)) {
 		paths.push(describePath(join(reviewDir(), targetId), 'Model weights'));
 		paths.push({ path: join(reviewDir(), 'installed.json'), note: `Its “${targetId}” entry in the install record`, kind: 'marker' });
@@ -958,6 +998,9 @@ export function uninstallPlan(targetId: string): UninstallPlan {
 	const { paths, alsoRemoves, warnings } = uninstallPathsFor(targetId);
 	const plan: UninstallPlan = { id: targetId, label: target.label, paths, warnings, alsoRemoves };
 
+	if (targetId === 'llama-decider' && deciderInstalled('d1-3b').installed)
+		plan.blocked = 'Uninstall d1-3B first — it uses this runtime.';
+	if (['d1-3b', 'llama-decider'].includes(targetId) && activeModelUses('d1-3b')) plan.blocked = 'Finish or cancel decider work before uninstalling.';
 	if (targetId.startsWith('env-')) {
 		const dependents = INSTALL_TARGETS.filter(
 			(item) => item.requires?.includes(targetId) && targetInstalled(item).installed,
@@ -969,7 +1012,7 @@ export function uninstallPlan(targetId: string): UninstallPlan {
 	// Models still running must stop before their weights go away.
 	for (const row of listRegistryRows()) {
 		if (!row.managedLaunch) continue;
-		const uses = targetId === 'qwen3.8-27b'
+		const uses = targetId === 'd1-3b' || targetId === 'llama-decider' ? row.id === 'd1-3b' : targetId === 'qwen3.8-27b'
 			? row.id === QWEN_38_27B_ID
 			: targetId === 'qwen3-vl-8b'
 				? row.id === QWEN3_VL_CHAT_ID || row.id === QWEN3_VL_ID
@@ -1021,6 +1064,11 @@ function detachManagedIfUninstalled(rowId: string, deletedRoot: string) {
 
 /** Delete the target's files. Throws 409 when something still needs them. */
 export function uninstallTarget(targetId: string): UninstallPlan {
+	const release = ['d1-3b', 'llama-decider'].includes(targetId) ? lockModelLifecycle('d1-3b') : undefined;
+	try { return uninstallTargetFiles(targetId); } finally { release?.(); }
+}
+
+function uninstallTargetFiles(targetId: string): UninstallPlan {
 	const plan = uninstallPlan(targetId);
 	if (plan.blocked) throw Object.assign(new Error(plan.blocked), { status: 409 });
 	for (const item of plan.paths) {
@@ -1039,6 +1087,10 @@ export function uninstallTarget(targetId: string): UninstallPlan {
 				{ status: 500 },
 			);
 		}
+	}
+	if (targetId === 'd1-3b') {
+		detachManagedIfUninstalled('d1-3b', deciderModelsDir());
+		if (modelDefaultFor('sourceDecide') === 'd1-3b') setModelDefault('sourceDecide', undefined);
 	}
 	const chatDir = envVar('SCAN_LLM_MODELS_DIR') || join(homedir(), 'models/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF');
 	if (targetId === 'qwen3.8-27b') removeRowIfUninstalled(QWEN_38_27B_ID, chatDir);

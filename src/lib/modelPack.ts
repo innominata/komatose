@@ -505,6 +505,7 @@ function profileRefIds(profile: PortableProfile | ModelProfile): string[] {
 		profile.selections.proofread.engine,
 		...profile.selections.reviewers.map((item) => item.engine),
 		...profile.selections.transcriptionModels,
+		...(profile.selections.transcriptionDecider ? [profile.selections.transcriptionDecider.engine] : []),
 	];
 }
 
@@ -857,6 +858,7 @@ export function previewModelPack(
 			profile.selections.proofread.engine,
 			...profile.selections.reviewers.map((item) => item.engine),
 			...profile.selections.transcriptionModels,
+		...(profile.selections.transcriptionDecider ? [profile.selections.transcriptionDecider.engine] : []),
 		];
 		for (const ref of refs) {
 			if (existingIds.has(ref) || incomingIds.has(ref)) continue;
@@ -879,6 +881,8 @@ function remapSelections(
 ): ModelProfileSelections {
 	const mapRef = (engine: string) => modelMap.get(engine) || engine;
 	return {
+		...cloneProfileSelections(selections),
+		...(selections.transcriptionDecider ? { transcriptionDecider: { ...selections.transcriptionDecider, engine: mapRef(selections.transcriptionDecider.engine) } } : {}),
 		translate: { engine: mapRef(selections.translate.engine), model: selections.translate.model },
 		proofread: { engine: mapRef(selections.proofread.engine), model: selections.proofread.model },
 		reviewers: selections.reviewers.map((item) => ({ engine: mapRef(item.engine), model: item.model })),
@@ -1015,6 +1019,7 @@ export function validateResolvedImport(
 			profile.selections.proofread,
 			...profile.selections.reviewers,
 			...profile.selections.transcriptionModels.map((id) => ({ engine: id, model: '' })),
+			...(profile.selections.transcriptionDecider ? [profile.selections.transcriptionDecider] : []),
 		];
 		for (const ref of refs) {
 			const found = profileRowForRef(ref, [...available.values()]);

@@ -6,7 +6,7 @@
   import type { RegionAiSettings as RegionAiSettingsData } from "$lib/regionAi";
   import type { TaskEngine } from "$lib/aiTasks";
   import type { GlossaryTerm, TranslateEngineInfo } from "$lib/types";
-  import { providerRunGate } from "$lib/providerCatalog";
+  import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
   import { textEngines } from "$lib/types";
   import type { Preferences } from "$lib/workflow";
   import {
@@ -122,7 +122,8 @@
   } = $props();
   const pendingMine = $derived((glossaryMine?.terms ?? []).filter((t) => t.state === "pending"));
   const translateGate = $derived(providerRunGate(translationModel?.engine, "translate", engines));
-  const proofreadGate = $derived(providerRunGate(preferences.regionAi?.proofread?.engine, "proofreadEnglish", engines));
+  const proofreadOperation = $derived(proofreadingOperation(preferences.regionAi?.proofread?.engine, engines));
+  const proofreadGate = $derived(providerRunGate(preferences.regionAi?.proofread?.engine, proofreadOperation, engines));
   const glossaryGate = $derived(providerRunGate(glossaryModel?.engine, "advisory", engines));
   const defaultSetup = $derived(parseDetectorSetup(detectorDefaults?.setup));
   /** A chapter saved before setups shows the setup its old detector still runs. */
@@ -289,9 +290,9 @@
     <p>Use these to fix a specific problem after transcribing or translating.</p>
     <div class="control-row">
       <button
-        disabled={busy || aiRunning || !canUpload || !proofreadGate.ok}
-        title={proofreadGate.reason || undefined}
-        onclick={() => onrunai("proofread")}>Proofread edited English</button
+        disabled={busy || aiRunning || !canEdit || !proofreadGate.ok}
+        title={proofreadGate.reason || (proofreadOperation === "pageImageProofread" ? "Review the current page's raw source and typeset English." : undefined)}
+        onclick={() => onrunai("proofread")}>Proofread English</button
       >
       <button
         disabled={busy || aiRunning || !canEdit}
@@ -308,6 +309,10 @@
         After this chapter is reviewed, extract names, places, and catchphrases
         for later chapters. Accepted terms join the series list.
       </p>
+      {#if section === 'glossary'}
+        <h3>Characters &amp; terms</h3>
+        <GlossaryEditor terms={seriesTerms} disabled={!canEdit || busy} onchange={onseriesglossary} />
+      {/if}
       <div class="control-row">
         <label
           >Extract engine<select

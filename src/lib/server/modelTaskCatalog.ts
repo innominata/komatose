@@ -3,6 +3,7 @@ import type { ModelRow } from '../modelRegistry';
 import { MODEL_TASKS, ModelTaskError, validateTaskOutput, type ModelTaskId } from '../modelTasks';
 import { SFX_PROBE_JPEG } from './fixtures/sfxProbe';
 import { VISION_PROBE_JPEG } from './fixtures/visionProbe';
+import { KOREAN_VISION_PROBE_PNG } from './fixtures/koreanVisionProbe';
 import { executeModelTask } from './modelTaskRunner';
 const visionProbeJpeg = async () => Buffer.from(VISION_PROBE_JPEG);
 const sfxProbeJpeg = async () => Buffer.from(SFX_PROBE_JPEG);
@@ -13,6 +14,7 @@ export async function taskFixture(task: ModelTaskId): Promise<Record<string, any
     script: 'Complete chapter: 1 lines on 1 pages.\n[1] p1: テスト → Test.',
   };
   switch (task) {
+    case 'sourceDecide': return { ...common, jpeg, candidates: [{ id: 'A', source: '待って' }, { id: 'B', source: '持って' }] };
     case 'translate': return { ...common, boxes: [{ x: 0, y: 0, w: 1, h: 1, source: 'テスト', lineType: '""', literal: '', translation: '', reasoning: '' }], requireTranslation: true };
     case 'vision': case 'describe': case 'detect': return { ...common, jpeg };
     case 'sourceReview': {
@@ -49,8 +51,9 @@ export async function taskFixture(task: ModelTaskId): Promise<Record<string, any
 
 export async function validateFixtureResult(task: ModelTaskId, value: any, input?: Record<string, any>) {
   const fail = (reason: string) => { throw new ModelTaskError('failed_validation', reason); };
+  if (task === 'sourceDecide' && input && value.choice !== input.candidates.find((c: any) => c.source.includes('待って'))?.id) fail('The decider did not choose the visible fixture reading');
   if (task === 'vision' || task === 'sourceReview') {
-    if (!String(value.source || '').replace(/\s/g, '').includes('待って')) fail('The reading does not match the text in the fixture');
+    if (!String(value.source || '').replace(/\s/g, '').includes(input?.lang === 'korean' ? '기다려' : '待って')) fail('The reading does not match the text in the fixture');
   }
   if (task === 'translate' && !/test/i.test(value[0]?.translation || '')) fail('The fixture translation did not preserve its basic meaning');
   if (task === 'proofreadEnglish') {
@@ -81,7 +84,9 @@ export const MODEL_TASK_CATALOG = MODEL_TASKS.map(definition => ({
     const first = await taskFixture(definition.id);
     // Detect always exposes both a dialogue crop and an SFX crop; probeModelRow
     // runs both and passes if either finds a region (COO only hits SFX).
+    if (definition.id === 'sourceDecide') return [first, { ...first, candidates: first.candidates.map((c: any) => ({ ...c, id: c.id === 'A' ? 'B' : 'A' })).reverse() }];
     if (definition.id === 'detect') return [first, { ...first, jpeg: await sfxProbeJpeg() }];
+    if (definition.id === 'vision') return [first, { ...first, lang: 'korean', jpeg: Buffer.from(KOREAN_VISION_PROBE_PNG) }];
     return definition.id === 'translate' ? [first, { ...first, lang: 'korean',
       boxes: first.boxes.map((box: any) => ({ ...box, source: '테스트' })) }] : [first];
   },

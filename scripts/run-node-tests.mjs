@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 const groups = {
   unit: [
+    "tests/prepare-actions.test.ts",
     "tests/audit-fixes.test.ts",
     "tests/editor-hot-path.test.ts",
     "tests/region-catalog.test.ts",
@@ -23,8 +24,15 @@ const groups = {
     "tests/image-edit-placement.test.ts",
   ],
   integration: [
+    "tests/character-attribution.test.ts",
+    "tests/export-documents.test.ts",
+    "tests/series-reading-preferences.test.ts",
+    "tests/clean-style-workflow.test.ts",
+    "tests/page-undo-safety.test.ts",
+    "tests/transcription-decider.test.ts",
     "tests/model-packages.test.ts",
     "tests/model-capabilities.test.ts",
+    "tests/korean-ocr-models.test.ts",
     "tests/workflow.test.ts",
     "tests/scanlator-access.test.ts",
     "tests/signed-in.test.ts",

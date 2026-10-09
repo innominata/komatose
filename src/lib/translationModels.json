@@ -3,8 +3,13 @@
     "id": "hy-mt2-manga-v5",
     "label": "Hy-MT2 1.8B Manga v5 · Japanese → English",
     "repository": "fumetodev/Hy-MT2-1.8B-JP-Manga-Finetune-v5-GGUF",
-    "aliases": ["fumetoday/Hy-MT2-1.8B-JP-Manga-Finetune-v5", "fumetodev/Hy-MT2-1.8B-JP-Manga-Finetune-v5"],
-    "languages": ["japanese"],
+    "aliases": [
+      "fumetoday/Hy-MT2-1.8B-JP-Manga-Finetune-v5",
+      "fumetodev/Hy-MT2-1.8B-JP-Manga-Finetune-v5"
+    ],
+    "languages": [
+      "japanese"
+    ],
     "profile": "hy-manga",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_HY",
@@ -19,8 +24,14 @@
     "id": "cat-translate-7b-q4",
     "label": "CAT-Translate 7B Q4 · Japanese → English",
     "repository": "mradermacher/CAT-Translate-7b-i1-GGUF",
-    "aliases": ["cyberagent/CAT-Translate-7b", "CyberAgent/CAT-Translate-7b", "mradermacher/CAT-Translate-7b-i1-GGUF"],
-    "languages": ["japanese"],
+    "aliases": [
+      "cyberagent/CAT-Translate-7b",
+      "CyberAgent/CAT-Translate-7b",
+      "mradermacher/CAT-Translate-7b-i1-GGUF"
+    ],
+    "languages": [
+      "japanese"
+    ],
     "profile": "cat-translate",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_CAT",
@@ -32,11 +43,39 @@
     }
   },
   {
+    "id": "hy-mt2-1.8b-q4",
+    "label": "Hy-MT2 1.8B Q4 · Japanese/Korean → English",
+    "repository": "tencent/Hy-MT2-1.8B-GGUF",
+    "aliases": [
+      "tencent/Hy-MT2-1.8B",
+      "tencent/Hy-MT2-1.8B-GGUF"
+    ],
+    "languages": [
+      "japanese",
+      "korean"
+    ],
+    "profile": "hy-mt",
+    "runtime": "llamacpp",
+    "envPrefix": "SCAN_TRANSLATION_HY18",
+    "weights": {
+      "revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+      "filename": "Hy-MT2-1.8B-Q4_K_M.gguf",
+      "bytes": 1133080448,
+      "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699"
+    }
+  },
+  {
     "id": "hy-mt2-7b-q4",
-    "label": "Hy-MT2 7B Q4 · Japanese → English",
+    "label": "Hy-MT2 7B Q4 · Japanese/Korean → English",
     "repository": "tencent/Hy-MT2-7B-GGUF",
-    "aliases": ["tencent/Hy-MT2-7B", "tencent/Hy-MT2-7B-GGUF"],
-    "languages": ["japanese"],
+    "aliases": [
+      "tencent/Hy-MT2-7B",
+      "tencent/Hy-MT2-7B-GGUF"
+    ],
+    "languages": [
+      "japanese",
+      "korean"
+    ],
     "profile": "hy-mt",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_HY7",
@@ -51,8 +90,13 @@
     "id": "imsbee-ko-en-translator",
     "label": "Imsbee Ko→En Translator · Korean → English",
     "repository": "Imsbee/ko-en-translator",
-    "aliases": ["Imsbee/ko-en-translator", "ko-en-translator"],
-    "languages": ["korean"],
+    "aliases": [
+      "Imsbee/ko-en-translator",
+      "ko-en-translator"
+    ],
+    "languages": [
+      "korean"
+    ],
     "profile": "ko-en-minrnn",
     "runtime": "pytorch",
     "envPrefix": "SCAN_TRANSLATION_KOEN",
@@ -74,8 +118,12 @@
     "id": "opus-mt-ja-en",
     "label": "Opus-MT Ja→En · Japanese → English",
     "repository": "Helsinki-NLP/opus-mt-ja-en",
-    "aliases": ["Helsinki-NLP/opus-mt-ja-en"],
-    "languages": ["japanese"],
+    "aliases": [
+      "Helsinki-NLP/opus-mt-ja-en"
+    ],
+    "languages": [
+      "japanese"
+    ],
     "profile": "opus-mt-ja-en",
     "runtime": "pytorch",
     "envPrefix": "SCAN_TRANSLATION_OPUS_JAEN",
@@ -122,8 +170,13 @@
     "id": "shisa-v2.1-qwen3-8b-q4",
     "label": "Shisa v2.1 Qwen3 8B Q4 · Japanese → English",
     "repository": "mradermacher/shisa-v2.1-qwen3-8b-GGUF",
-    "aliases": ["shisa-ai/shisa-v2.1-qwen3-8b", "mradermacher/shisa-v2.1-qwen3-8b-GGUF"],
-    "languages": ["japanese"],
+    "aliases": [
+      "shisa-ai/shisa-v2.1-qwen3-8b",
+      "mradermacher/shisa-v2.1-qwen3-8b-GGUF"
+    ],
+    "languages": [
+      "japanese"
+    ],
     "profile": "shisa",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_SHISA",
@@ -138,8 +191,13 @@
     "id": "sugoi-v4-ja-en",
     "label": "Sugoi v4 Ja→En · Japanese → English",
     "repository": "entai2965/sugoi-v4-ja-en-ctranslate2",
-    "aliases": ["entai2965/sugoi-v4-ja-en-ctranslate2", "sugoi-translator"],
-    "languages": ["japanese"],
+    "aliases": [
+      "entai2965/sugoi-v4-ja-en-ctranslate2",
+      "sugoi-translator"
+    ],
+    "languages": [
+      "japanese"
+    ],
     "profile": "sugoi-ja-en",
     "runtime": "pytorch",
     "envPrefix": "SCAN_TRANSLATION_SUGOI",
@@ -179,10 +237,16 @@
   },
   {
     "id": "translategemma-4b-q4",
-    "label": "TranslateGemma 4B Q4 · Japanese → English",
+    "label": "TranslateGemma 4B Q4 · Japanese/Korean → English",
     "repository": "mradermacher/translategemma-4b-it-GGUF",
-    "aliases": ["google/translategemma-4b-it", "mradermacher/translategemma-4b-it-GGUF"],
-    "languages": ["japanese"],
+    "aliases": [
+      "google/translategemma-4b-it",
+      "mradermacher/translategemma-4b-it-GGUF"
+    ],
+    "languages": [
+      "japanese",
+      "korean"
+    ],
     "profile": "translategemma",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_TG4",
@@ -195,10 +259,16 @@
   },
   {
     "id": "translategemma-12b-q4",
-    "label": "TranslateGemma 12B Q4 · Japanese → English",
+    "label": "TranslateGemma 12B Q4 · Japanese/Korean → English",
     "repository": "mradermacher/translategemma-12b-it-GGUF",
-    "aliases": ["google/translategemma-12b-it", "mradermacher/translategemma-12b-it-GGUF"],
-    "languages": ["japanese"],
+    "aliases": [
+      "google/translategemma-12b-it",
+      "mradermacher/translategemma-12b-it-GGUF"
+    ],
+    "languages": [
+      "japanese",
+      "korean"
+    ],
     "profile": "translategemma",
     "runtime": "llamacpp",
     "envPrefix": "SCAN_TRANSLATION_TG12",

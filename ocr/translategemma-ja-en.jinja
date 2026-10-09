@@ -1,9 +1,17 @@
 {#- llama.cpp cannot compile Google's template: it raises unless content is a one-item map.
-   This emits the same Japanese-to-English text prompt from a plain user string. -#}
+   This emits Google's text prompt from a plain user string and per-request language. -#}
+{%- set source_code = source_lang_code | default('ja') -%}
+{%- if source_code == 'ko' -%}
+{%- set source_name = 'Korean' -%}
+{%- elif source_code == 'ja' -%}
+{%- set source_name = 'Japanese' -%}
+{%- else -%}
+{{ raise_exception('TranslateGemma source language must be ja or ko') }}
+{%- endif -%}
 {{ '<bos>' }}
 {%- for message in messages -%}
 {%- if message['role'] == 'user' -%}
-{{ '<start_of_turn>user\nYou are a professional Japanese (ja) to English (en) translator. Your goal is to accurately convey the meaning and nuances of the original Japanese text while adhering to English grammar, vocabulary, and cultural sensitivities.\nProduce only the English translation, without any additional explanations or commentary. Please translate the following Japanese text into English:\n\n\n' + message['content'] | trim }}
+{{ '<start_of_turn>user\nYou are a professional ' + source_name + ' (' + source_code + ') to English (en) translator. Your goal is to accurately convey the meaning and nuances of the original ' + source_name + ' text while adhering to English grammar, vocabulary, and cultural sensitivities.\nProduce only the English translation, without any additional explanations or commentary. Please translate the following ' + source_name + ' text into English:\n\n\n' + message['content'] | trim }}
 {{ '<end_of_turn>\n' }}
 {%- elif message['role'] == 'assistant' -%}
 {{ '<start_of_turn>model\n' + message['content'] | trim }}

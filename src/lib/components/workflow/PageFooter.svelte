@@ -8,6 +8,10 @@
     canEdit = true,
     busy = false,
     showMark = true,
+    undoLabel = 'Undo saved edit (Ctrl+Z)',
+    undoVerbose = false,
+    undoEnabled = true,
+    showRedo = true,
     onundo,
     onredo,
     onmark,
@@ -21,6 +25,10 @@
     canEdit?: boolean;
     busy?: boolean;
     showMark?: boolean;
+    undoLabel?: string;
+    undoVerbose?: boolean;
+    undoEnabled?: boolean;
+    showRedo?: boolean;
     onundo: () => void;
     onredo: () => void;
     onmark: () => void;
@@ -31,8 +39,8 @@
 <div class="pagefoot">
   <div class="pf-info"><strong>Page {pageNumber}</strong> · {info}{#if attention} · <span class="warn">{attention} need attention</span>{/if}</div>
   <div class="pf-actions">
-    <button type="button" class="pf-btn ghost icon-only" data-find="undo" title="Undo saved edit (Ctrl+Z)" aria-label="Undo saved edit (Ctrl+Z)" onclick={onundo}><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
-    <button type="button" class="pf-btn ghost icon-only" title="Redo (Ctrl+Shift+Z)" aria-label="Redo (Ctrl+Shift+Z)" onclick={onredo}><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></button>
+    <button type="button" class="pf-btn ghost" class:icon-only={!undoVerbose} class:verbose={undoVerbose} data-find="undo" disabled={busy || !undoEnabled} title={undoLabel} aria-label={undoLabel} onclick={onundo}><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>{#if undoVerbose}{undoLabel}{/if}</button>
+    {#if showRedo}<button type="button" class="pf-btn ghost icon-only" title="Redo (Ctrl+Shift+Z)" aria-label="Redo (Ctrl+Shift+Z)" onclick={onredo}><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></button>{/if}
     {#if showMark}
       {#if done}
         <span class="done-chip" data-find="mark-done" title="Editing this page in {stepLabel} reopens it"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Done in {stepLabel}</span>
@@ -42,7 +50,7 @@
           class="pf-btn mark"
           data-find="mark-done"
           disabled={!canEdit || busy}
-          title="Records this page as finished for {stepLabel} and clears its saved undo history. Text and artwork stay. Editing again reopens it."
+          title="Records this page as finished for {stepLabel} and clears its saved undo history.{stepLabel === 'Clean' ? ' Applies cleaning, approves the final artwork, clears pending masks and draft strokes, then advances to the next page.' : stepLabel === 'Typeset' ? ' Advances to the next page not marked done.' : ''} Text and artwork stay. Editing again reopens it."
           onclick={onmark}
         ><i class="bi bi-check-circle" aria-hidden="true"></i> Mark page done</button>
       {/if}
@@ -86,6 +94,7 @@
   .pf-btn.ghost { background: transparent; border-color: transparent; }
   .pf-btn.ghost:hover:not(:disabled) { border-color: rgba(244, 247, 251, 0.18); background: rgba(255, 255, 255, 0.05); }
   .pf-btn.icon-only { padding: 5px 7px; }
+  .pf-btn.verbose { max-width: 420px; white-space: normal; text-align: left; }
   .pf-btn.mark { border-color: rgba(94, 227, 154, 0.5); color: #5ee39a; }
   .done-chip { display: inline-flex; gap: 6px; align-items: center; color: #5ee39a; font-size: 12.5px; padding: 0 8px; }
 </style>

@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
 					runes: ({ filename }) =>
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 				},
-				adapter: adapter(),
+				adapter: adapter({ out: process.env.SCAN_BUILD_DIR || 'build' }),
 				typescript: {
 					config: (config) => {
 						config.include.push('../drizzle.config.ts');

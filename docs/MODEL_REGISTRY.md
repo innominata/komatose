@@ -138,6 +138,16 @@ variable name only.
 
 Managed local model configuration, startup, and lifecycle controls live on **Admin → Setup → Local models → Add local model** and are documented in [MANAGED_MODELS.md](./MANAGED_MODELS.md). Discovery lists contain server-reported models only; there are no seeded Qwen/Gemma rows — their launch presets ship in Setup → Local models instead. Setup reports local availability per model.
 
+## Review Autorun
+
+Click a CLI or remote API model name in **Admin → Models**, then enable
+**Review automation → Autorun** in its details card. This saved setting applies
+to all users. When the model is in the selected council, **Review Transcription**
+runs it after text-mask detection and **Review Translation** runs it when opened.
+Autorun starts off for non-local models; local models already run automatically.
+The per-model **Run** button remains available. Model visibility, roles, and
+qualification checks still apply.
+
 ## Shared qualification checks
 
 Admin → Models → Jobs now qualifies general language models with Conversation,
@@ -159,10 +169,14 @@ proofreaders and custom command adapters retain direct integration checks; custo
 transcription review uses their existing `vision` operation.
 
 Capability samples and history are stored separately from job probe history.
-Legacy language-job passes remain visible in the model drawer but do not qualify
-general models under the new checks. Model/configuration, adapter, and fixture
-changes invalidate evidence. A cancelled or transiently failed retry preserves a
-current pass; a completed validation failure supersedes it. Runtime job output
+Model/configuration, adapter, and fixture changes make previous checks out of
+date. Historical successes and failures become warnings in the model picker and
+Admin drawer; they do not remove supported jobs or trigger an automatic retest
+during ordinary use. Legacy job checks likewise retain their task with a warning.
+A current failed check still blocks its dependent jobs, and untested jobs still
+need a check. Disabled models, unsupported adapter tasks, and configuration changes
+while a request is queued remain blocked. A cancelled or transiently failed retry
+preserves a current pass; a completed validation failure supersedes it. Runtime job output
 validation and task-specific regression tests remain in place.
 
 The admin test endpoint accepts `{ action: "test", id, check }`, where `check` is

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "d1-3b",
+  "kind": "model",
+  "name": "Liquid AI d1-3B Q8",
+  "revision": "1",
+  "model": "d1-3b",
+  "access": "local_http",
+  "adapter": {
+    "id": "systemone"
+  },
+  "dependencies": [
+    "llama-decider"
+  ],
+  "environment": [
+    "SCAN_DATA_DIR",
+    "SCAN_DECIDER_MODELS_DIR",
+    "SCAN_DECIDER_RUNTIME_DIR"
+  ],
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-decider.py"
+    ]
+  },
+  "service": {
+    "id": "d1-3b",
+    "concurrency": 1
+  }
+}

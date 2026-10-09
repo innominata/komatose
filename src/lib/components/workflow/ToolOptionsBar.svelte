@@ -1,6 +1,13 @@
 <script lang="ts">
+  import type { GlossaryTerm } from '$lib/types';
   let {
     tool,
+    characters = [],
+    characterId = '',
+    busy = false,
+    oncharacter,
+    onmanagecharacters,
+    onstopcharacter,
     radius = $bindable(24),
     growAmount = $bindable(10),
     polygonCount = 0,
@@ -16,6 +23,12 @@
     onnudge,
   }: {
     tool: string;
+    characters?: GlossaryTerm[];
+    characterId?: string;
+    busy?: boolean;
+    oncharacter?: (id: string) => void;
+    onmanagecharacters?: () => void;
+    onstopcharacter?: () => void;
     radius?: number;
     growAmount?: number;
     polygonCount?: number;
@@ -32,9 +45,10 @@
   } = $props();
 
   const TOOL_INFO: Record<string, { icon: string; label: string; hint: string }> = {
+    'assign-character': { icon: 'bi-person-badge', label: 'Assign character', hint: 'Choose a character, then click dialogue or thought regions. Esc stops.' },
     crop: { icon: "bi-crop", label: "Crop", hint: "Drag the crop box, then Apply." },
     split: { icon: "bi-vr", label: "Split page", hint: "Drag the line to where the page should split, then Apply." },
-    reslice: { icon: "bi-hr", label: "Reslice strips", hint: "Click white rows to add or remove cuts, then Apply." },
+    reslice: { icon: "bi-hr", label: "Reslice strips", hint: "Automatic cuts use solid-color gaps. Click to adjust, then Apply." },
     reorder: { icon: "bi-arrow-down-up", label: "Reorder reading flow", hint: "Click a starting region, then each following region in reading order." },
     brush: { icon: "bi-brush", label: "Mask brush", hint: "Paint over lettering to add it to the mask." },
     erase: { icon: "bi-eraser", label: "Erase mask", hint: "Paint to remove areas from the mask." },
@@ -58,6 +72,7 @@
       tool === "reslice" ||
       tool === "reorder" ||
       tool === "style-brush" ||
+      tool === 'assign-character' ||
       showNudge,
   );
 </script>
@@ -68,6 +83,14 @@
       <i class={`bi ${info.icon}`} aria-hidden="true"></i><strong>{info.label}</strong><span class="hint">{info.hint}</span>
     {/if}
     <span class="spacer"></span>
+    {#if tool === 'assign-character'}
+      <label>Speaker<select value={characterId} disabled={busy} onchange={e => oncharacter?.(e.currentTarget.value)} aria-label="Character to assign">
+        <option value="">Unknown / clear speaker</option>
+        {#each characters as character (character.id)}<option value={character.id}>{character.translation}{character.source ? ` (${character.source})` : ''}</option>{/each}
+      </select></label>
+      <button type="button" onclick={onmanagecharacters}>Manage characters</button>
+      <button type="button" onclick={onstopcharacter}>Done assigning</button>
+    {/if}
     {#if brushTools.includes(tool)}
       <div class="brush-size" role="toolbar" aria-label="Brush size">
         <label>Size
@@ -105,7 +128,7 @@
       <button type="button" onclick={() => onapplysplit?.()}>Apply split</button>
     {/if}
     {#if tool === "reslice"}
-      <span>Click white rows to add or remove cuts.</span>
+      <span>Click to add or remove manual cuts.</span>
       <button type="button" aria-label="Apply reslice cuts" disabled={!hasReslicePreview} onclick={() => onapplyreslice?.()}>Apply reslice cuts</button>
     {/if}
     {#if tool === "reorder"}

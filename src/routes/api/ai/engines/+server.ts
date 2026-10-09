@@ -1,3 +1,4 @@
+import { modelDefaultFor } from '$lib/server/modelDefaultStore';
 import { listManagedStatuses } from '$lib/server/managedModels';
 import { engineReadiness } from '$lib/server/engineReadiness';
 import { json } from '@sveltejs/kit';
@@ -49,6 +50,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 			sourceReviewModels: Object.fromEntries(review.map((row) => [row.id, [{ id: row.id, label: row.label }]])),
 			localReviewModels: review.filter(model => registry.some(row => row.id === model.id && row.access === 'local_http')).map(model => ({ id: model.id, label: model.label, available: model.available, reason: model.reason })),
 			transcriptionModels: transcription,
+			transcriptionDeciders: rows.filter(row => row.operations.includes('sourceDecide')),
+			defaultTranscriptionDecider: modelDefaultFor('sourceDecide') || null,
 			catalogs: Object.fromEntries(CLI_ADAPTER_IDS.map((id) => [id, catalogCache(id) || null])),
 			registry: listRegistryRows().map((row) => ({
 				id: row.id,
@@ -59,6 +62,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 				roles: row.roles,
 				seeded: row.seeded,
 				disabled: row.disabled,
+				autoRun: row.autoRun,
 			})),
 		});
 	} catch (e) {

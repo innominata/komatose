@@ -38,7 +38,8 @@
 		if (row?.managedLaunch) return { runtime: 'llama', env: 'env-review', key: row.id, label: 'Device' };
 		const review = data.reviewServers.find((item) => item.id === entry.id);
 		if (review) {
-			const torch = entry.id === 'hayai-ocr-v2' || entry.id === 'manga-ocr';
+			if (entry.id === 'pp-ocrv5-korean') return null; // CPU PaddlePaddle; no ggml/PyTorch device picker.
+			const torch = entry.id === 'hayai-ocr-v2' || entry.id === 'hayai-ocr-v2.5-nova' || entry.id === 'manga-ocr';
 			return { runtime: torch ? 'torch' : 'llama', env: 'env-review', key: entry.id, label: torch ? 'GPU' : 'Device' };
 		}
 		if (entry.id === 'hy-mt2-manga-v5' || entry.id === 'shisa-v2.1-qwen3-8b-q4')
@@ -124,6 +125,13 @@
 			await refreshHub();
 		});
 	}
+	async function setAutoRun(autoRun: boolean) {
+		if (!row) return;
+		await run(async () => {
+			await apiPost('/api/admin/models', { action: 'update', id: row!.id, autoRun });
+			await refreshHub();
+		});
+	}
 	async function setRole(role: Role, on: boolean) {
 		if (!row) return;
 		const roles = on ? [...new Set([...row.roles, role])] : row.roles.filter((item) => item !== role);
@@ -206,7 +214,7 @@
 	function probeText(op: QualificationId) {
 		const probe = row && qualificationSample(row, op);
 		if (!probe) return null;
-		if (row && !qualificationCurrent(row, op)) return { tone: 'warn', text: 'Stale · retest' };
+		if (row && !qualificationCurrent(row, op)) return { tone: 'warn', text: 'Out of date · warning only' };
 		if (probe.ok) return { tone: 'ok', text: `✓ ${probe.ms ? Math.round(probe.ms) + ' ms' : ''} · ${new Date(probe.at).toLocaleString()}` };
 		return { tone: 'bad', text: `✗ ${probe.reason || 'failed'}` };
 	}
@@ -320,6 +328,14 @@
 					</div>
 				</div>
 			{/if}
+
+      {#if row && (row.access === 'cli' || row.access === 'remote_http')}
+        <div class="d-sec">
+          <h4>Review automation</h4>
+          <label class="switch"><input type="checkbox" aria-label="Autorun reviews" checked={row.autoRun === true} disabled={!!busy} onchange={(e) => void setAutoRun(e.currentTarget.checked)} /><span class="track"></span>Autorun</label>
+          <p class="muted small">Run automatically when this model is in the council for Review Transcription or Review Translation. The setting applies to all users.</p>
+        </div>
+      {/if}
 
       <!-- Shared checks and derived jobs -->
       {#if row}

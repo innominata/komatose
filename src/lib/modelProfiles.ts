@@ -1,3 +1,4 @@
+import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from './decider';
 import type { TaskEngine } from './aiTasks';
 import { MAX_SOURCE_REVIEWERS } from './localReviewModels';
 import {
@@ -17,6 +18,9 @@ export const PROFILE_FIELDS = [
 	'proofread',
 	'reviewers',
 	'transcriptionModels',
+	'transcriptionDecider',
+	'deciderMinProbability',
+	'deciderMinMargin',
 ] as const;
 export type ProfileField = (typeof PROFILE_FIELDS)[number];
 
@@ -27,6 +31,9 @@ export type ModelProfileSelections = {
 	proofread: ModelRef;
 	reviewers: ModelRef[];
 	transcriptionModels: string[];
+	transcriptionDecider?: ModelRef | null;
+	deciderMinProbability?: number;
+	deciderMinMargin?: number;
 };
 
 export type ModelProfile = {
@@ -57,6 +64,9 @@ const FIELD_LABEL: Record<ProfileField, string> = {
 	proofread: 'Proofreading',
 	reviewers: 'Source reviewer',
 	transcriptionModels: 'Transcription',
+	transcriptionDecider: 'Transcription decider',
+	deciderMinProbability: 'Decider minimum probability',
+	deciderMinMargin: 'Decider minimum lead',
 };
 
 const MAX_NAME = 80;
@@ -65,12 +75,21 @@ export function cloneModelRef(ref: ModelRef): ModelRef {
 	return { engine: ref.engine, model: ref.model };
 }
 
+function deciderSelections(s: Partial<ModelProfileSelections>): Partial<ModelProfileSelections> {
+	return {
+		...(s.transcriptionDecider !== undefined ? { transcriptionDecider: s.transcriptionDecider === null ? null : parseModelRef(s.transcriptionDecider, 'Transcription decider') } : {}),
+		...(s.deciderMinProbability !== undefined ? { deciderMinProbability: decisionThreshold(s.deciderMinProbability, DECIDER_MIN_PROBABILITY) } : {}),
+		...(s.deciderMinMargin !== undefined ? { deciderMinMargin: decisionThreshold(s.deciderMinMargin, DECIDER_MIN_MARGIN) } : {}),
+	};
+}
+
 export function cloneProfileSelections(selections: ModelProfileSelections): ModelProfileSelections {
 	return {
 		translate: cloneModelRef(selections.translate),
 		proofread: cloneModelRef(selections.proofread),
 		reviewers: selections.reviewers.map(cloneModelRef),
 		transcriptionModels: [...selections.transcriptionModels],
+		...deciderSelections(selections),
 	};
 }
 
@@ -145,17 +164,19 @@ export function parseProfileSelections(raw: unknown): ModelProfileSelections {
 			? reviewersRaw.map((item, i) => parseModelRef(item, `Reviewer ${i + 1}`))
 			: [],
 		transcriptionModels: parseTranscriptionIds(rec.transcriptionModels),
+		...deciderSelections(rec as Partial<ModelProfileSelections>),
 	};
 }
 
 export function snapshotProfileSelections(
-	settings: Partial<Pick<RegionAiSettings, 'translate' | 'proofread' | 'reviewers' | 'transcriptionModels'>>,
+	settings: Partial<Pick<RegionAiSettings, 'translate' | 'proofread' | 'reviewers' | 'transcriptionModels' | 'transcriptionDecider' | 'deciderMinProbability' | 'deciderMinMargin'>>,
 ): ModelProfileSelections {
 	return parseProfileSelections({
 		translate: settings.translate,
 		proofread: settings.proofread,
 		reviewers: settings.reviewers ?? [],
 		transcriptionModels: settings.transcriptionModels ?? [],
+		...deciderSelections(settings),
 	});
 }
 
@@ -217,7 +238,7 @@ function refLabel(ref: ModelRef): string {
 }
 
 function checkTaskRef(
-	field: 'translate' | 'proofread' | 'reviewers',
+	field: 'translate' | 'proofread' | 'reviewers' | 'transcriptionDecider',
 	ref: ModelRef,
 	rows: readonly ModelRow[],
 	supported: (row: ModelRow) => boolean,
@@ -248,6 +269,10 @@ export function validateProfileSelections(
 	rows: readonly ModelRow[],
 ): ProfileIssue[] {
 	const issues: ProfileIssue[] = [];
+	if (selections.transcriptionDecider) {
+		const problem = checkTaskRef('transcriptionDecider', selections.transcriptionDecider, rows, row => rowHasOperation(row, 'sourceDecide'), 'decide transcription');
+		if (problem) issues.push(problem);
+	}
 	const translate = checkTaskRef(
 		'translate',
 		selections.translate,
@@ -335,12 +360,14 @@ export function mergeProfileIntoSettings(
 	current: RegionAiSettings,
 	selections: ModelProfileSelections,
 ): RegionAiSettings {
+	const { transcriptionDecider, deciderMinProbability, deciderMinMargin, ...rest } = current;
 	return {
-		...current,
+		...rest,
 		translate: cloneModelRef(selections.translate),
 		proofread: cloneModelRef(selections.proofread),
 		reviewers: selections.reviewers.map(cloneModelRef),
 		transcriptionModels: [...selections.transcriptionModels],
+		...deciderSelections(selections),
 	};
 }
 

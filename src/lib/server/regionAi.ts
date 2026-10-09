@@ -1,6 +1,8 @@
 import { executeModelTask } from './modelTaskRunner';
 import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
 import { normalizeTranslation } from "../translationText";
+import { characterContext, resolveCharacter } from '../characters';
+import type { RegionData } from '../workflow';
 import sharp from "sharp";
 import { readFile } from "node:fs/promises";
 import type { Episode, Series, LineRow, ImageRow, OcrLang } from "../types";
@@ -24,7 +26,7 @@ import { regionReviewCrop } from "./reviewMask";
 import { listImages, listLines, listComments } from "./queries";
 import { preferences } from "./workflowService";
 import { sqlite } from "./db";
-import { suggest, WorkflowError } from "./workflowStore";
+import { getDoc, suggest, WorkflowError } from "./workflowStore";
 import { localReviewModel, MAX_SOURCE_REVIEWERS } from "../localReviewModels";
 import { withLocalReview, localChat, localTranscription, imageMessage, type LlamaReviewId } from "./localReview";
 import { ocrTranslatorLabel, reviewOcrSource, translateOcrSource, type OcrTranslateOpts } from './ocrReview';
@@ -192,7 +194,7 @@ export function validateModel(value: unknown): TaskEngine {
   }
 }
 
-/** Paid reviews must come from the Run button for that exact model. */
+/** Non-local reviews need either the saved Autorun setting or an exact Run selection. */
 export function validateReviewers(value: unknown, selectedReviewer?: unknown): TaskEngine[] {
   if (!Array.isArray(value) || !value.length || value.length > MAX_SOURCE_REVIEWERS)
     throw new WorkflowError("Choose one to five transcription reviewers in AI model settings");
@@ -202,7 +204,7 @@ export function validateReviewers(value: unknown, selectedReviewer?: unknown): T
   if (reviewers.some(model => isOnDemandReviewer(model, listRegistryRows()))) {
     const selected = selectedReviewer == null ? undefined : validateModel(selectedReviewer);
     if (reviewers.length !== 1 || selected?.engine !== reviewers[0].engine || selected?.model !== reviewers[0].model)
-      throw new WorkflowError("Select a paid reviewer using its Run button before running it. Send runs local reviewers only.");
+      throw new WorkflowError("Select a paid reviewer using its Run button, or enable Autorun in Admin → Models. Send runs local reviewers and models with Autorun enabled.");
   }
   return reviewers;
 }
@@ -380,6 +382,8 @@ export async function enquiryContext(
   selected: EnquiryContext,
 ) {
   const context: Record<string, unknown> = {};
+  const speaker = getDoc<RegionData>(`region:${line.id}`, {}).data.speaker;
+  if (speaker) context.speaker = characterContext(resolveCharacter(speaker, series.glossary));
   const images: Buffer[] = [];
   const attachments: string[] = [];
   if (selected.regionImage) {

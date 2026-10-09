@@ -623,7 +623,7 @@ try {
     .getByRole("navigation", { name: "Chapter workflow" })
     .getByRole("button", { name: "Export", exact: true })
     .click();
-  const markAll = page.getByRole("button", { name: "Mark every page complete", exact: true });
+  const markAll = page.getByRole("button", { name: "Mark all steps done", exact: true });
   await expect(markAll).toBeEnabled({ timeout: 15000 });
   page.once("dialog", (dialog) => dialog.accept());
   await markAll.click();

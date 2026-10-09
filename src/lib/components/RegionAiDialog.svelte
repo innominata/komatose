@@ -2,6 +2,7 @@
   import { DEFAULT_CHAT_MODEL_ID } from "$lib/modelDefaults";
   import { tick } from "svelte";
   import ReviewCropMask from "./ReviewCropMask.svelte";
+  import { REVIEW_CROP_ZOOMS, type ReviewCropZoom } from '$lib/brush';
   import AiModelPicker from "./AiModelPicker.svelte";
   import {
     assistantDisplayName,
@@ -12,6 +13,7 @@
     DEFAULT_ENQUIRY_CONTEXT,
     enginesForRegionAiField,
     isOnDemandReviewer,
+    isNonLocalReviewer,
     suggestionMatchesLine,
     type AiActionCard,
     type EnquiryContext,
@@ -68,6 +70,7 @@
     label?: string;
     pending?: boolean;
     idle?: boolean;
+    cropScale?: ReviewCropZoom;
   };
   let dialog: HTMLDialogElement;
   let transcript: HTMLDivElement;
@@ -88,11 +91,16 @@
   const inflight = new Set<AbortController>();
   let reviewers = $state<TaskEngine[]>([]);
   let reviewing = $state(false);
-  let localAttempted = $state(false);
-  const localReviewerIndexes = $derived(
+  let automaticAttempted = $state(false);
+  const automaticReviewerIndexes = $derived(
     reviewers.flatMap((model, i) => (isOnDemandReviewer(model, engines) ? [] : [i])),
   );
   let maskEnabled = $state(true);
+  let reviewCropZoom = $state<ReviewCropZoom>(1);
+  let originalCropSize = $state({ width: 0, height: 0 });
+  let originalCropWrapWidth = $state(0);
+  const originalCropScale = $derived(Math.min(1, 360 / (originalCropSize.height || 1),
+    (originalCropWrapWidth || originalCropSize.width || 1) / (originalCropSize.width || 1)) * reviewCropZoom);
   let maskReady = $state(false);
   let reviewSession = $state(0);
   let maskExpansion = $state(3);
@@ -122,8 +130,8 @@
         role: "assistant" as const,
         label: reviewerLabel(model),
         content: onDemand
-          ? `Not run. ${reviewerLabel(model)} is billed per call — run it only if the local readings need another opinion.`
-          : "Waiting for text detection, then this local model will run.",
+          ? `Not run automatically. Use Run to request ${reviewerLabel(model)}.`
+          : "Waiting for text detection, then this model will run.",
         pending: false,
         idle: onDemand,
       };
@@ -171,8 +179,10 @@
     question = "";
     busy = false;
     reviewing = false;
-    localAttempted = false;
+    automaticAttempted = false;
     maskEnabled = true;
+    reviewCropZoom = 1;
+    originalCropSize = { width: 0, height: 0 };
     maskReady = false;
     reviewSession++;
     detectingMask = false;
@@ -212,16 +222,16 @@
     await tick();
     transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
   }
-  async function reviewLocal() {
-    if (!localReviewerIndexes.length) {
+  async function reviewAutomatic() {
+    if (!automaticReviewerIndexes.length) {
       error =
-        "Add a local source reviewer in Series → AI model settings, or press Run on Grok, Codex, or Cursor.";
+        "Choose a local reviewer or enable Autorun for a model in Admin → Models. You can also use its Run button.";
       return;
     }
     if (detectingMask || (maskEnabled && !maskReady)) return;
     abortReviews();
-    localAttempted = true;
-    await runReviewers(localReviewerIndexes);
+    automaticAttempted = true;
+    await runReviewers(automaticReviewerIndexes);
   }
   async function reviewOne(index: number) {
     if (!reviewers[index] || entries[index]?.pending) return;
@@ -233,12 +243,14 @@
       .filter(({ model }) => individuallySelected || !isOnDemandReviewer(model, engines));
     if (!selected.length || !line || detectingMask || (maskEnabled && !maskReady)) return;
     const targetId = line.id;
-    const mask = maskEnabled ? maskEditor?.maskDataUrl() : undefined;
+    const useMask = maskEnabled;
+    const cropScale = reviewCropZoom;
+    const mask = useMask ? maskEditor?.maskDataUrl() : undefined;
     error = "";
     const controller = new AbortController();
     inflight.add(controller);
-    const runningLocal = selected.some(({ model }) => !isOnDemandReviewer(model, engines));
-    if (runningLocal) reviewing = true;
+    const runningAutomatic = selected.some(({ model }) => !isOnDemandReviewer(model, engines));
+    if (runningAutomatic) reviewing = true;
     if (entries.length !== reviewers.length) entries = idlePanels(reviewers);
     const updatePanel = (index: number, entry: Entry) => {
       if (!controller.signal.aborted)
@@ -254,6 +266,7 @@
             : "Waiting for response…",
         pending: true,
         idle: false,
+        cropScale,
       });
     }
     await tick();
@@ -272,7 +285,8 @@
                 lineId: current.id,
                 expectedRevision: current.revision,
                 reviewers: [model],
-                maskEnabled,
+                maskEnabled: useMask,
+                cropScale,
                 ...(individuallySelected ? { selectedReviewer: model } : {}),
                 ...(mask ? { mask } : {}),
               },
@@ -288,6 +302,7 @@
                 : r.answer || "Review failed: empty response",
               cards: r.cards,
               idle: false,
+              cropScale,
             });
           } catch (e) {
             if (controller.signal.aborted) return;
@@ -296,6 +311,7 @@
               label: reviewerLabel(model),
               content: `Review failed: ${e instanceof Error ? e.message : String(e)}`,
               idle: false,
+              cropScale,
             });
           }
         }),
@@ -316,7 +332,7 @@
       }
     } finally {
       inflight.delete(controller);
-      if (runningLocal && !controller.signal.aborted) {
+      if (runningAutomatic && !controller.signal.aborted) {
         reviewing = entries.some(
           (entry, i) => entry.pending && !isOnDemandReviewer(reviewers[i], engines),
         );
@@ -362,9 +378,9 @@
       succeeded &&
       abort === controller &&
       maskEnabled &&
-      localReviewerIndexes.length
+      automaticReviewerIndexes.length
     )
-      await reviewLocal();
+      await reviewAutomatic();
   }
   async function send() {
     if (busy || !question.trim() || !enquireGate.ok) return;
@@ -526,6 +542,7 @@
           cropUrl={cropSrc}
           maskUrl={`${cropSrc}&variant=mask`}
           bind:expansion={maskExpansion}
+          bind:zoom={reviewCropZoom}
           disabled={detectingMask}
           detecting={detectingMask}
           autodetect
@@ -533,20 +550,29 @@
         />
         {/key}
       {:else}
+        <div class="original-crop" bind:clientWidth={originalCropWrapWidth}>
         <img
           class="review-crop"
           src={cropSrc}
           alt="Original text region sent to reviewers"
+          onload={e => { const image = e.currentTarget as HTMLImageElement; originalCropSize = { width: image.naturalWidth, height: image.naturalHeight }; }}
+          style={originalCropSize.width ? `width:${originalCropSize.width * originalCropScale}px;height:${originalCropSize.height * originalCropScale}px` : undefined}
         />
+        </div>
+        <span class="zoom-group" role="group" aria-label="Crop zoom">
+          {#each REVIEW_CROP_ZOOMS as amount}<button type="button" aria-pressed={reviewCropZoom === amount}
+            aria-label={`View crop at ${amount}×`} onclick={() => (reviewCropZoom = amount)}>{amount}×</button>{/each}
+        </span>
       {/if}
+      <p class="review-hint">Next transcription request: {reviewCropZoom}× crop. Use Resubmit or Run again after changing scale.</p>
     {/if}
     <p class="review-hint">
       Independent readings of the same crop. Agreement is supporting evidence;
       inspect any uncertain characters before accepting.
-      Text masking starts automatically, then local models (Hayai, PaddleOCR-VL,
-      local chat models) run on that crop. Brush or erase and resubmit to refine while other
+      Text masking starts automatically, then local models and models with Autorun
+      enabled in Admin → Models run on that crop. Brush or erase and resubmit to refine while other
       models are still running, or turn masking off to send the original crop.
-      Grok, Codex, and Cursor stay idle until you press Run on that panel.
+      Models without Autorun stay idle until you press Run on their panel.
       Each response includes its English translation.
       Accepting applies both the source and the displayed English as a new draft.
       Hayai and PaddleOCR-VL readings use a separately labelled local translator.
@@ -582,8 +608,9 @@
   <div class="transcript" class:review-responses={mode === "review"} bind:this={transcript} role="log" aria-label={mode === "review" ? "Reviewer responses" : "Conversation"} aria-live="polite">
     {#each entries as entry, i}<article class:user={entry.role === "user"} class:pending={entry.pending} aria-busy={entry.pending || undefined}>
         <strong>{entry.role === "user" ? "You" : entry.label}</strong>
+        {#if mode === 'review' && entry.cropScale}<small class="sent-scale">Sent crop: {entry.cropScale}×</small>{/if}
         <p>{#if entry.pending}<span role="status">{entry.content}</span>{:else}{entry.content}{/if}</p>
-        {#if mode === "review" && isOnDemandReviewer(reviewers[i], engines)}
+        {#if mode === "review" && isNonLocalReviewer(reviewers[i], engines)}
           <div class="actions">
             <button
               disabled={busy || entry.pending || detectingMask || (maskEnabled && !maskReady)}
@@ -665,10 +692,10 @@
       >
       <button disabled={busy || !question.trim() || !enquireGate.ok} title={enquireGate.reason || undefined} type="submit">Send</button>
       {#if !enquireGate.ok}<p role="status">{enquireGate.reason}</p>{/if}
-    </form>    {:else if !kanaOpen && localReviewerIndexes.length}<button
+    </form>    {:else if !kanaOpen && automaticReviewerIndexes.length}<button
       disabled={busy || detectingMask || (maskEnabled && !maskReady)}
-      onclick={() => void reviewLocal()}
-      >{localAttempted || reviewing || pendingReviews ? "Resubmit" : "Send to local reviewers"}</button
+      onclick={() => void reviewAutomatic()}
+      >{automaticAttempted || reviewing || pendingReviews ? "Resubmit" : "Send to automatic reviewers"}</button
     >{/if}
 </dialog>
 
@@ -772,6 +799,11 @@
     margin: 0.6rem auto;
     background: white;
   }
+  .original-crop { overflow: auto; max-height: min(70dvh, 640px); background: #111; }
+  .original-crop .review-crop { max-width: none; max-height: none; margin: 0; }
+  .zoom-group { display: inline-flex; gap: 2px; }
+  .zoom-group button[aria-pressed="true"] { background: var(--hud-teal-dim); }
+  .sent-scale { display: block; color: var(--hud-muted); margin-top: 3px; }
   .mask-toggle {
     display: flex;
     align-items: center;

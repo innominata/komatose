@@ -109,6 +109,10 @@
 
   async function apply() {
     if (!canManage || saving) return false;
+    const saved = allTypeStyles(prefs);
+    const changed = kindIds.filter(type => Object.keys(draft[type]).some(key =>
+      draft[type][key as keyof TextStyle] !== saved[type]?.[key as keyof TextStyle]));
+    if (changed.length && !window.confirm(`Replace the saved series styles for ${changed.map(kindLabel).join(', ')}? These category defaults apply across every chapter. Existing placed text needs a refit to pick up the changes; locked layouts stay unchanged.`)) return false;
     saving = true;
     error = "";
     try {

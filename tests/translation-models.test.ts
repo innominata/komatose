@@ -7,6 +7,7 @@ import { translationModel, assertGeneralModel } from '../src/lib/translationMode
 import { sanitizeModelId } from '../src/lib/aiTasks';
 import { QWEN_38_27B_ID } from '../src/lib/qwenModels';
 import type { DetectedBox, TranslateScriptOpts } from '../src/lib/server/llm';
+import { fixturePasses } from './local-ocr-fixture';
 
 const root = await mkdtemp(join(tmpdir(), 'scan-translation-tests-'));
 process.env.SCAN_ROOT = root;
@@ -106,7 +107,8 @@ test('native requests use plain text, correct languages, glossary and sampling',
   assert.equal(gemmaRequest.messages[0].content, '太郎、待って！');
   assert.equal(gemmaRequest.temperature, 0);
   assert.deepEqual(gemmaRequest.chat_template_kwargs, { source_lang_code: 'ja', target_lang_code: 'en' });
-  assert.throws(() => specialistRequest(gemma, '안녕', { ...opts, lang: 'korean' }), /does not support korean/);
+  assert.deepEqual(specialistRequest(gemma, '안녕', { ...opts, lang: 'korean' }).chat_template_kwargs,
+    { source_lang_code: 'ko', target_lang_code: 'en' });
   assert.equal(sugoi.id, 'sugoi-v4-ja-en');
   const sugoiRequest = specialistRequest(sugoi, '待って！', opts);
   assert.equal(sugoiRequest.messages[0].content, '待って！');
@@ -118,6 +120,27 @@ test('native requests use plain text, correct languages, glossary and sampling',
 test('translation-only models cannot silently use the generic vision/chat endpoint', async () => {
   assert.throws(() => assertGeneralModel(hy.id), /Translation only/);
   await assert.rejects(chatCompletions([], { model: koen.id }), /Translation only/);
+});
+
+test('stock HY-MT2 and TranslateGemma translate Korean without changing Japanese-only fine-tunes', async () => {
+  for (const id of ['hy-mt2-1.8b-q4', 'hy-mt2-7b-q4', 'translategemma-4b-q4', 'translategemma-12b-q4']) {
+    const model = translationModel(id)!;
+    assert.ok(model.languages.includes('korean'));
+    const request = specialistRequest(model, '기다려 주세요', { ...opts, lang: 'korean', seriesGlossary: '' });
+    assert.ok(request.messages[0].content.endsWith('기다려 주세요'));
+    assert.doesNotMatch(request.messages[0].content, /Japanese|日本語/);
+    const vertical = specialistRequest(model, '기\n다\n려\n!', { ...opts, lang: 'korean', seriesGlossary: '' });
+    assert.ok(vertical.messages[0].content.endsWith('기다려!'));
+    assert.ok(specialistRequest(model, '네가\n나를\n사랑한다고\n했잖아!', { ...opts, lang: 'korean', seriesGlossary: '' }).messages[0].content.endsWith('네가\n나를\n사랑한다고\n했잖아!'));
+    if (model.profile === 'translategemma') assert.equal(request.chat_template_kwargs?.source_lang_code, 'ko');
+    const result = await translateWithSpecialist(model, [box('기다려 주세요')], { ...opts, lang: 'korean' }, async () => reply('Please wait.'));
+    assert.equal(result[0].translation, 'Please wait.');
+    assert.equal(result[0].source, '기다려 주세요');
+  }
+  const rows = (await import('../src/lib/server/modelRegistryStore')).listRegistryRows();
+  for (const id of ['hy-mt2-1.8b-q4', 'hy-mt2-7b-q4', 'translategemma-4b-q4', 'translategemma-12b-q4'])
+    assert.deepEqual(rows.find(r => r.id === id)?.languages, ['japanese', 'korean']);
+  assert.throws(() => specialistRequest(hy, '기다려 주세요', { ...opts, lang: 'korean' }), /does not support korean/);
 });
 
 test('Imsbee stays unavailable until installed or an explicit runtime is configured', () => {
@@ -268,6 +291,7 @@ test('managed runtime reports executable startup errors without hanging', async 
 test('OCR English uses the selected specialist instead of Qwen3-VL-8B', async () => {
   process.env.SCAN_TRANSLATION_KOEN_URL = 'https://koen.fixture/v1';
   process.env.SCAN_TRANSLATION_KOEN_MODEL = 'Imsbee/ko-en-translator';
+  await fixturePasses(koen.id, ['translate']);
   const oldFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async (url, init) => {
@@ -292,6 +316,7 @@ test('OCR English uses the selected specialist instead of Qwen3-VL-8B', async ()
 
 test('OCR English for a general translation model uses that model, not Qwen3-VL-8B', async () => {
   process.env.LLAMASWAP_API_KEY ??= 'fixture';
+  await fixturePasses(QWEN_38_27B_ID, ['translate']);
   const oldFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async (_url, init) => {

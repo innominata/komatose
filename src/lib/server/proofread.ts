@@ -29,6 +29,8 @@ import {
   toLine,
 } from "./queries";
 import { broadcast } from "./realtime";
+import { loadSpeakerAssignments } from './characters';
+import { characterContext, resolveCharacter } from '../characters';
 
 const CHUNK = 32;
 
@@ -147,6 +149,7 @@ export async function loadChapterPack(opts: {
     imgs.map((img, i) => [img.id, `page ${i + 1}/${imgs.length}`]),
   );
   const targets: LineRow[] = [];
+  const speakers = loadSpeakerAssignments(opts.episodeId);
   const items: ProofreadItem[] = [];
   for (const line of readingOrder(imgs, allLines)) {
     const notes = lineNotes(line.id, comms);
@@ -160,6 +163,7 @@ export async function loadChapterPack(opts: {
       i: items.length,
       page: (line.imageId && pageLabel.get(line.imageId)) || "unplaced",
       lineType: line.lineType,
+      speaker: characterContext(resolveCharacter(speakers.get(line.id), s.glossary)),
       source: line.source || notes.source,
       literal: notes.literal,
       current: line.body.trim(),
@@ -193,6 +197,7 @@ export function formatChapterScript(
 ): string {
   const entries = items.map((l) => {
     const bits = [`[${l.i}] (${l.lineType}) ${l.page}`];
+    if (l.speaker) bits.push(`speaker: ${l.speaker}`);
     if (l.source) bits.push(`source: ${l.source}`);
     if (l.literal) bits.push(`literal: ${l.literal}`);
     bits.push(`current: ${l.current || "(empty)"}`);

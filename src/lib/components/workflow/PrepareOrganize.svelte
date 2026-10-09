@@ -22,6 +22,8 @@
     canCombinePages = false,
     oncombine,
     onextract,
+    canRemoveRegions = false,
+    onremoveregions,
     ondelete,
   }: {
     images: ImageRow[];
@@ -43,6 +45,8 @@
     canCombinePages?: boolean;
     oncombine: () => void;
     onextract: () => void;
+    canRemoveRegions?: boolean;
+    onremoveregions: () => void;
     ondelete: () => void;
   } = $props();
 
@@ -117,6 +121,7 @@
         <button type="button" class="ed-btn small" data-find="combine-spread" title="RTL spread: later page on the left, earlier page on the right" disabled={selectionDisabled} onclick={oncombine}>Combine into spread</button>
       {/if}
       <button type="button" class="ed-btn small" disabled={selectionDisabled} onclick={onextract}>Extract to chapter…</button>
+      <button type="button" class="ed-btn small danger" disabled={selectionDisabled || !canRemoveRegions} onclick={onremoveregions}>Remove all regions…</button>
       <button type="button" class="ed-btn small danger" disabled={selectionDisabled} onclick={ondelete}>Delete selected pages…</button>
       <button type="button" class="ed-btn small ghost" onclick={() => onselectall(false)}>Clear selection</button>
     </div>
@@ -176,6 +181,7 @@
   .spacer { flex: 1; }
   .sel-bar {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     align-items: center;
     margin: 0 0 12px;

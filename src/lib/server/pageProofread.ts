@@ -16,6 +16,7 @@ import { proofreadWithService } from './proofreadService';
 import { capturePageImages } from './pageImages';
 import { createJob, updateJob, runWithJob, listJobs } from './jobs';
 import { readAsset, storeAsset, WorkflowError } from './workflowStore';
+import { loadChapterPack, formatChapterScript } from './proofread';
 
 export const PAGE_PROOFREAD_SYSTEM = `You are a Japanese/Korean scanlation proofreader and lettering editor. Compare two images of the SAME page: image 1 is the raw source lettering; image 2 is the current English typeset version. Critique translation accuracy, missing or invented meaning, omitted text/SFX, speaker/reading order, character voice, English grammar and punctuation, and visible typesetting problems (fit, clipping, line breaks, font choice, contrast, placement, cleaning remnants). Identify issues by panel/bubble position and quote the relevant text when legible. Distinguish clear errors from uncertain readings and stylistic preferences. Give practical corrections and priorities. Do not claim unreadable details as facts. The editor will make changes manually; do not edit files or use tools. Return JSON with one critique string, using readable paragraphs and bullets.`;
 export const PAGE_PROOFREAD_SCHEMA = {
@@ -135,12 +136,15 @@ export function startPageProofread(opts: { series: Series; episode: Episode; ima
           ? `Sending updated typeset as a ${proofreaderLabel(site)} follow-up…`
           : `Waiting on ${proofreaderLabel(site)}…`
         : 'Proofreader is comparing both images…' });
-      const apiPrompt = `${snapshot.pageLabel}. Image 1: RAW source. Image 2: WORKING TYPESET English. Critique this captured version.`;
+      const pack = await loadChapterPack({ seriesId: opts.series.id, episodeId: opts.episode.id });
+      const pageScript = formatChapterScript(pack.items.filter((_, i) => pack.targets[i].imageId === opts.imageId));
+      const apiPrompt = `${snapshot.pageLabel}. ${followUp ? 'The attached image is the updated WORKING TYPESET English; compare with the earlier RAW source in this conversation.' : 'Image 1: RAW source. Image 2: WORKING TYPESET English.'} Critique this captured version.\n\nCanonical series names and terms:\n${pack.seriesGlossary}\n\nSaved page script with human-assigned speakers (speaker is not necessarily the person addressed):\n${pageScript}`;
       const result = (site
         ? await runServiceProofread({
             proofreader: site,
             images: followUp ? [images[1]] : images,
             followUp,
+            prompt: `${PAGE_PROOFREAD_SYSTEM}\n\n${apiPrompt}`,
             signal,
           })
         : await advisoryModel(model, PAGE_PROOFREAD_SYSTEM, apiPrompt, images, signal, PAGE_PROOFREAD_SCHEMA)

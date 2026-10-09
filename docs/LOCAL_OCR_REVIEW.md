@@ -1,16 +1,163 @@
 # Local OCR transcription and AI Review
 
+## Korean recognizers
+
+**Admin → Models → Setup** offers two separate installable readers:
+
+- **PP-OCRv5 Korean** (`pp-ocrv5-korean`) uses the official
+  [korean_PP-OCRv5_mobile_rec](https://huggingface.co/PaddlePaddle/korean_PP-OCRv5_mobile_rec)
+  with a local PP-OCRv5 text detector to split multiline crops. It uses
+  `.venv-ocr` (or `PADDLEOCR_PYTHON`) and CPU PaddlePaddle, including on AMD Linux.
+  The recognition weights are about 13 MB; the detector adds about 88 MB.
+- **Hayai OCR v2.5 Nova** (`hayai-ocr-v2.5-nova`) uses the
+  [publisher's checkpoint](https://huggingface.co/JustANormalTinkerer/hayai-ocr-v2.5-nova)
+  and SigLIP2 configuration through `.venv-review` (or `SCAN_REVIEW_PYTHON`).
+  It supports Japanese and Korean crop transcription and the existing CPU/ROCm/CUDA
+  device selection. The app uses 512 patches and greedy decoding with repetition
+  penalty 1.0. Hayai v2 remains a separate choice.
+
+After installation, run **Transcription** under the model's checks, then select the
+reader in **AI model settings → Transcription**. The test includes an original
+Korean fixture so a Korean-only reader is not judged against Japanese text. Both
+readers transcribe source only; English comes from the selected translator. Neither
+reader replaces the current transcription set automatically.
+
+```bash
+.venv-ocr/bin/python scripts/install-review-models.py --model pp-ocrv5-korean
+.venv-review/bin/python scripts/install-review-models.py --model hayai-ocr-v2.5-nova
+```
+
+For machines with existing official PaddleX assets, the PP-OCRv5 installer supports
+`--paddlex-cache /path/to/.paddlex/official_models`. This reuses configuration files
+and verifies both weight files against their pinned SHA256 hashes before copying;
+the receipt records that configuration came from the local cache. Normal downloads
+pin repository revisions and verify Hugging Face file metadata.
+
+Setup checks both PP-OCRv5 subfolders rather than looking only for top-level
+files. Installed models are skipped by the install queue. Rerunning the Korean
+installer checks the pinned receipt, file sizes and SHA256 hashes locally; a
+complete verified installation finishes without contacting the download service.
+
+Old qualification results are warnings when the implementation changes. They do
+not disable an installed reader or force an automatic retest during transcription.
+Current failed checks and explicit disabled settings still block use.
+
+The PP-OCRv5 worker was checked on 24 original clean Korean controls (24 exact
+matches), plus ten real crops independently inspected without using saved
+approval status (eight exact matches after whitespace/NFC normalization).
+The two misses omitted punctuation; all Hangul characters matched. Two uncertain
+stylized crops were excluded. With bounded crop upscaling, warmed CPU recognition
+took a median 107 ms on those real crops and 348 ms on the larger controls;
+model loading took about 2.2 seconds. These are worker inference timings,
+excluding HTTP/queue overhead, and a small sample rather than an accuracy guarantee.
+Blank and multiline controls also passed. Repeat offline integration and installer
+checks with `npm run test:korean-ocr`; they do not download weights or test Nova's
+recognition quality.
+
+
 **Transcribe chapter/page** runs the series **transcription model set** (default
 Hayai OCR v2 + PaddleOCR-VL-1.6) on every detected region, including free text
 and SFX. The Clean-step text detector masks the source page once; each
 recognition crop retains lettering and whites out surrounding artwork. Region
 OCR, image rereads, and fill-missing OCR also mask their inputs before reading.
 
+**Installable transcription decider:** Admin → Models → Install → Transcription
+deciders → **Liquid AI d1-3B Q8** installs the Q8 model, F16 vision projector,
+and a dedicated pinned llama.cpp Vulkan runtime. On Linux the runtime build
+requires `git`, `cmake`, a C++ compiler, Vulkan development headers and `glslc`
+(for Debian/Ubuntu: `build-essential cmake git libvulkan-dev glslc`). The files
+use approximately 3.73 GB plus runtime/build space. The runtime supports AMD
+cards through Vulkan; ROCm is not needed. It does not replace other llama.cpp
+installations. Downloads resume and verify pinned sizes and SHA256 checksums.
+
+Installation leaves the decider default unchanged. The current d1 model has
+not qualified for automatic transcription selection; installing it must not
+change the chapter's OCR behavior. Select a default explicitly after testing.
+Series AI model settings → Transcription offers **Default**, **Off**, or a tested
+decider. Run **Decide Transcription** under model tests to qualify it. Default
+picks up later default changes; explicit Off stays off. Settings, profiles and
+model packs retain the selection and confidence thresholds.
+
+With a decider enabled, every distinct OCR disagreement is checked against the
+same masked crop, including disagreements with a plurality winner. It receives
+the candidate strings and language, without engine identities, vote counts,
+translations or series notes. It can select a minority reading, choose **none
+match**, or abstain because the crop is **too unclear**. It never generates a
+replacement transcription. A candidate is auto-applied only at probability
+**0.80** or higher and a lead of **0.15** or higher over every other option.
+These adjustable scores are model probabilities, not measured OCR accuracy.
+Low confidence, abstention and service/validation errors leave readings for
+review without falling back to the plurality. Existing human/approved/ignored
+text remains protected. Changed region geometry or source page prevents stale
+results from being applied. Saved region details show probabilities and the
+applied/review status; historical decisions are marked when their context changes.
+
+The isolated runtime is on demand. Stop d1 before reinstalling or uninstalling;
+its runtime cannot be removed while d1 is installed. Artifacts live under
+`data/models/deciders/d1-3b` and `data/runtimes/llama-decider`; deployments can
+set `SCAN_DECIDER_MODELS_DIR` and `SCAN_DECIDER_RUNTIME_DIR`.
+`npm run smoke:decider -- Vulkan2` runs a real Japanese crop test in both
+candidate orders using an owned temporary server (choose your Vulkan device
+from `llama-server --list-devices`). It reports hardware support separately
+from OCR qualification; add `--require-qualified` to require the latter.
+The managed d1 process disables Vulkan shader fusion to avoid an observed
+RADV ACO compile stall on RX 7900 XTX.
+The current pinned model did not qualify on the fine-grained Japanese reading
+pair `待って` versus `持って` with abstention options. Controlled diagnostics
+confirmed that image input works: it classified Japanese/Korean/English
+correctly on all 18 visual tests (six generated text images, three answer orders),
+and recognised blank/text, colours and shapes. CPU and Vulkan chose the same
+answers on all 30 shared tests. With just the two Japanese candidates it
+weakly favoured the right reading (~56%); adding abstention options made it
+choose “none match”. These controls establish basic functionality, not reliable
+manga OCR selection. Installation does not override the qualification gate.
+Run `npm run diagnose:decider -- Vulkan2` and `npm run diagnose:decider -- CPU`
+to repeat the controls; each run prints its temporary image/result/log directory. `npm run test:decider` runs offline tests.
+
+**Korean evaluation:** d1 is currently unsuitable for automatically verifying
+Korean OCR or deciding to skip paid fallback. In a controlled test of 24 clean
+Korean text images (12 calibration phrases, 12 held-out phrases), its native
+yes/no verifier accepted deliberately changed consonants/vowels or missing/extra
+characters above 90% probability in both splits. At 95%, no correct control
+reading was confirmed in either split. Raising confidence therefore did not
+produce a useful operating threshold in this test. The crop-quality classifier
+also called damaged text “easy” above 95%. These are task failures with a
+working image model, not evidence of a broken AMD setup.
+
+The existing local PaddleOCR-VL-1.6 service read all 24 clean controls correctly.
+Among ten real crops independently inspected before checking saved readings,
+it matched eight exactly after whitespace/NFC normalization; one miss changed
+Korean letters and one changed punctuation. Two less certain stylized crops
+were excluded. This small sample supports trying local OCR first, but does
+not establish that every high-quality Korean crop is correct. Saved approval
+status is never used as ground truth by the evaluator.
+
+On RX 7900 XTX Vulkan, 30 warmed single-question HTTP requests had approximately
+93 ms median and 94 ms p95 latency; loading the owned test server took about
+1.8 seconds. Five crop-quality questions took about 425 ms per request. These
+include request processing and image evaluation, rather than only GPU compute.
+
+Repeat with `npm run evaluate:decider-korean -- Vulkan2` for synthetic controls.
+Add `--native-binary` for the model's native yes/no question format. Private
+candidate crops can be supplied with `--approved=/absolute/private/manifest.json`;
+that historical flag supplies candidates, **not trusted labels**. To score real
+crops, also provide `--independent-review=/absolute/private/review.json`, with
+`id`, `independentReading`, `status: "independently-reviewed"`, and
+`visualConfidence: "high"` per independently checked crop. Unverified crops
+are excluded from accuracy summaries. `--ocr=http://127.0.0.1:18081` compares
+the existing local Paddle service using its resident token. HTTP errors count
+as request failures, not wrong transcriptions. `--reuse=/tmp/.../results.json
+--native-binary --stress` tests character mutations on previous clean controls.
+All images and detailed results stay in private temporary directories; only
+aggregate scores are printed. No paid services are called.
+
+Model and API reference: [Liquid AI d1-3B-GGUF](https://huggingface.co/LiquidAI/d1-3B-GGUF).
+
 Comparable keys ignore whitespace, canonical Unicode composition, and
 interchangeable dashes/tildes/separator dots (`-` vs `~`, wrapping). Differences
 in letters, numbers, prolonged-sound ー, or other punctuation still count.
 
-**Plurality:** nonempty successful readings are clustered by that comparable key.
+**When the decider is Off or no default is installed — plurality:** nonempty successful readings are clustered by that comparable key.
 The source is auto-applied when the largest cluster is **strictly larger** than
 the next (a single selected model is enough). If Paddle is in the winning
 cluster, its spacing is preferred; otherwise the longest string wins. Ties, all

@@ -1,13 +1,18 @@
 <script lang="ts">
+  import { deciderPageStamp } from "$lib/decider";
+  import { glossaryCharacters, resolveCharacter, characterLabel } from '$lib/characters';
+  import type { GlossaryTerm } from '$lib/types';
+  import { nextUnfinishedPage, prepareActionConfirmation, preparePageLabel, type PageUndoSummary } from "$lib/prepareActions";
   import { onMount, tick, untrack } from "svelte";
   import "../../styles/editor.scss";
   import { effectiveTranslateModel, isSourceSuggestion, regionAiSettings, reviseCouncil, suggestionMatchesLine, type RegionAiSettings as RegionAiSettingsData } from "$lib/regionAi";
   import { DEFAULT_CHAT_MODEL_ID } from "$lib/modelDefaults";
   import { formatDuration, transcribeSetPageMs } from "$lib/modelEstimate";
-  import { providerRunGate } from "$lib/providerCatalog";
+  import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
   import { copyPngToClipboard } from '$lib/clipboardImage';
   import { lastProofreadPageId } from '$lib/pageProofread';
   import PageProofreadDialog from './PageProofreadDialog.svelte';
+  import ScriptProofreadDialog from './ScriptProofreadDialog.svelte';
   import CleanPromptDialog from "./CleanPromptDialog.svelte";
   import RegionCompareDialog from "./workflow/RegionCompareDialog.svelte";
   import { modelImageEditDialog } from "$lib/cleanPromptDialog";
@@ -37,6 +42,8 @@
   import RegionContextMenu from "./workflow/RegionContextMenu.svelte";
   import PagesSidebar from "./workflow/PagesSidebar.svelte";
   import PrepareChapterPanel from "./workflow/PrepareChapterPanel.svelte";
+  import ResliceSizeControl from "./workflow/ResliceSizeControl.svelte";
+  import { validSliceHeight, manualSliceRanges, type ManualSlice, type ResliceSizing } from "$lib/reslice";
   import TranslateChapterPanel from "./workflow/TranslateChapterPanel.svelte";
   import ExportPanel from "./workflow/ExportPanel.svelte";
   import TranslateInspector from "./workflow/TranslateInspector.svelte";
@@ -78,11 +85,13 @@
   import { STUDIO_STAGE_ORDER, studioStepName, type StudioAction } from "$lib/studioActions";
   import {
     pageStepStamp,
+    pageStepLabel,
     exportBlockers,
     type PageStep,
     DEFAULT_PREFERENCES,
     deleteRegionNeedsConfirm,
     isBlankRegion,
+    isIgnoredLine,
     usesSourceArtwork,
     pageArtwork,
     pageRawArtwork,
@@ -267,13 +276,21 @@
   let prevTranslateLive = 0;
   let reviewImageBusy = $state(false);
   let proofreadJobId = $state<string | null>(null);
+  let scriptProofreadDialog: ScriptProofreadDialog;
   const proofreadJob = $derived(studioState?.jobs.find(job => job.id === proofreadJobId));
+  let resliceSizing = $state<ResliceSizing>("pages");
+  let resliceMaxHeight = $state<number | undefined>(2048);
+  const resliceSizeValid = $derived(resliceSizing !== "custom" || validSliceHeight(resliceMaxHeight));
   let reslicePreview = $state<null | {
     preview: string;
     width: number;
     height: number;
+    maxHeight: number;
     cuts: number[];
     forced: number[];
+    manualRequired: boolean;
+    manualSlices: ManualSlice[];
+    bands: { top: number; bottom: number }[];
     imageIds: string[];
     /** Each stitched source page's band, so the canvas can label the boundaries. */
     pages: { id: string; number: number; top: number; height: number }[];
@@ -334,6 +351,8 @@
   let nudgeAmount = $state(10);
   let zoom = $state(100);
   let pageUndoCount = $state(0);
+  let pageUndo = $state<PageUndoSummary | null>(null);
+  let pageUndoRefreshSequence = 0;
   let model = $state("");
   // With exactly one available translator, default to it instead of the
   // shipped chat-model default, which a fresh install cannot run yet.
@@ -344,7 +363,11 @@
   const translationModel = $derived(aiModels.translate);
   const translateGate = $derived(providerRunGate(aiModels.translate.engine, "translate", engineOptions));
   const enquireGate = $derived(providerRunGate(aiModels.enquire.engine, "advisory", engineOptions));
-  const proofreadEnglishGate = $derived(providerRunGate(aiModels.proofread.engine, "proofreadEnglish", engineOptions));
+  const proofreadOperation = $derived(proofreadingOperation(aiModels.proofread.engine, engineOptions));
+  const proofreadGate = $derived(providerRunGate(aiModels.proofread.engine, proofreadOperation, engineOptions));
+  const proofreadTitle = $derived(proofreadGate.reason || (proofreadOperation === "pageImageProofread"
+    ? "Review this page's raw source and typeset English with the selected proofreader."
+    : "Suggest corrections to existing English with the selected proofreading model."));
   const translateLabel = $derived(
     `${engineOptions.find((en) => en.id === aiModels.translate.engine)?.label ?? aiModels.translate.engine}${aiModels.translate.model ? ` · ${aiModels.translate.model}` : ""}`,
   );
@@ -470,6 +493,36 @@
   let insertPosition = $state<{ beforeId?: string; afterId?: string }>({});
   let replacementId = "";
   let seriesTerms = $state(series.glossary ?? []);
+  const characters = $derived(glossaryCharacters(seriesTerms));
+  let assignmentCharacterId = $state<string | null>(null);
+  let glossaryWrites = Promise.resolve();
+  let pendingGlossaryWrites = 0;
+  function saveSeriesTerms(terms: GlossaryTerm[]) {
+    const nonempty = (list: GlossaryTerm[]) => list.filter(term => term.source.trim() || term.translation.trim());
+    const previous = JSON.stringify(nonempty(seriesTerms));
+    seriesTerms = terms;
+    if (JSON.stringify(nonempty(terms)) === previous) return glossaryWrites;
+    pendingGlossaryWrites++;
+    glossaryWrites = glossaryWrites.catch(() => {}).then(async () => {
+      try { await request(`/api/series/${series.id}`, { glossary: terms }, 'PATCH'); }
+      catch (e) { error = String(e); throw e; }
+      finally { pendingGlossaryWrites--; }
+    });
+    // Keep the queue usable after a failed write, while assignments await the
+    // current result and therefore cannot use a character that was not saved.
+    void glossaryWrites.catch(() => {});
+    return glossaryWrites;
+  }
+  async function assignSpeaker(id: string, characterId: string | null) {
+    if (!canEdit || busy || !studioState) return;
+    try { await glossaryWrites; }
+    catch { notify('Save the glossary successfully before assigning a character.'); return; }
+    if (busy || !studioState) return;
+    selectLine(id, 'page');
+    const result = await act({ action: 'assign-character', id, characterId, expectedRevision: studioState.regions[id]?.revision ?? 0 });
+    if (result) notify(characterId ? `Assigned ${characters.find(character => character.id === characterId)?.translation || 'character'}.` : 'Speaker assignment cleared.');
+    else await refresh().catch(() => {});
+  }
   async function openActions(
     event: MouseEvent,
     imageId: string,
@@ -516,16 +569,35 @@
     const panel = comments ? commentsDetails : boundsDetails;
     panel?.scrollIntoView({ block: "nearest" });
   }
+  async function refreshPageUndo() {
+    const sequence = ++pageUndoRefreshSequence;
+    const details = await request(`${apiBase}/pages`);
+    if (sequence === pageUndoRefreshSequence) {
+      pageUndoCount = details.undoCount;
+      pageUndo = details.undo ?? null;
+    }
+    return (details.undo ?? null) as PageUndoSummary | null;
+  }
   async function pageOperation(body: Record<string, unknown>) {
+    if (busy) return null;
     menu = null;
     busy = true;
     error = "";
     try {
       if (!(await saves.flushAll()))
         throw new Error("Resolve unsaved drafts first");
+      if (body.op === 'undo') {
+        const undo = await refreshPageUndo();
+        if (!undo) { notify('Nothing to undo.'); return null; }
+        if (!window.confirm(undo.confirmation)) return null;
+        body = { ...body, undoToken: undo.token };
+      } else {
+        const confirmation = prepareActionConfirmation(body, studioState?.images ?? []);
+        if (confirmation && !window.confirm(confirmation)) return null;
+      }
       const result = await request(`${apiBase}/pages`, body);
       await refresh();
-      pageUndoCount = (await request(`${apiBase}/pages`)).undoCount;
+      await refreshPageUndo();
       if (result.skipped?.length)
         notify(`${result.skipped.length} pages had no clear gutter. Select Split and click the desired cut on a page.`);
       if (body.op === "add-credits")
@@ -543,6 +615,7 @@
     }
   }
   async function describe(ids?: string[], overwrite = false) {
+    if (overwrite && !window.confirm(`Replace the saved scene descriptions for ${ids?.length ?? studioState?.images.length ?? 0} page(s) with newly generated descriptions?`)) return;
     menu = null;
     error = "";
     try {
@@ -739,13 +812,7 @@
   }
   async function deletePage(id: string) {
     menu = null;
-    if (!window.confirm("Delete this page and its regions?")) return;
-    try {
-      await request(`${apiBase}/images/${id}`, {}, "DELETE");
-      await refresh();
-    } catch (e) {
-      error = String(e);
-    }
+    await pageOperation({ op: 'delete', imageIds: [id] });
   }
   function selectPageThumbnail(id: string, range: boolean) {
     if (pageSelectionBusy || !studioState) return;
@@ -782,7 +849,6 @@
   async function deleteSelectedPages() {
     if (!selectedPageIds.length || pageSelectionBusy) return;
     const ids = [...selectedPageIds];
-    if (!window.confirm(`Delete ${ids.length} selected page${ids.length === 1 ? "" : "s"} and all their regions, comments, cleaning and typesetting? This cannot be undone.`)) return;
     const result = await pageOperation({ op: "delete", imageIds: ids });
     if (result) {
       selectedPageIds = [];
@@ -837,6 +903,20 @@
       for (const id of result.ids ?? []) saves.discard(id);
       if (!studioState?.lines.some((line) => line.id === lineId)) lineId = "";
       notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"}.`);
+    }
+  }
+  const selectedPageRegionCount = $derived(studioState?.lines.filter(line =>
+    line.imageId && selectedPageIds.includes(line.imageId)).length ?? 0);
+  async function removeSelectedPageRegions() {
+    if (!canEdit || pageSelectionBusy || !selectedPageIds.length || !selectedPageRegionCount) return;
+    const imageIds = [...selectedPageIds];
+    const count = selectedPageRegionCount;
+    if (!window.confirm(`Remove all ${count} region${count === 1 ? "" : "s"} from ${imageIds.length} selected page${imageIds.length === 1 ? "" : "s"}? Their text remains in revision history.`)) return;
+    const result = await act({ action: "remove-selected-page-regions", imageIds });
+    if (result) {
+      for (const id of result.ids ?? []) saves.discard(id);
+      if (!studioState?.lines.some(line => line.id === lineId)) lineId = "";
+      notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"} from ${imageIds.length} selected page${imageIds.length === 1 ? "" : "s"}.`);
     }
   }
   async function removeBlankRegions() {
@@ -914,14 +994,19 @@
     }
     if (pageTool === "reslice" && reslicePreview) {
       const y = Math.round(point.y * reslicePreview.height);
+      if (y <= 0 || y >= reslicePreview.height) return;
       const near = reslicePreview.cuts.find(
-        (c) => Math.abs(c - y) < Math.max(8, reslicePreview!.height * 0.008),
+        (c) => Math.abs(c - y) < Math.max(8, reslicePreview!.maxHeight * 0.02),
       );
+      const cuts = near != null
+        ? reslicePreview.cuts.filter((c) => c !== near)
+        : [...reslicePreview.cuts, y].sort((a, b) => a - b);
       reslicePreview = {
         ...reslicePreview,
-        cuts: near != null
-          ? reslicePreview.cuts.filter((c) => c !== near)
-          : [...reslicePreview.cuts, y].sort((a, b) => a - b),
+        cuts,
+        forced: cuts.filter(c => !reslicePreview!.bands.some(b => c >= b.top && c < b.bottom)),
+        manualSlices: manualSliceRanges(reslicePreview.height, cuts, reslicePreview.maxHeight),
+        manualRequired: manualSliceRanges(reslicePreview.height, cuts, reslicePreview.maxHeight).length > 0,
       };
       return;
     }
@@ -943,6 +1028,7 @@
   }
   async function replaceFile(file?: File) {
     if (!file) return;
+    if (!window.confirm(`Replace ${preparePageLabel(replacementId, studioState?.images ?? [])} from “${file.name}”? This overwrites the current page pixels and may change its dimensions. Preparing the replacement can reset saved cleaning. Undo page edit will restore the saved previous version.`)) return;
     busy = true;
     try {
       const form = new FormData();
@@ -954,7 +1040,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       await refresh();
-      pageUndoCount = (await request(`${apiBase}/pages`)).undoCount;
+      await refreshPageUndo();
     } catch (e) {
       error = String(e);
     } finally {
@@ -1278,6 +1364,16 @@
   function maskDraftKey(imageId = pageId) {
     return ownedMaskDraftKey(user.id, episode.id, imageId);
   }
+  function discardMaskDraft(imageId: string) {
+    localStorage.removeItem(maskDraftKey(imageId));
+    if (pageId === imageId) {
+      strokes = [];
+      drawing = null;
+      maskBaseRevision = null;
+      maskJobId = null;
+    }
+    if (pendingClean?.imageId === imageId) pendingClean = null;
+  }
   function persistMaskDraft(imageId = pageId, revision = pageDoc?.revision ?? maskBaseRevision) {
     if (!imageId) return;
     if (!strokes.length) {
@@ -1353,6 +1449,7 @@
     if (!pageId || !data.images.some((p: ImageRow) => p.id === pageId))
       pageId = data.images[0]?.id ?? "";
     tryPendingClean();
+    if (step === 'Prepare') void refreshPageUndo().catch(() => {});
   }
   function applyRegionDoc(doc: WorkflowDoc<RegionData>) {
     if (!studioState) return;
@@ -1373,6 +1470,7 @@
     });
   }
   async function act(body: Record<string, unknown>) {
+    if (step === 'Prepare' && body.action === 'renumber' && !window.confirm('Renumber all chapter pages in their current reading order? This replaces their saved page numbers and export names.')) return null;
     error = "";
     busy = true;
     try {
@@ -1406,7 +1504,7 @@
       }
       const regionDoc =
         result?.doc &&
-        (body.action === "region" || body.action === "fit") &&
+        (body.action === "region" || body.action === "fit" || body.action === 'assign-character') &&
         typeof result.doc.id === "string" &&
         result.doc.id.startsWith("region:")
           ? (result.doc as WorkflowDoc<RegionData>)
@@ -1431,6 +1529,10 @@
     }
   }
   function pageSavedHistory(history: "undo" | "redo") {
+    if (step === 'Prepare') {
+      if (history === 'undo' && canUpload && !busy) void pageOperation({ op: 'undo' });
+      return;
+    }
     if (step !== "Clean" || !canClean || busy || !pageDoc) return;
     if (history === "undo" && !pageDoc.canUndo) return;
     if (history === "redo" && !pageDoc.canRedo) return;
@@ -1646,6 +1748,7 @@
   }
   async function switchStep(next: string) {
     step = next;
+    if (next === 'Prepare') void refreshPageUndo().catch(() => {});
     inspectorTab = "";
     moreOpen = false;
     await saves.flushAll();
@@ -2361,11 +2464,22 @@
   }
   async function forgetPageHistory() {
     if (!pageId || busy) return;
+    const currentId = pageId;
     const kind = step === "Review" ? "review" : step === "Clean" ? "clean" : step === "Typeset" ? "typeset" : "translate";
-    if (!confirm("Mark this page done for this step? That records it as finished for export and clears the saved undo history for this step. The current text and artwork stay. Editing again reopens it."))
+    if (kind !== "clean" && kind !== 'typeset' && !confirm("Mark this page done for this step? That records it as finished for export and clears the saved undo history for this step. The current text and artwork stay. Editing again reopens it."))
       return;
-    const result = await act({ action: "forget-page-history", imageId: pageId, step: kind });
-    if (result) notify("Saved history for this step was removed.");
+    const result = await act({ action: "forget-page-history", imageId: currentId, step: kind });
+    if (!result) return;
+    if (kind === 'clean') {
+      discardMaskDraft(currentId);
+    }
+    notify(kind === "clean" ? "Cleaning applied and approved. Page marked done in Clean." : kind === 'typeset' ? 'Page marked done in Typeset.' : "Saved history for this step was removed.");
+    if (kind === "clean" && step === "Clean" && pageId === currentId) shiftPage(1);
+    if (kind === 'typeset' && step === 'Typeset' && pageId === currentId) {
+      const next = nextUnfinishedPage(studioState?.images ?? [], currentId, id => pageStepDone(id, 'typeset'));
+      if (next) choosePage(next.id);
+      else notify('All pages are marked done in Typeset.');
+    }
   }
   async function approveCleanedAndNext() {
     const currentId = pageId;
@@ -2467,15 +2581,24 @@
       error = String(e);
     }
   }
-  async function runAI(kind: string, imageId?: string) {
-    if (busy || aiRunning) return;
+  async function runAI(kind: string, imageId?: string, scriptModel?: TaskEngine): Promise<boolean> {
+    if (busy || aiRunning) return false;
+    const proofreadingModel = scriptModel ?? aiModels.proofread;
+    const proofreadingTask = scriptModel ? "proofreadEnglish" : proofreadOperation;
+    const proofreadingGate = scriptModel
+      ? providerRunGate(scriptModel.engine, "proofreadEnglish", engineOptions) : proofreadGate;
     if (kind === "translate" && !translateGate.ok) {
       error = translateGate.reason;
-      return;
+      return false;
     }
-    if (kind === "proofread" && !proofreadEnglishGate.ok) {
-      error = proofreadEnglishGate.reason;
-      return;
+    if (kind === "proofread" && (!canEdit || !proofreadingGate.ok)) {
+      error = !canEdit ? "You do not have permission to proofread." : proofreadingGate.reason;
+      return false;
+    }
+    if (kind === "proofread" && proofreadingTask === "pageImageProofread") {
+      if (!page) { error = "Choose a page to proofread."; return false; }
+      await proofreadPageImages();
+      return !error;
     }
     beginJobFeedback(kind);
     busy = true;
@@ -2485,8 +2608,8 @@
         throw new Error("Resolve unsaved drafts first");
       await request(`${apiBase}/ai-${kind}`, {
         imageId,
-        ...(kind !== "transcribe" ? { engine: kind === "proofread" ? aiModels.proofread.engine : aiModels.translate.engine } : {}),
-        ...(kind !== "transcribe" ? { model: (kind === "proofread" ? aiModels.proofread.model : aiModels.translate.model) || undefined } : {}),
+        ...(kind !== "transcribe" ? { engine: kind === "proofread" ? proofreadingModel.engine : aiModels.translate.engine } : {}),
+        ...(kind !== "transcribe" ? { model: (kind === "proofread" ? proofreadingModel.model : aiModels.translate.model) || undefined } : {}),
         lang: studioState?.preferences.lang,
         replace: false,
       });
@@ -2495,10 +2618,14 @@
         ? "Transcription started. Agreed readings fill source and English. Other readings stay as suggestions."
         : kind === "translate"
           ? "Translation started. Existing source text is being translated. Proofreading is not included."
-          : "Proofreading started. Suggested changes will appear beside the English.");
+          : scriptModel
+            ? "Proofreading the entire chapter script. Suggested changes will appear beside the English."
+            : "Proofreading started. Suggested changes will appear beside the English.");
+      return true;
     } catch (e) {
       endJobIntent();
       error = String(e);
+      return false;
     } finally {
       busy = false;
     }
@@ -2556,23 +2683,13 @@
       j = i + delta;
     if (j < 0 || j >= next.length) return;
     [next[i], next[j]] = [next[j], next[i]];
-    try {
-      await request(
-        `${apiBase}/images`,
-        { order: next.map((p, i) => ({ id: p.id, sortOrder: i })) },
-        "PATCH",
-      );
-      await refresh();
-    } catch (e) {
-      error = String(e);
-    }
+    await reorderImages(next.map(image => image.id));
   }
   function inheritedStyle(lineType: string) {
     return {
       ...DEFAULT_STYLE,
       ...studioState?.seriesDefaults.data.style,
       ...studioState?.seriesDefaults.data.styles?.[lineType],
-      ...studioState?.chapter.data.styles?.[lineType],
     };
   }
   async function refitAfterText(id: string) {
@@ -2602,7 +2719,7 @@
     }
   }
   async function resetRegionStyle(line: LineRow) {
-    if (!canClean || busy) return;
+    if (!canClean || busy || studioState?.regions[line.id]?.data.locked) return;
     const expectedRevision = studioState?.regions[line.id]?.revision ?? 0;
     const result = await act(inheritedStyle(line.lineType).fontId ? {
       action: "fit", id: line.id, expectedRevision, resetStyle: true,
@@ -2628,18 +2745,32 @@
         styleRevision = result.doc.revision;
         regionStyle = { ...inheritedStyle(selected.lineType), ...result.doc.data.style };
       }
-    } else {
-      const doc =
-        scope === "series" ? studioState!.seriesDefaults : studioState!.chapter;
-      await act({
+    } else if (scope === 'series') {
+      if (!canUpload) return;
+      const type = selected.lineType;
+      const label = labelFor(type);
+      if (!window.confirm(`Replace the saved series “${label}” category style with this region’s style? All chapters will use this default. Existing placed text needs a refit; locked layouts stay unchanged.`)) return;
+      const doc = studioState!.seriesDefaults;
+      const result = await act({
         action: "preferences",
-        scope,
+        scope: 'series',
         expectedRevision: doc.revision,
         data: {
-          styles: { ...doc.data.styles, [selected.lineType]: regionStyle },
+          styles: { [type]: { ...regionStyle } },
         },
       });
+      if (result) notify(`Saved the series “${label}” style. Use Refit ${label} in chapter to update existing text.`);
     }
+  }
+  async function refitCategory() {
+    if (!selected || !canClean || busy || typesetRunning()) return;
+    const type = selected.lineType;
+    const targets = studioState!.lines.filter(line => line.lineType === type && line.placed && line.body.trim() && line.sourceState !== 'ignored');
+    const unlocked = targets.filter(line => !studioState!.regions[line.id]?.data.locked).length;
+    if (!unlocked) { notify('No unlocked, placed text of this type to refit in this chapter.'); return; }
+    if (!window.confirm(`Refit ${unlocked} “${labelFor(type)}” region${unlocked === 1 ? '' : 's'} in this chapter using the saved series style? This replaces their font and appearance overrides. Saved bubble geometry, text masks and placement transforms stay. Locked layouts are skipped.`)) return;
+    const result = await act({ action: 'typeset-all', scope: 'chapter', lineType: type, savedStyle: true });
+    if (result) notify(`Refitting “${labelFor(type)}” text across the chapter from the series style.`);
   }
   async function paintStyle(id: string) {
     if (step !== "Typeset" || tool !== "style-brush" || !canClean || !styleBrush ||
@@ -2728,10 +2859,13 @@
       .slice(Math.max(0, idx - 1), Math.min(imgs.length, idx + 2))
       .map((p) => p.id);
     const token = ++reslicePreviewRequest;
+    reslicePreview = null;
     try {
       const data = await request(`${apiBase}/pages`, {
         op: "reslice-preview",
         imageIds,
+        sizing: resliceSizing,
+        maxHeight: resliceMaxHeight,
       });
       if (token !== reslicePreviewRequest) return;
       reslicePreview = {
@@ -2766,25 +2900,40 @@
    */
   let reslicePreviewFor = $state<string | null>(null);
   $effect(() => {
-    const id = step === "Prepare" && pageTool === "reslice" ? (page?.id ?? null) : null;
+    const id = step === "Prepare" && pageTool === "reslice" && page && resliceSizeValid
+      ? `${page.id}:${resliceSizing}:${resliceMaxHeight}` : null;
     if (reslicePreviewFor === id) return;
     reslicePreviewFor = id;
     if (id) void loadReslicePreview();
-    else reslicePreview = null;
+    else {
+      ++reslicePreviewRequest;
+      reslicePreview = null;
+    }
   });
   async function applyReslice(cuts?: number[]) {
-    try {
-      await request(`${apiBase}/pages`, {
-        op: "reslice",
-        imageIds: cuts ? reslicePreview?.imageIds : undefined,
-        cuts,
-      });
-      flashJobs();
-      await refresh();
-      notify(cuts ? "Manual reslice started." : "Auto-reslice started.");
-    } catch (e) {
-      error = String(e);
-    }
+    const result = await pageOperation({
+      op: "reslice",
+      imageIds: cuts ? reslicePreview?.imageIds : undefined,
+      cuts,
+      sizing: resliceSizing,
+      maxHeight: resliceMaxHeight,
+    });
+    if (!result) return;
+    flashJobs();
+    notify(cuts ? "Manual reslice started." : "Auto-reslice started.");
+  }
+  function openManualReslice(jobId: string, imageId?: string) {
+    const job = studioState?.jobs.find(j => j.id === jobId);
+    if (!job) return;
+    if (["pages", "custom", "strips"].includes(job.payload.sizing)) resliceSizing = job.payload.sizing;
+    if (validSliceHeight(job.payload.maxHeight)) resliceMaxHeight = job.payload.maxHeight;
+    step = "Prepare";
+    prepView = "page";
+    inspectorOpen = true;
+    const id = imageId || job.progress?.manualImageId || job.payload.imageIds?.[0] || pageId;
+    if (id) choosePage(id);
+    reslicePreviewFor = null;
+    pageTool = "reslice";
   }
   async function previewShare(body: Record<string, unknown> = {}) {
     const data = await request(`${apiBase}/preview`, body);
@@ -2879,6 +3028,26 @@
         `Kept ${result.kept} layout${result.kept === 1 ? "" : "s"} as currently placed. They will not need a refit.`,
       );
   }
+  async function markChapterSteps(step?: PageStep) {
+    if (busy || !studioState) return;
+    const label = step ? pageStepLabel(step) : "Translate, Review, Clean, and Typeset";
+    const cleans = !step || step === "clean";
+    if (!confirm(`Mark every page done in ${label}? Revision history stays.${cleans ? " Saved cleaning results are applied and approved. Pending masks and draft strokes are cleared." : ""}`)) return;
+    const result = await act({ action: "mark-all-complete", ...(step ? { step } : {}) });
+    if (result) {
+      if (cleans) for (const image of studioState.images) discardMaskDraft(image.id);
+      notify(`Marked ${label} done on ${result.pages} page${result.pages === 1 ? "" : "s"}.`);
+    }
+  }
+  async function approveChapterEverything() {
+    if (!canEdit || !canClean || busy || !studioState) return;
+    if (!confirm("Approve all current translations, geometry, and artwork, and accept saved layouts in this chapter? Saved cleaning results are applied. Pending masks and draft strokes are cleared. Missing text or layouts still need attention. Revision history stays.")) return;
+    const result = await act({ action: "approve-everything" });
+    if (result) {
+      for (const image of studioState.images) discardMaskDraft(image.id);
+      notify(`Approved ${result.translations} translations, ${result.geometry} regions, and ${result.cleaning} cleaned pages; accepted ${result.layouts} layouts.`);
+    }
+  }
   async function saveSeriesType(payload: {
     expectedRevision: number;
     style: TextStyle;
@@ -2894,6 +3063,7 @@
     return { revision: result.doc.revision };
   }
   async function uploadSeriesCredit(kind: CreditKind, file: File) {
+    if ((studioState?.credits ?? series.credits)?.[kind] && !window.confirm(`Replace the saved series ${kind === 'pre' ? 'pre-credits' : 'post-credits'} image with “${file.name}”?`)) return;
     error = "";
     busy = true;
     try {
@@ -2912,6 +3082,7 @@
     }
   }
   async function clearSeriesCredit(kind: CreditKind) {
+    if (!window.confirm(`Remove the saved ${kind === 'pre' ? 'pre-credits' : 'post-credits'} page from this series? Existing copies in chapters stay, but the series credit image will be removed.`)) return;
     error = "";
     busy = true;
     try {
@@ -3046,6 +3217,18 @@
   }
 
   function choosePalette(id: PaletteId, opts?: { showBrushSize?: boolean }) {
+    if (id === 'assign-character') {
+      if (step !== 'Review' || !canEdit || busy) return;
+      cancelPolygon();
+      drawing = null;
+      styleBrush = null;
+      pageTool = 'select';
+      tool = id;
+      showRegions = true;
+      if (assignmentCharacterId === null) assignmentCharacterId = characters[0]?.id || '';
+      notify(characters.length ? 'Choose a character, then click regions to assign their speaker.' : 'Add a character in the series glossary, then assign their dialogue.');
+      return;
+    }
     if (id !== "reorder") reorderFromId = "";
     if (id === "mask-grow") growToolbarDismissed = false;
     if (id === "style-brush") {
@@ -3191,8 +3374,7 @@
     }
     if (initialPage) pageId = initialPage;
     saves.restore();
-    void request(`${apiBase}/pages`)
-      .then((d) => (pageUndoCount = d.undoCount))
+    void refreshPageUndo()
       .catch(() => {});
     void request("/api/me/settings")
       .then((data) => (userRegionColors = parseColorMap(data.regionColors)))
@@ -3253,8 +3435,8 @@
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === "glossary:series" && Array.isArray(data.glossary))
-            seriesTerms = data.glossary;
+          if (data.type === "glossary:series" && Array.isArray(data.glossary) && !pendingGlossaryWrites)
+            seriesTerms = [...data.glossary, ...seriesTerms.filter(term => !term.source.trim() && !term.translation.trim())];
           if (data.type === "presence") return;
           if (data.type === "activity") return;
           if (data.type === "line:upsert" && saves.drafts.has(data.line?.id)) return;
@@ -3425,12 +3607,7 @@
     flashFind(action.find);
   }
   async function reorderImages(order: string[]) {
-    try {
-      await request(`${apiBase}/images`, { order: order.map((id, index) => ({ id, sortOrder: index })) }, "PATCH");
-      await refresh();
-    } catch (e) {
-      error = String(e);
-    }
+    await pageOperation({ op: 'reorder', order: order.map((id, index) => ({ id, sortOrder: index })) });
   }
   $effect(() => {
     const lines = pageLines;
@@ -3670,7 +3847,7 @@
     onnextexception={() => void goToNextException()}
     onissues={() => (issuesOpen = !issuesOpen)}
     unsaved={drafts.length}
-    onsettings={() => (settingsSection = settingsSection ?? "chapter")}
+    onsettings={() => (settingsSection = settingsSection ?? "series")}
     bind:openMenu
     {pagesOpen}
     {inspectorOpen}
@@ -3736,13 +3913,15 @@
             <button type="button" class="ed-btn" data-find="split-spreads" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "split" })}>Split spreads</button>
             <button type="button" class="ed-btn" data-find="auto-crop" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "auto-crop" })}>Auto-crop</button>
             <button type="button" class="ed-btn" data-find="auto-align" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "auto-align" })}>Auto-align</button>
-            <button type="button" class="ed-btn" data-find="auto-reslice" disabled={busy || aiRunning || !canUpload} onclick={() => applyReslice()}>Auto-reslice</button>
+            <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
+            <button type="button" class="ed-btn" data-find="auto-reslice" disabled={busy || aiRunning || !canUpload || !resliceSizeValid} onclick={() => applyReslice()}>Split strips</button>
           {:else if step === "Translate"}
             <button type="button" class="ed-btn primary" data-find="transcribe" aria-label={scope === "chapter" ? "Transcribe chapter" : "Transcribe page"} disabled={busy || !canUpload || (scope === "page" && !page)} onclick={() => scope === "chapter" || !page ? runAI("transcribe") : transcribePage(page.id)}><i class="bi bi-chat-square-text" aria-hidden="true"></i> Transcribe</button>
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
             <button type="button" class="ed-btn" data-find="fill-missing" aria-label="Fill missing source &amp; English" title="Transcribe empty sources and fill empty English. Never overwrites." disabled={busy || !canEdit} onclick={() => fillMissing(scope === "page" ? page?.id : undefined)}><i class="bi bi-plus-square" aria-hidden="true"></i> Fill missing</button>
           {:else if step === "Review"}
-            <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || !canUpload || !proofreadEnglishGate.ok} title={proofreadEnglishGate.reason || undefined} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
+            <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
+            <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
             <button type="button" class="ed-btn" data-find="accept-all" disabled={!canEdit || busy} onclick={async () => { const result = await act({ action: "approve-all-translations" }); if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`); }}><i class="bi bi-check2-all" aria-hidden="true"></i> Accept all translations</button>
           {:else if step === "Clean"}
             {@const maskDone = !!pageDoc?.data.maskApproved}
@@ -3799,14 +3978,15 @@
             {#if step === "Prepare"}
               <button type="button" role="menuitem" data-find="scene-notes" disabled={busy || aiRunning || !canUpload} onclick={() => { moreOpen = false; void describe(undefined, true); }}>Scene notes</button>
               <button type="button" role="menuitem" data-find="renumber" onclick={() => { moreOpen = false; void act({ action: "renumber" }); }}>Renumber pages</button>
-              <button type="button" role="menuitem" disabled={busy || !pageUndoCount} onclick={() => { moreOpen = false; pageOperation({ op: "undo" }); }}>Undo page edit</button>
+              <button type="button" role="menuitem" data-find="prepare-undo" disabled={busy || !pageUndoCount} onclick={() => { moreOpen = false; pageOperation({ op: "undo" }); }}>{pageUndo?.label ?? 'Undo page edit'}</button>
             {:else if step === "Translate" || step === "Review"}
+              <button type="button" role="menuitem" disabled={busy || aiRunning || !canEdit} onclick={() => { moreOpen = false; scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire]); }}>Proofread entire script</button>
               <button type="button" role="menuitem" disabled={busy || !canEdit} onclick={() => { moreOpen = false; void rereadMissing(scope === "page" ? page?.id : undefined); }}>Retry uncertain image reading</button>
               <button type="button" role="menuitem" disabled={busy || !canUpload} onclick={() => { moreOpen = false; void describe(page ? [page.id] : undefined, true); }}>Refresh scene context</button>
               <button type="button" role="menuitem" disabled={!canEdit || busy || !blankRegionCount} onclick={() => { moreOpen = false; void removeBlankRegions(); }}>Remove all blank regions</button>
               <button type="button" role="menuitem" disabled={!canEdit || busy || !page} onclick={() => { moreOpen = false; void removePageRegions(); }}>Remove all regions on this page</button>
               {#if step === "Translate"}
-                <button type="button" role="menuitem" disabled={busy || !proofreadEnglishGate.ok} onclick={() => { moreOpen = false; void runAI("proofread"); }}>Proofread edited English</button>
+                <button type="button" role="menuitem" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => { moreOpen = false; void runAI("proofread"); }}>Proofread English</button>
               {:else}
                 <button type="button" role="menuitem" data-find="copy-raw" disabled={!page} onclick={() => { moreOpen = false; page && copyPageImage("raw"); }}>Copy raw image</button>
                 <button type="button" role="menuitem" data-find="copy-typeset" disabled={!page} onclick={() => { moreOpen = false; page && copyPageImage("typeset"); }}>Copy typeset image</button>
@@ -3835,6 +4015,7 @@
                 <strong>{selectedPageIds.length} selected</strong>
                 {#if canCombinePages}<button class="ed-btn" data-find="combine-spread" disabled={pageSelectionBusy} onclick={combineSelectedPages}>Combine into spread</button>{/if}
                 <button class="ed-btn" disabled={pageSelectionBusy} onclick={extractSelectedPages}>Extract to chapter…</button>
+                <button class="ed-btn danger" disabled={!canEdit || pageSelectionBusy || !selectedPageRegionCount} onclick={removeSelectedPageRegions}>Remove all regions…</button>
                 <button class="ed-btn danger" disabled={pageSelectionBusy} onclick={deleteSelectedPages}>Delete selected pages…</button>
                 <button class="ed-btn" onclick={() => { selectedPageIds = []; pageSelectionAnchor = ""; }}>Clear selection</button>
               </div>
@@ -3885,11 +4066,15 @@
             {canCombinePages}
             oncombine={combineSelectedPages}
             onextract={extractSelectedPages}
+            canRemoveRegions={canEdit && selectedPageRegionCount > 0}
+            onremoveregions={removeSelectedPageRegions}
             ondelete={deleteSelectedPages}
           />
         {:else if step === "Export"}
           <section class="prepare">
               <ExportPanel
+                seriesId={series.id}
+                episodeId={episode.id}
                 images={studioState.images}
                 pageDocs={studioState.pages}
                 stepDone={pageStepDone}
@@ -3916,12 +4101,8 @@
                   if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`);
                 }}
                 onkeeplayouts={keepCurrentLayouts}
-                onmarkall={async () => {
-                  if (!confirm("Mark every page complete in Translate, Review, Clean, and Typeset? The current text, artwork, and revision history stay."))
-                    return;
-                  const result = await act({ action: "mark-all-complete" });
-                  if (result) notify(`Marked ${result.pages} page${result.pages === 1 ? "" : "s"} complete.`);
-                }}
+                onmarkall={markChapterSteps}
+                onapproveeverything={approveChapterEverything}
                 onexport={() => act({ action: "export", format: exportFormat, draft: draftExport, quality, includeMetadata: includeExportMetadata })}
                 onpreviewshare={previewShare}
                 onissue={(issue) => {
@@ -3942,13 +4123,19 @@
           <div class="canvas-column">
           <ToolOptionsBar
             tool={paletteTool}
+            {characters}
+            {busy}
+            characterId={assignmentCharacterId ?? ''}
+            oncharacter={id => (assignmentCharacterId = id)}
+            onmanagecharacters={() => { inspectorOpen = true; inspectorTab = 'glossary'; }}
+            onstopcharacter={() => choosePalette('select')}
             bind:radius
             bind:growAmount
             polygonCount={polygonDraft.length}
             canCompletePolygon={polygonDraft.length >= 3}
             oncompletepolygon={() => void completePolygon()}
-            onapplyreslice={() => void applyReslice()}
-            hasReslicePreview={!!reslicePreview?.cuts.length}
+            onapplyreslice={() => reslicePreview && void applyReslice(reslicePreview.cuts)}
+            hasReslicePreview={!!reslicePreview && !busy && !aiRunning && canUpload}
             onstopstyle={() => (styleBrush = null)}
           />
           <div class="canvas-and-panel">
@@ -4021,6 +4208,11 @@
               {up}
               {dragRegion}
               {selectLine}
+              speakerLabelFor={id => {
+                const speaker = studioState?.regions[id]?.data.speaker;
+                return speaker ? characterLabel(resolveCharacter(speaker, seriesTerms)) : '';
+              }}
+              onassigncharacter={id => void assignSpeaker(id, assignmentCharacterId || null)}
               {reorderFromId}
               onreorderclick={clickReorder}
               onstylebrush={paintStyle}
@@ -4032,6 +4224,15 @@
               onact={act}
               onnotify={notify}
             />
+            {#if step === 'Clean' && pageDoc?.data.cleaned}
+              <button type="button" class="floating-apply-clean" data-find="floating-apply-clean"
+                aria-label="Apply cleaning and start another pass"
+                title={strokes.length ? 'Approve or clear draft mask strokes before applying cleaning' : 'Keep this cleaning result and start another pass'}
+                disabled={!canClean || busy || strokes.length > 0}
+                onclick={() => void applyCleaningPass()}>
+                <i class="bi bi-floppy-fill" aria-hidden="true"></i><span>Apply cleaning</span>
+              </button>
+            {/if}
             <ViewBar
               pageIndex={page ? studioState.images.indexOf(page) + 1 : 0}
               pageCount={studioState.images.length}
@@ -4067,6 +4268,10 @@
             {canEdit}
             {busy}
             showMark={["Translate", "Review", "Clean", "Typeset"].includes(step)}
+            undoLabel={step === 'Prepare' ? (pageUndo?.label ?? 'Undo page edit') : undefined}
+            undoVerbose={step === 'Prepare'}
+            undoEnabled={step !== 'Prepare' || (canUpload && pageUndoCount > 0)}
+            showRedo={step !== 'Prepare'}
             onundo={() => pageSavedHistory("undo")}
             onredo={() => pageSavedHistory("redo")}
             onmark={() => void forgetPageHistory()}
@@ -4154,7 +4359,11 @@
             </div>
           </section>
           {#if pageTool === "reslice"}
-            <p>Cut on white rows so bubbles and art that crossed the old file boundary stay on one page. Click to add or remove a cut, then apply from the palette.</p>
+            <p>Automatic cuts only use solid-color gaps. Page height is a target; small overflows stay together. Click to adjust cuts manually, then apply from the tool bar. Orange marks your cuts through artwork.</p>
+            {#if reslicePreview}
+              <p>{reslicePreview.cuts.length + 1} pages · target height {reslicePreview.maxHeight}px.</p>
+              {#if reslicePreview.manualRequired}<p class="warning">{reslicePreview.manualSlices.length} oversized page(s) need manual splitting. No nearby solid-color gap is available. Apply to keep the safe splits.</p>{/if}
+            {/if}
           {/if}
         {:else if step === "Review" && activeTab === "glossary"}
           {@render translationSettings("glossary")}
@@ -4191,7 +4400,11 @@
               return !line || !suggestionMatchesLine(s, line);
             })}
             regionOverflow={(id) => !!studioState!.regions[id]?.data.layout?.overflow}
+            regionDecision={(line) => studioState!.regions[line.id]?.data.sourceDecision}
+            regionDecisionStale={(line) => { const decision = studioState!.regions[line.id]?.data.sourceDecision; return !!decision?.pageSourceStamp && decision.pageSourceStamp !== deciderPageStamp(studioState!.pages[line.imageId || '']?.data); }}
             glossary={seriesTerms}
+            speakerFor={id => studioState?.regions[id]?.data.speaker}
+            onassigncharacter={(line, id) => void assignSpeaker(line.id, id)}
             {regionKinds}
             {selected}
             comments={studioState.comments.filter((c) => selected && c.lineId === selected.id)}
@@ -4314,14 +4527,10 @@
             onedit={edit}
             onsettype={setLineType}
             onapplystyle={applyStyle}
-            onloadstyle={() => {
-              styleRevision = regionDoc!.revision;
-              regionStyle = {
-                ...inheritedStyle(selected!.lineType),
-                ...regionDoc!.data.style,
-              };
-            }}
             onresetstyle={() => selected && resetRegionStyle(selected)}
+            onrefitcategory={() => void refitCategory()}
+            categoryLabel={selected ? labelFor(selected.lineType) : 'category'}
+            fitting={typesetRunning()}
             onfit={() => selected && regionDoc && act({ action: "fit", id: selected.id, expectedRevision: regionDoc.revision })}
             tab={activeTab === "style" || activeTab === "shape" ? activeTab : "text"}
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
@@ -4362,10 +4571,12 @@
       onclear={() => act({ action: "clear-finished" })}
       onclearall={() => act({ action: "clear-all" })}
       onopencritique={(id) => { proofreadJobId = id; }}
+      onmanualreslice={openManualReslice}
     />
     <StudioSettingsDrawer bind:section={settingsSection}>
       {#snippet body(id)}
-        {#if id === "chapter"}{@render prepareSettings("defaults")}
+        {#if id === "series"}{@render prepareSettings("series")}
+        {:else if id === "chapter"}{@render prepareSettings("defaults")}
         {:else if id === "detection"}{@render translationSettings("detection")}
         {:else if id === "models"}{@render translationSettings("models")}
         {:else if id === "guide"}{@render translationSettings("guide")}
@@ -4399,7 +4610,7 @@
       {/snippet}
     </StudioSettingsDrawer>
   {/if}
-{#snippet prepareSettings(section: "full" | "upload" | "credits" | "defaults")}
+{#snippet prepareSettings(section: "full" | "upload" | "credits" | "defaults" | "series")}
   {#if studioState}
     <PrepareChapterPanel
       {section}
@@ -4409,11 +4620,14 @@
       {aiRunning}
       hasPage={!!page}
       {pageUndoCount}
+      pageUndoLabel={pageUndo?.label ?? 'Undo page edit'}
       {duplicateWarning}
       numberingStale={studioState.issues.some((issue) => issue.code === "numbering")}
       bind:pendingFiles
       bind:stitch
       bind:chapterDpi
+      bind:resliceSizing
+      bind:resliceMaxHeight
       preferences={studioState.preferences}
       {engine}
       {model}
@@ -4429,7 +4643,7 @@
       onreslice={() => applyReslice()}
       ondescribe={() => describe(undefined, true)}
       onsaveregionai={saveRegionAi}
-      onsaveprefs={(data) => act({ action: "preferences", expectedRevision: studioState!.chapter.revision, data })}
+      onsaveseriesprefs={(data) => act({ action: "preferences", scope: "series", expectedRevision: studioState!.seriesDefaults.revision, data })}
       onsavedpi={() => act({ action: "preferences", expectedRevision: preferenceRevision, data: { dpi: chapterDpi ? Number(chapterDpi) : null } })}
       onuploadcredit={uploadSeriesCredit}
       onclearcredit={clearSeriesCredit}
@@ -4481,23 +4695,16 @@
       onstop={cancelTranslation}
       onrereadmissing={() => rereadMissing()}
       onfillmissing={() => fillMissing()}
-      onseriesglossary={async (terms) => {
-        try {
-          await request(`/api/series/${series.id}`, { glossary: terms }, "PATCH");
-          seriesTerms = terms;
-        } catch (e) {
-          error = String(e);
-        }
-      }}
+      onseriesglossary={terms => { void saveSeriesTerms(terms).catch(() => {}); }}
       onextractglossary={async () => {
         try {
           if (!(await saves.flushAll())) throw new Error("Resolve unsaved drafts first");
-          await act({
+          const result = await act({
             action: "glossary-mine",
             engine: glossaryModel?.engine,
             model: glossaryModel?.model || undefined,
           });
-          notify("Extracting series terms from the reviewed script.");
+          if (result) notify("Extracting series terms from the reviewed script.");
         } catch (e) {
           error = String(e);
         }
@@ -4999,6 +5206,25 @@
     display: flex;
     flex-direction: column;
   }
+  .floating-apply-clean {
+    position: absolute;
+    right: 24px;
+    bottom: 58px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border: 2px solid #ffffff;
+    border-radius: 14px;
+    background: #087f6b;
+    color: #fff;
+    font: 700 14px Inter, system-ui, sans-serif;
+    box-shadow: 0 4px 18px #0009;
+  }
+  .floating-apply-clean .bi { font-size: 24px; }
+  .floating-apply-clean:hover:not(:disabled) { background: #086451; }
+  .floating-apply-clean:disabled { opacity: .55; cursor: default; }
   .ed-main {
     position: relative;
     min-width: 0;
@@ -5030,6 +5256,11 @@
     border: 0;
     border-radius: 4px;
     padding: 5px 9px;
+  }
+  .more-menu [data-find="prepare-undo"] {
+    max-width: min(600px, calc(100vw - 240px));
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .more-menu button:hover:not(:disabled) {
     background: var(--hud-teal-dim);
@@ -5686,6 +5917,16 @@
     await refresh();
     if (acceptedLineId) await refitAfterText(acceptedLineId);
   }} />
+
+<ScriptProofreadDialog
+  bind:this={scriptProofreadDialog}
+  engines={engineOptions}
+  chapterTitle={episode.title}
+  onopensettings={openAiModelSettings}
+  onrun={async (selected) => {
+    if (!(await runAI("proofread", undefined, selected))) throw new Error(error || "Could not start script proofreading.");
+  }}
+/>
 
 <PageProofreadDialog
   job={proofreadJob}

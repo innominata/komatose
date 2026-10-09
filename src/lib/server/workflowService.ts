@@ -46,17 +46,29 @@ import { cleaningDeviceLabel, localOperation } from "./localWorker";
 import { detectorDefaults, resolveDetector } from "./detectorConfig";
 import { gpuClientStatus } from "./gpuMode";
 import { presentGpuStatus } from "./computeDevices";
-import { broadcast } from "./realtime";
+import { broadcast, withDeferredBroadcasts } from "./realtime";
 import { storePageThumbnail } from "./pageThumbnail";
+import { approveAllCleaning } from "./stepUndo";
 
-export function removePageRegions(episodeId: string, imageId: string): string[] {
+export function approveEverything(episodeId: string, userId: string) {
+  return withDeferredBroadcasts(() => sqlite.transaction(() => ({
+    translations: approveAllTranslations(episodeId, userId),
+    geometry: approveAllGeometry(episodeId),
+    cleaning: approveAllCleaning(episodeId),
+    layouts: keepCurrentLayouts(episodeId),
+  }))());
+}
+
+export function removePageRegions(episodeId: string, imageId: string | string[]): string[] {
+  const imageIds = [...new Set(Array.isArray(imageId) ? imageId : [imageId])];
   const ids = sqlite.transaction(() => {
-    const rows = sqlite
-      .prepare("SELECT id FROM lines WHERE episode_id=? AND image_id=?")
-      .all(episodeId, imageId) as { id: string }[];
-    if (rows.length)
-      sqlite.prepare("DELETE FROM lines WHERE episode_id=? AND image_id=?").run(episodeId, imageId);
-    return rows.map((row) => row.id);
+    const select = sqlite.prepare("SELECT id FROM lines WHERE episode_id=? AND image_id=?");
+    const remove = sqlite.prepare("DELETE FROM lines WHERE episode_id=? AND image_id=?");
+    return imageIds.flatMap(id => {
+      const rows = select.all(episodeId, id) as { id: string }[];
+      if (rows.length) remove.run(episodeId, id);
+      return rows.map(row => row.id);
+    });
   })();
   for (const id of ids) broadcast(episodeId, { type: "line:delete", id });
   return ids;
@@ -176,17 +188,18 @@ export function preferences(episodeId: string, seriesId: string): Preferences {
     ...DEFAULT_PREFERENCES,
     ...s,
     ...c,
+    lang: s.lang ?? DEFAULT_PREFERENCES.lang,
+    direction: s.direction ?? DEFAULT_PREFERENCES.direction,
     regionAi: s.regionAi ?? c.regionAi,
     regionKinds: s.regionKinds,
     style: { ...s.style },
     styles: Object.fromEntries(
-      styleKeys({ regionKinds: s.regionKinds, styles: { ...s.styles, ...c.styles } }).map(
+      styleKeys({ regionKinds: s.regionKinds, styles: s.styles }).map(
         (key) => [
           key,
           {
             ...s.style,
             ...s.styles?.[key],
-            ...c.styles?.[key],
           },
         ],
       ),
@@ -200,12 +213,10 @@ export function resolveStyle(
   seriesId: string,
 ): TextStyle {
   const s = getDoc<Partial<Preferences>>(`series:${seriesId}`, {}).data;
-  const c = getDoc<Partial<Preferences>>(`chapter:${episodeId}`, {}).data;
   return validateStyle({
     ...DEFAULT_STYLE,
     ...s.style,
     ...s.styles?.[line.lineType],
-    ...c.styles?.[line.lineType],
     ...pickStyle(region.style),
   });
 }
@@ -288,6 +299,29 @@ export function saveSeriesRegionAi(
 ) {
   const current = getDoc<Partial<Preferences>>(`series:${seriesId}`, {});
   return putDoc(null, current.id, { ...current.data, regionAi }, expectedRevision);
+}
+
+export function saveSeriesReadingPreferences(
+  seriesId: string,
+  expectedRevision: number,
+  input: { lang?: unknown; direction?: unknown },
+) {
+  if (Object.keys(input).some(key => key !== "lang" && key !== "direction"))
+    throw new WorkflowError("Save language and reading direction separately from other settings");
+  if ("lang" in input && input.lang !== "japanese" && input.lang !== "korean")
+    throw new WorkflowError("Invalid language");
+  if ("direction" in input && input.direction !== "rtl" && input.direction !== "ltr")
+    throw new WorkflowError("Invalid reading direction");
+  const doc = sqlite.transaction(() => {
+    const current = getDoc<Partial<Preferences>>(`series:${seriesId}`, {});
+    const saved = putDoc(null, current.id, { ...current.data, ...input }, expectedRevision);
+    sqlite.prepare("UPDATE episodes SET revision=revision+1 WHERE series_id=?").run(seriesId);
+    return saved;
+  })();
+  const chapters = sqlite.prepare("SELECT id FROM episodes WHERE series_id=?").all(seriesId) as { id: string }[];
+  for (const chapter of chapters)
+    broadcast(chapter.id, { type: "workflow:changed", id: doc.id, revision: doc.revision });
+  return doc;
 }
 
 export function resetRegionStyles(
@@ -505,6 +539,7 @@ export function readiness(
     if (!pageLines.length && !isCreditsPage(img))
       issues.push({
         code: "regions",
+        severity: "warning",
         imageId: img.id,
         pageLabel: pageLabel(img),
         message:
@@ -788,8 +823,9 @@ export async function typesetRegions(
     errors: string[];
   }) => void,
   operation = localOperation,
+  opts: { savedStyle?: boolean } = {},
 ) {
-  const geometryLines = await listLines(episode.id);
+  const geometryLines = opts.savedStyle ? [] : await listLines(episode.id);
   const errors: string[] = [];
   let completed = 0,
     skipped = 0;
@@ -807,7 +843,7 @@ export async function typesetRegions(
         if (!page.data.prepared || page.data.preparedAt !== img.updatedAt)
           throw new Error("Prepare this page first");
         // Check saved interiors too: earlier detections may span connected bubbles.
-        {
+        if (!opts.savedStyle) {
           const existing = !!region.data.polygon?.length;
           const result = await operation(
             {
@@ -849,7 +885,19 @@ export async function typesetRegions(
             region.revision,
           );
         }
-        await fitRegion(series, episode, line.id, region.revision);
+        if (opts.savedStyle) {
+          const currentLine = (await listLines(episode.id)).find(l => l.id === line.id);
+          if (currentLine?.revision !== line.revision || currentLine?.lineType !== line.lineType)
+            throw new Error('Text or region type changed; retry');
+          // Replace appearance overrides with series defaults, retaining each
+          // region's placement transforms and all saved geometry/masks.
+          const style: Partial<TextStyle> = {};
+          for (const key of ['rotation', 'skewX', 'skewY', 'warpStyle', 'warpBend'] as const) {
+            const value = region.data.style?.[key];
+            if (value !== undefined) Object.assign(style, { [key]: value });
+          }
+          await fitRegion(series, episode, line.id, region.revision, { style });
+        } else await fitRegion(series, episode, line.id, region.revision);
         completed++;
       } catch (e) {
         errors.push(

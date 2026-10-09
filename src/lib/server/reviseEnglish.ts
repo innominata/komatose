@@ -23,6 +23,8 @@ import { listImages } from "./queries";
 import { preferences } from "./workflowService";
 import { suggest, WorkflowError } from "./workflowStore";
 import { runTranslationTask } from "./translationTask";
+import { characterContext, resolveCharacter } from '../characters';
+import { loadSpeakerAssignments } from './characters';
 
 export { FAST_REVISE_SAMPLES };
 export const FAST_REVISE_TEMPERATURES = [0.15, 0.4, 0.65];
@@ -68,7 +70,7 @@ export async function reviseEnglish(opts: {
     const resolved = resolveLiveAssistant(opts.model.engine, opts.model.model);
     release = await holdManagedModel(resolved.row.id, Boolean(resolved.row.managedLaunch), opts.abort);
     if (isOnDemandReviewer(opts.model, listRegistryRows()) && !opts.selected)
-      throw new WorkflowError(`Select ${label} using its Run button. Send runs local models only.`);
+      throw new WorkflowError(`Select ${label} using its Run button, or enable Autorun in Admin → Models. Send runs local models and models with Autorun enabled.`);
     await assertEngineReady(opts.model.engine, opts.model.model);
     const source = opts.line.source?.trim() || "";
     if (!source) throw new WorkflowError("Add source text before revising English");
@@ -83,11 +85,12 @@ export async function reviseEnglish(opts: {
     const index = pack.targets.findIndex((l) => l.id === opts.line.id);
     const nearby = pack.items
       .filter((_, i) => index < 0 || (i !== index && Math.abs(i - index) <= 8))
-      .map((l) => `${l.page} (${l.lineType}) ${l.source} → ${l.current}`)
+      .map((l) => `${l.page} (${l.lineType}) Speaker: ${l.speaker || 'unknown'} · ${l.source} → ${l.current}`)
       .join("\n");
     const current = opts.line.body.trim();
     const pageCaption = [
       sceneNotesForPage(imgs, opts.line.imageId, prefs.chapterSummary),
+      `Human-assigned speaker (not the person addressed): ${characterContext(resolveCharacter(loadSpeakerAssignments(opts.episode.id).get(opts.line.id), pack.series.glossary))}`,
       current && `Current English draft (may be wrong):\n${current}`,
       nearby && `Nearby lines:\n${nearby}`,
     ]
@@ -103,6 +106,7 @@ export async function reviseEnglish(opts: {
         h: opts.line.h ?? 0.1,
         lineType: opts.line.lineType,
         source,
+        speaker: index >= 0 ? pack.items[index]?.speaker : undefined,
         literal: "",
         translation: "",
         reasoning: "",
@@ -122,7 +126,7 @@ export async function reviseEnglish(opts: {
             prior: pack.prior,
             pageLabel,
             pageCaption,
-            seriesGlossary: glossary,
+            seriesGlossary: [glossary, pack.seriesGlossary].filter(Boolean).join('\n'),
             abort: opts.abort,
             lang: prefs.lang,
             model: opts.model.model,

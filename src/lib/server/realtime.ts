@@ -84,7 +84,29 @@ async function clientStillAllowed(client: Client): Promise<boolean> {
 	return hasSeriesAccess(user, client.seriesId);
 }
 
+let deferredBroadcasts: [string, WsEvent, WebSocket | undefined][] | undefined;
+
+/** Publish a synchronous batch only after its database transaction succeeds. */
+export function withDeferredBroadcasts<T>(action: () => T): T {
+	const parent = deferredBroadcasts;
+	const pending: [string, WsEvent, WebSocket | undefined][] = [];
+	deferredBroadcasts = pending;
+	let result: T;
+	try {
+		result = action();
+	} finally {
+		deferredBroadcasts = parent;
+	}
+	if (parent) parent.push(...pending);
+	else for (const [episodeId, event, except] of pending) broadcast(episodeId, event, except);
+	return result;
+}
+
 export function broadcast(episodeId: string, event: WsEvent, except?: WebSocket) {
+	if (deferredBroadcasts) {
+		deferredBroadcasts.push([episodeId, event, except]);
+		return;
+	}
 	const clients = room(episodeId);
 	if (
 		(event.type === 'image:upsert' ||

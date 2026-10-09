@@ -15,6 +15,7 @@
     maskUrl,
     disabled = false,
     expansion = $bindable(3),
+    zoom = $bindable<ReviewCropZoom>(1),
     detecting = false,
     autodetect = false,
     ondetect,
@@ -23,6 +24,7 @@
     maskUrl: string;
     disabled?: boolean;
     expansion?: number;
+    zoom?: ReviewCropZoom;
     detecting?: boolean;
     autodetect?: boolean;
     ondetect: () => void;
@@ -30,7 +32,6 @@
 
   let tool = $state<"brush" | "erase">("brush");
   let radius = $state(8);
-  let zoom = $state<ReviewCropZoom>(1);
   let previewSent = $state(false);
   let crop = $state<HTMLImageElement>();
   let view = $state<HTMLCanvasElement>();
@@ -288,6 +289,7 @@
           type="button"
           aria-pressed={zoom === amount}
           aria-label={`View crop at ${amount}×`}
+          title={`View at ${amount}× and send a ${amount}× crop on the next transcription request`}
           onclick={() => (zoom = amount)}>{amount}×</button
         >
       {/each}
@@ -338,7 +340,7 @@
   </div>
   <p>
     Detection starts automatically and uses the Clean-step text detector inside
-    this crop. Zoom the crop if lettering is tiny. Brush from the margin around
+    this crop. Zoom enlarges both the preview and the next transcription request. Brush from the margin around
     the image to reach the edges. Shift-scroll changes brush size by 1px.
     Unmasked pixels are sent as white.
   </p>

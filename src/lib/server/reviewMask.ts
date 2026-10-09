@@ -10,9 +10,17 @@ import { localOperation } from "./localWorker";
 import { imagePath } from "./storage";
 import { maskRegion } from "../maskRegions";
 import { regionRectangle } from "../regionGeometry";
+import { REVIEW_CROP_ZOOMS, type ReviewCropZoom } from '../brush';
 
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+export function parseReviewCropScale(value: unknown): ReviewCropZoom {
+  if (value == null) return 1;
+  if (!(REVIEW_CROP_ZOOMS as readonly unknown[]).includes(value))
+    throw new WorkflowError('Review crop scale must be 1, 2, or 4');
+  return value as ReviewCropZoom;
+}
 
 export async function regionSource(
   series: Series,
@@ -241,8 +249,15 @@ export async function regionReviewCrop(
   line: LineRow,
   page: ImageRow | undefined,
   maskPng?: Buffer,
+  scale: ReviewCropZoom = 1,
 ) {
   const { raw, bubble } = await regionSource(series, episode, line, page);
   const crop = await cropBubble(raw, bubble);
-  return maskPng ? applyLetteringMask(crop, maskPng) : crop;
+  // Apply the native-size mask before resizing so brush coordinates stay exact.
+  const masked = maskPng ? await applyLetteringMask(crop, maskPng) : crop;
+  if (scale === 1) return masked;
+  return sharp(masked)
+    .resize(bubble.width * scale, bubble.height * scale, { kernel: sharp.kernel.lanczos3 })
+    .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
+    .toBuffer();
 }

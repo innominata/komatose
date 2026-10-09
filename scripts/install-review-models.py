@@ -15,6 +15,18 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from huggingface_hub import HfApi, snapshot_download
 
 MODELS = {
+    "hayai-ocr-v2.5-nova": (
+        "JustANormalTinkerer/hayai-ocr-v2.5-nova",
+        "39680c6b2cd1ed17bb15a4cfd9fc2273fdb4cfb6",
+        ["*.json", "*.py", "*.safetensors", "README.md"],
+        1,
+    ),
+    "pp-ocrv5-korean": (
+        "PaddlePaddle/korean_PP-OCRv5_mobile_rec",
+        "117ed1ae00c304d03012ba9d9e4234fae509d5b4",
+        ["config.json", "inference.json", "inference.pdiparams", "inference.yml"],
+        1,
+    ),
     "hayai-ocr-v2": (
         "JustANormalTinkerer/hayai-ocr-v2",
         "4cf1398f8d9a56a2d4bd7c1d2fb7648773660a62",
@@ -41,6 +53,73 @@ MODELS = {
     ),
 }
 DEFAULT_MODELS = ("hayai-ocr-v2", "paddleocr-vl-1.6", "qwen3-vl-8b")
+PPOCR_DETECTOR = ("PaddlePaddle/PP-OCRv5_server_det", "ca867c897ecbca8873081573a802ad70d499cb94")
+PPOCR_WEIGHT_SHA256 = {
+    "korean_PP-OCRv5_mobile_rec": "cac3e5f12cf04aaa77f6a5bc704e4e736ef2908476551891d84b41b4e9090462",
+    "PP-OCRv5_server_det": "183146fe9d9910352f68482f623bcbbb9fa7b9e8fa1463b9ad288cef00524d2d",
+}
+
+
+def install_paddle_cache(cache):
+    """Reuse official PaddleX assets offline after checking pinned weight hashes."""
+    plans = [("recognizer", MODELS["pp-ocrv5-korean"][:2]), ("detector", PPOCR_DETECTOR)]
+    verified = []
+    for part, (repo, revision) in plans:
+        folder = Path(cache) / repo.split("/")[-1]
+        files = {}
+        for name in MODELS["pp-ocrv5-korean"][2]:
+            path = folder / name
+            if not path.is_file() or path.stat().st_size == 0:
+                raise RuntimeError(f"Cached model file missing: {path}")
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            if name == "inference.pdiparams" and digest != PPOCR_WEIGHT_SHA256[repo.split("/")[-1]]:
+                raise RuntimeError(f"Cached weight SHA256 mismatch: {path}")
+            files[name] = {"bytes": path.stat().st_size, "sha256": digest}
+        verified.append((part, folder, {"repo": repo, "revision": revision, "files": files,
+                                       "source": "paddlex-cache", "configuration": "local-cache"}))
+    # Validate both models before replacing any destination assets.
+    record = {}
+    for part, folder, receipt in verified:
+        destination = DEST / "pp-ocrv5-korean" / part
+        destination.mkdir(parents=True, exist_ok=True)
+        for name in receipt["files"]:
+            shutil.copyfile(folder / name, destination / name)
+        record[part] = receipt
+    return record
+
+
+def verified_paddle_install(installed):
+    """Reuse complete, pinned receipt-verified assets without a download-service call."""
+    if not isinstance(installed, dict):
+        return None
+    record = installed.get("pp-ocrv5-korean")
+    if not isinstance(record, dict):
+        return None
+    plans = [("recognizer", MODELS["pp-ocrv5-korean"][:2]), ("detector", PPOCR_DETECTOR)]
+    for part, (repo, revision) in plans:
+        receipt = record.get(part, {})
+        if not isinstance(receipt, dict) or not isinstance(receipt.get("files"), dict):
+            return None
+        if receipt.get("repo") != repo or receipt.get("revision") != revision:
+            return None
+        for name in MODELS["pp-ocrv5-korean"][2]:
+            expected = receipt.get("files", {}).get(name, {})
+            if not isinstance(expected, dict):
+                return None
+            path = DEST / "pp-ocrv5-korean" / part / name
+            try:
+                if not expected.get("sha256") or path.stat().st_size != expected.get("bytes") or path.stat().st_size == 0:
+                    return None
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if digest != expected["sha256"]:
+                    return None
+                if name == "inference.pdiparams" and digest != PPOCR_WEIGHT_SHA256[repo.split("/")[-1]]:
+                    return None
+            except OSError:
+                return None
+    return record
 
 
 def retry(operation):
@@ -112,12 +191,13 @@ def main():
         choices=["default", "all", *MODELS],
         help="Install default Hayai+Paddle+Qwen3-VL-8B, all optional models, or one id. Repeatable.",
     )
+    parser.add_argument("--paddlex-cache", type=Path,
+                        help="Install only PP-OCRv5 Korean from a local official_models cache; pinned weights are checked without network access.")
     args = parser.parse_args()
     names = selected_names(args.models)
+    if args.paddlex_cache and names != ["pp-ocrv5-korean"]:
+        parser.error("--paddlex-cache requires --model pp-ocrv5-korean only")
     DEST.mkdir(parents=True, exist_ok=True)
-    need = sum(MODELS[name][3] for name in names)
-    if shutil.disk_usage(DEST).free < need * 1024**3:
-        raise SystemExit(f"At least {need} GiB free is required for {', '.join(names)}.")
     marker = DEST / "installed.json"
     installed = {}
     if marker.is_file():
@@ -125,10 +205,23 @@ def main():
             installed = json.loads(marker.read_text())
         except json.JSONDecodeError:
             installed = {}
+    existing_paddle = verified_paddle_install(installed) if "pp-ocrv5-korean" in names and not args.paddlex_cache else None
+    need = sum(MODELS[name][3] for name in names if name != "pp-ocrv5-korean" or existing_paddle is None)
+    if shutil.disk_usage(DEST).free < need * 1024**3:
+        raise SystemExit(f"At least {need} GiB free is required for {', '.join(names)}.")
     for name in names:
         repo, revision, patterns, _gib = MODELS[name]
-        installed[name] = install_one(name, repo, revision, patterns)
-        if name == "hayai-ocr-v2":
+        if name == "pp-ocrv5-korean":
+            if existing_paddle is not None:
+                print("PP-OCRv5 Korean is already installed; verified both models locally, no download needed", flush=True)
+                continue
+            installed[name] = install_paddle_cache(args.paddlex_cache) if args.paddlex_cache else {
+                "recognizer": install_one(f"{name}/recognizer", repo, revision, patterns),
+                "detector": install_one(f"{name}/detector", *PPOCR_DETECTOR, patterns),
+            }
+        else:
+            installed[name] = install_one(name, repo, revision, patterns)
+        if name in ("hayai-ocr-v2", "hayai-ocr-v2.5-nova"):
             install_hayai_vision(installed)
     marker.with_suffix(".tmp").write_text(json.dumps(installed, indent=2) + "\n")
     marker.with_suffix(".tmp").replace(marker)

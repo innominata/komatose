@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
 
   const SECTIONS: [string, string, string][] = [
+    ["series", "Series", "Language & reading"],
     ["chapter", "Chapter", "This chapter"],
     ["detection", "Text detection", "This chapter"],
     ["models", "AI models", "Series"],
@@ -25,13 +26,13 @@
   <aside class="drawer" aria-label="Settings" data-find="settings-drawer">
     <header>
       <strong>Settings</strong>
-      <span>Everything that shapes how this chapter is processed, in one place.</span>
+      <span>Series and chapter settings, in one place.</span>
       <button type="button" aria-label="Close settings" onclick={() => (section = null)}>×</button>
     </header>
     <div class="drawer-body">
       <nav>
         {#each SECTIONS as [id, label, scope] (id)}
-          <button type="button" class:on={section === id} aria-label={label} data-find={`set-${id === "colors" ? "colors" : id === "chapter" ? "chapter" : id === "detection" ? "detection" : id === "models" ? "models" : id === "guide" ? "guide" : id === "typography" ? "typography" : "credits"}`} onclick={() => (section = id)}>
+          <button type="button" class:on={section === id} aria-label={label} data-find={`set-${id}`} onclick={() => (section = id)}>
             <span>{label}</span>
             <small>{scope}</small>
           </button>

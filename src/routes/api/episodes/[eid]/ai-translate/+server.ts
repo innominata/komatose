@@ -37,14 +37,14 @@ import type { RequestHandler } from "./$types";
 export const GET: RequestHandler = async ({ locals, params }) => {
   try {
     const user = requireUser(locals.user);
-    const { episode } = await requireEpisodeAccess(user, params.eid);
+    const { episode, series } = await requireEpisodeAccess(user, params.eid);
     return json({
       job: jobSnapshot(episode.id),
       queue: regionQueueSnapshot(episode.id),
       engines: await engineReadiness(),
       detectors: listDetectors(),
       langs: OCR_LANGS.map((id) => ({ id, label: OCR_LANG_LABELS[id] })),
-      lang: parseOcrLang(undefined),
+      lang: preferences(episode.id, series.id).lang,
     });
   } catch (e) {
     return fail(statusOf(e), messageOf(e));
@@ -78,7 +78,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       return json(await startFillMissing({
         imageId: body.imageId as string | undefined,
         series, episode, user, engine: selected.engine,
-        lang: parseOcrLang(body.lang),
+        lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
         model: selected.model,
       }), { status: 202 });
     }
@@ -90,7 +90,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       return json(await startRereadBatch({
         imageId: body.imageId as string | undefined,
         series, episode, user, engine: selected.engine,
-        lang: parseOcrLang(body.lang),
+        lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
         model: selected.model,
       }), { status: 202 });
     }
@@ -110,7 +110,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
               ? body.expectedRevision
               : undefined,
           engine: selected.engine,
-          lang: parseOcrLang(body.lang),
+          lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
           model: selected.model,
         }),
         { status: 202 },
@@ -134,7 +134,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         w: Number(body.w),
         h: Number(body.h),
         engine: selected.engine,
-        lang: parseOcrLang(body.lang),
+        lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
         model: selected.model,
       });
       return json({ ok: true, ...queued }, { status: 202 });
@@ -152,7 +152,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       user,
       replace: pageIds.length ? true : Boolean(body.replace),
       engine: selected.engine,
-      lang: parseOcrLang(body.lang),
+      lang: parseOcrLang(body.lang ?? preferences(episode.id, series.id).lang),
       model: selected.model,
       imageIds: pageIds.length ? pageIds : undefined,
     });

@@ -1,5 +1,7 @@
+import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
 import { imageWorkflowModel, imageWorkflowChoices, runImageTaskFiles } from '$lib/server/modelImageWorkflow';
 import { DEFAULT_CHAT_MODEL_ID } from '$lib/modelDefaults';
+import { assignCharacter } from '$lib/server/characters';
 import { parseReviseCouncil, validateModel } from "$lib/server/regionAi";
 import { rowHasOperation } from '$lib/modelRegistry';
 import type { ProviderOperation } from '$lib/providerCatalog';
@@ -47,8 +49,11 @@ import {
   applyCleaning,
   approveAllGeometry,
   approveAllTranslations,
+  approveEverything,
+  saveSeriesReadingPreferences,
   keepCurrentLayouts,
   typesetRegions,
+  acceptedRegionKind,
   workflowState,
   fitRegion,
   readiness,
@@ -72,7 +77,7 @@ import { IMAGE_EDIT_MODELS, imageEditModelForMethod, normalizeImageEditPrompt } 
 import { normalizeCodexCleanPrompt } from "$lib/codexCleanPrompt";
 import { captureExport, isExportSnapshot, recallExport, startExport } from "$lib/server/finishedExport";
 import { completeOutstandingPages, forgetPageHistory } from "$lib/server/stepUndo";
-import { onlyStepCompleteBlockers } from "$lib/workflow";
+import { PAGE_STEPS, type PageStep } from "$lib/workflow";
 import { listImages, listLines, toLine } from "$lib/server/queries";
 import { uploadFont } from "$lib/server/typesetting";
 import { DATA_DIR } from "$lib/server/paths";
@@ -110,7 +115,7 @@ import { detectorSetupId, parseDetectorSetup } from "$lib/detectorSetup";
 import { komatoseGpuEnabled } from "$lib/server/gpuMode";
 import { CLEAN_INPAINT_MODELS } from "$lib/cleanMethods";
 import { isAdmin } from "$lib/server/access";
-import { isRegionKindId, normalizeRegionKinds } from "$lib/regionCatalog";
+import { normalizeRegionKinds } from "$lib/regionCatalog";
 import { DETECTORS, type Episode, type PublicUser, type Series } from "$lib/types";
 import { pickStyle, pageArtwork, pageRawArtwork, MASK_GROW_MAX, MASK_GROW_MIN, type PageData, type RegionData, type Point, type Preferences, type WorkflowDoc } from "$lib/workflow";
 import { saveRegionTextMask } from "$lib/server/textMask";
@@ -262,6 +267,9 @@ function parseRegionAi(ai: any): NonNullable<Preferences["regionAi"]> {
     reviewers: ai.reviewers.map(validateModel),
     reviseModels: parseReviseCouncil(ai.reviseModels),
     transcriptionModels,
+    ...(ai.transcriptionDecider !== undefined ? { transcriptionDecider: ai.transcriptionDecider === null ? null : validateModel(ai.transcriptionDecider) } : {}),
+    ...(ai.deciderMinProbability !== undefined ? { deciderMinProbability: decisionThreshold(ai.deciderMinProbability, DECIDER_MIN_PROBABILITY) } : {}),
+    ...(ai.deciderMinMargin !== undefined ? { deciderMinMargin: decisionThreshold(ai.deciderMinMargin, DECIDER_MIN_MARGIN) } : {}),
   };
   if (regionAi.transcriptionModels.length > MAX_TRANSCRIPTION_MODELS)
     throw new WorkflowError(`Choose up to ${MAX_TRANSCRIPTION_MODELS} transcription models`);
@@ -343,18 +351,32 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     let b = await request.json();
     let action = String(b.action);
     if (action === "mark-all-complete") {
+      const step = b.step === undefined ? undefined : String(b.step) as PageStep;
+      if (step !== undefined && !PAGE_STEPS.includes(step)) throw new WorkflowError("Unknown workflow step");
+      if (!step || step === "translate" || step === "review") requireEdit(user);
+      if (!step || step === "clean" || step === "typeset") requireClean(user);
+      assertEpisodeIdle(episode.id);
+      if (listJobs(episode.id).some(j => ["running", "queued", "cancelling"].includes(j.state)))
+        throw new WorkflowError("Wait for chapter jobs to finish before marking pages done", 409);
+      return json(completeOutstandingPages(episode.id, step));
+    }
+    if (action === "approve-everything") {
       requireEdit(user);
       requireClean(user);
-      const issues = readiness(series, episode, await listImages(episode.id), await listLines(episode.id));
-      if (!onlyStepCompleteBlockers(issues))
-        throw new WorkflowError("Resolve the other export issues before marking every page complete", 422);
-      return json(completeOutstandingPages(episode.id));
+      assertEpisodeIdle(episode.id);
+      if (listJobs(episode.id).some(j => ["running", "queued", "cancelling"].includes(j.state)))
+        throw new WorkflowError("Wait for chapter jobs to finish before approving everything", 409);
+      return json(approveEverything(episode.id, user.id));
     }
     if (action === "forget-page-history") {
       const stepName = String(b.step || "");
       if (stepName === "clean" || stepName === "typeset") requireClean(user);
       else if (stepName === "translate" || stepName === "review") requireEdit(user);
       else throw new WorkflowError("Unknown workflow step");
+      if (stepName === 'clean' && listJobs(episode.id).some(j =>
+        ['mask', 'clean'].includes(j.kind) && ['running', 'queued', 'cancelling'].includes(j.state) &&
+        (j.payload?.request?.imageId === b.imageId || j.payload?.imageId === b.imageId)))
+        throw new WorkflowError('Wait for this page’s mask or cleaning job to finish before marking it done.', 409);
       return json(forgetPageHistory(episode.id, String(b.imageId || ""), stepName));
     }
     if (action === "export") {
@@ -646,20 +668,24 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       broadcast(episode.id, { type: "line:upsert", line: updated });
       return json({ doc, line: updated });
     }
-    if (action === "remove-page-regions") {
+    if (action === "remove-page-regions" || action === "remove-selected-page-regions") {
       requireEdit(user);
       assertEpisodeIdle(episode.id);
-      const imageId = String(b.imageId || "");
-      if (!(await listImages(episode.id)).some((img) => img.id === imageId))
+      const input = action === "remove-page-regions" ? [String(b.imageId || "")] : b.imageIds;
+      if (!Array.isArray(input) || !input.length || input.some(id => typeof id !== "string" || !id))
+        throw new WorkflowError("Select at least one page");
+      const imageIds = [...new Set<string>(input)];
+      const pages = new Set((await listImages(episode.id)).map(img => img.id));
+      if (imageIds.some(id => !pages.has(id)))
         throw new WorkflowError("Page not found", 404);
-      const ids = removePageRegions(episode.id, imageId);
+      const ids = removePageRegions(episode.id, imageIds);
       if (ids.length) {
         const entry = await logActivity({
           seriesId: series.id,
           episodeId: episode.id,
           userId: user.id,
           action: "deleted_page_regions",
-          payload: { imageId, ids },
+          payload: action === "remove-page-regions" ? { imageId: imageIds[0], ids } : { imageIds, ids },
         });
         broadcast(episode.id, { type: "activity", entry });
       }
@@ -714,6 +740,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         decision: b.decision, force: !!b.force, engine: model?.engine, model: model?.model });
       return json({ ok: true, ...result });
     }
+    if (action === 'assign-character') {
+      requireEdit(user);
+      assertEpisodeIdle(episode.id);
+      return json({ doc: assignCharacter(episode.id, series.id, String(b.id || ''), b.characterId, b.expectedRevision) });
+    }
     if (action === "preferences") {
       if (b.scope === "series" && b.data && "regionKinds" in b.data) {
         if (!isAdmin(user) && series.createdBy !== user.id)
@@ -731,6 +762,10 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         });
       }
       if (b.scope === "series") {
+        if (b.data && ("lang" in b.data || "direction" in b.data)) {
+          requireEdit(user);
+          return json({ doc: saveSeriesReadingPreferences(series.id, b.expectedRevision, b.data) });
+        }
         if (b.data?.regionAi) {
           requireEdit(user);
           return json({
@@ -747,13 +782,15 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         });
       }
       requireEdit(user);
+      if (b.data && ("lang" in b.data || "direction" in b.data))
+        throw new WorkflowError("Language and reading direction belong to the series. Save them in Series settings.");
+      if (b.data && ('styles' in b.data || 'style' in b.data))
+        throw new WorkflowError('Category styles belong to the series. Save them in Series type settings.');
       const id = `chapter:${episode.id}`;
       const current = getDoc<Partial<Preferences>>(id, {});
       const data = { ...current.data, ...b.data };
-      if (data.lang && !["japanese", "korean"].includes(data.lang))
-        throw new WorkflowError("Invalid language");
-      if (data.direction && !["rtl", "ltr"].includes(data.direction))
-        throw new WorkflowError("Invalid reading direction");
+      delete data.lang;
+      delete data.direction;
       if (b.data && "detector" in b.data) {
         if (!(DETECTORS as string[]).includes(String(b.data.detector)))
           throw new WorkflowError("Invalid detector");
@@ -785,18 +822,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         throw new WorkflowError("Invalid DPI");
       if (b.data?.regionAi) {
         data.regionAi = parseRegionAi(b.data.regionAi);
-      }
-      if (data.style) data.style = pickStyle(data.style);
-      if (data.styles) {
-        const styles: Preferences["styles"] = {};
-        for (const [key, style] of Object.entries(data.styles)) {
-          // Any well-formed region type id, including a series-added type the
-          // series later removed but whose regions still carry a style.
-          if (!isRegionKindId(key))
-            throw new WorkflowError("Invalid text category");
-          styles[key] = pickStyle(style);
-        }
-        data.styles = styles;
       }
       return json({
         doc: putDoc(episode.id, id, data, b.expectedRevision),
@@ -1006,6 +1031,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       requireClean(user);
       if (!["page", "chapter"].includes(b.scope))
         throw new WorkflowError("Choose page or chapter");
+      const savedStyle = b.savedStyle === true;
+      if (savedStyle && (b.scope !== 'chapter' || typeof b.lineType !== 'string' || !acceptedRegionKind(series.id, b.lineType)))
+        throw new WorkflowError('Choose a chapter region type to refit from its saved series style.');
       if (
         listJobs(episode.id).some(
           (j) =>
@@ -1027,6 +1055,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           l.sourceState !== "ignored" &&
           l.body.trim(),
       );
+      const selectedTargets = savedStyle ? targets.filter(l => l.lineType === b.lineType) : targets;
       const jobId = createJob(episode.id, "typeset-all", { request: b });
       const abort = new AbortController();
       aborts.set(jobId, abort);
@@ -1039,7 +1068,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
             series,
             episode,
             pages,
-            targets,
+            selectedTargets,
             abort.signal,
             (progress) => {
               completed = progress.completed;
@@ -1047,11 +1076,13 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
               errors.splice(0, errors.length, ...progress.errors);
               updateJob(jobId, "running", progress);
             },
+            undefined,
+            { savedStyle },
           );
           updateJob(jobId, abort.signal.aborted ? "cancelled" : "completed", {
             completed,
             skipped,
-            total: targets.length,
+            total: selectedTargets.length,
             errors,
           });
         } catch (e) {

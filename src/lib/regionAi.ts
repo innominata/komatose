@@ -1,10 +1,10 @@
+import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from './decider';
 import { DEFAULT_CHAT_MODEL_ID } from './modelDefaults';
 import type { TaskEngine } from "./aiTasks";
 import { selectProvidersForOperation, singleAvailableEngineFor, type LiveProviderEngine, type ProviderOperation, type ProviderSelectionOption } from "./providerCatalog";
 import {
   DEFAULT_TRANSCRIPTION_MODEL_IDS,
   hydrateTaskEngine,
-  isOnDemandAccess,
   resolveAssistant,
 } from "./modelRegistry";
 import { isProofreaderId } from "./proofreaders";
@@ -25,6 +25,10 @@ export type RegionAiSettings = {
   /** Saved Revise English council. Empty means Translation plus Proofreading. */
   reviseModels: TaskEngine[];
   transcriptionModels: string[];
+  /** Unset follows the installed default; null explicitly disables deciding. */
+  transcriptionDecider?: TaskEngine | null;
+  deciderMinProbability?: number;
+  deciderMinMargin?: number;
 };
 
 export function regionAiSettings(
@@ -45,6 +49,9 @@ export function regionAiSettings(
       ? raw.reviseModels.map((item) => hydrateTaskEngine(item)).slice(0, MAX_REVISE_MODELS)
       : [],
     transcriptionModels: normalizeTranscriptionModels(raw?.transcriptionModels),
+    ...(raw?.transcriptionDecider !== undefined ? { transcriptionDecider: raw.transcriptionDecider === null ? null : hydrateTaskEngine(raw.transcriptionDecider) } : {}),
+    ...(raw?.deciderMinProbability !== undefined ? { deciderMinProbability: decisionThreshold(raw.deciderMinProbability, DECIDER_MIN_PROBABILITY) } : {}),
+    ...(raw?.deciderMinMargin !== undefined ? { deciderMinMargin: decisionThreshold(raw.deciderMinMargin, DECIDER_MIN_MARGIN) } : {}),
   };
 }
 
@@ -208,16 +215,38 @@ export function reviseCouncil(
   return saved.length ? saved : defaultReviseModels(settings.translate, settings.proofread);
 }
 
-/** Paid/remote reviews must come from the Run button for that exact model. */
-export function isOnDemandReviewer(model: TaskEngine | undefined, live: readonly { id: string; access?: string }[] = []): boolean {
-  if (!model?.engine) return false;
-  const access = live.find(row => row.id === model.engine)?.access;
-  if (access) return access !== 'local_http';
+type ReviewerRuntime = {
+  id: string;
+  access?: string;
+  autoRun?: boolean;
+  cliAdapter?: string;
+  slug?: string;
+};
+
+function reviewerRuntime(model: TaskEngine | undefined, live: readonly ReviewerRuntime[]) {
+  if (!model?.engine) return undefined;
+  const row = live.find(row => row.id === model.engine)
+    ?? live.find(row => row.access === 'cli' && row.cliAdapter === model.engine && row.slug === (model.model || ''));
+  if (row?.access) return row;
   try {
-    return isOnDemandAccess(resolveAssistant(model.engine, model.model, undefined, false).row);
+    return resolveAssistant(model.engine, model.model, undefined, false).row;
   } catch {
-    return true;
+    return { access: 'unknown', autoRun: false };
   }
+}
+
+/** Non-local models retain a Run button even when Autorun is enabled. */
+export function isNonLocalReviewer(model: TaskEngine | undefined, live: readonly ReviewerRuntime[] = []): boolean {
+  const row = reviewerRuntime(model, live);
+  return !!row && row.access !== 'local_http';
+}
+
+/** Non-local reviews require Run unless an administrator opted the model into Autorun. */
+export function isOnDemandReviewer(model: TaskEngine | undefined, live: readonly ReviewerRuntime[] = []): boolean {
+  const row = reviewerRuntime(model, live);
+  // A saved preference authorizes this row's model, not an arbitrary slug override.
+  const registeredTarget = !model?.model || (row && 'slug' in row && row.slug === model.model);
+  return !!row && row.access !== 'local_http' && (row.autoRun !== true || !registeredTarget);
 }
 
 /** Region AI settings fields mapped to catalog operations they actually run. */
@@ -228,6 +257,7 @@ export const REGION_AI_FIELD_OPERATIONS = {
   proofread: ["proofreadEnglish", "pageImageProofread"],
   enquire: "advisory",
   reviewers: "sourceReview",
+  transcriptionDecider: "sourceDecide",
 } as const satisfies Record<string, ProviderOperation | readonly ProviderOperation[]>;
 
 export type RegionAiField = keyof typeof REGION_AI_FIELD_OPERATIONS;
