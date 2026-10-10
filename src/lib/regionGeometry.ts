@@ -24,6 +24,21 @@ export function regionRectangle(line: Bounds): Point[] {
   return [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
 }
 
+/** Slide a polygon without changing its shape. The whole shape stays inside the page. */
+export function translatePolygon(points: Point[], dx: number, dy: number): Point[] {
+  if (!points.length) return [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const x = Math.max(-minX, Math.min(1 - maxX, dx));
+  const y = Math.max(-minY, Math.min(1 - maxY, dy));
+  return points.map(p => ({ x: p.x + x, y: p.y + y }));
+}
+
 /** Interior prompt for SAM: draft points if the user placed any, otherwise the box centre. */
 export function bubbleFitPoints(line: Bounds, draft: Point[] = []): Point[] {
   if (draft.length) return draft;

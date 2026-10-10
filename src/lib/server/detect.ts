@@ -43,6 +43,8 @@ export type DetectedRegion = {
   kind: "bubble" | "free" | "unknown";
   score: number;
   polygon?: Point[];
+  /** A thin black rectangular border frames this region (a caption box). */
+  boxed?: boolean;
   geometryConfidence?: number;
   provenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubble?: SpeechBubble;
@@ -301,6 +303,7 @@ export async function detectRegions(
         if (region.polygon) continue; // Preserve COO's source text contour.
         const found = result.regions?.[i];
         region.polygon = automaticRegionPolygon(region.place, found?.polygon);
+        if (found?.boxed) region.boxed = true;
         region.geometryConfidence =
           region.polygon === found?.polygon ? found.confidence : 0;
       }

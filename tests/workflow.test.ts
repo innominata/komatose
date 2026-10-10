@@ -2462,7 +2462,7 @@ test("HTTP translation retries omitted indexes and leaves the rest blank", async
 });
 
 test("one exception queue walks OCR, blank English, unapproved translations, then masks, then overflow", async () => {
-  const { chapterExceptions, nextException, nextTranslationReview } = await import("../src/lib/exceptions");
+  const { chapterExceptions, nextException, nextTranslationReview, pageTranslationsSettled } = await import("../src/lib/exceptions");
   const { failedOcrConsensus } = await import("../src/lib/ocrConsensus");
   const failed = failedOcrConsensus("Paint or detect lettering before sending a masked crop");
   assert.equal(failed.agreed, false);
@@ -2511,6 +2511,18 @@ test("one exception queue walks OCR, blank English, unapproved translations, the
   assert.equal(nextTranslationReview(reviewOrder, "l1")?.id, "l3");
   assert.equal(nextTranslationReview(reviewOrder, "l3")?.id, "l1");
   assert.equal(nextTranslationReview([reviewOrder[1]], "l2"), undefined);
+  const settled = [
+    line("l1", "p0", { source: "待って", body: "Wait.", status: "approved" }),
+    line("l2", "p0", { source: "sfx", body: "Bang.", sourceState: "ignored" }),
+    line("l3", "p1", { source: "行け", body: "Go!" }),
+  ];
+  assert.equal(pageTranslationsSettled(settled, "p0"), true);
+  assert.equal(pageTranslationsSettled(settled, "p1"), false);
+  assert.equal(pageTranslationsSettled(settled, "p2"), false);
+  assert.equal(pageTranslationsSettled([
+    line("l1", "p0", { source: "待って", body: "Wait.", status: "approved" }),
+    line("l2", "p0", { source: "", body: "Wait.", status: "approved" }),
+  ], "p0"), false);
 });
 
 test("review flags regions that have no source or English text", async () => {

@@ -98,8 +98,10 @@ Browser and image-only proofreaders review the current page's raw source and typ
 English using the Page proofreader workflow. Text models suggest English corrections
 through the text proofreading job. A page-image proofreader does not need a separate
 English-text test. Users with translation/review permissions can run either workflow.
-**Proofread entire script** is a separate button in the Review stage bar and the
-Translate/Review More menu. It opens a text-model picker and proofreads all pages in
+**Proofread English** is on the Review stage bar only while a page is selected,
+and it stays in the Translate More menu. **Proofread entire script** is on the
+Review stage bar and in More only while **Whole chapter** is selected. It also
+stays in the Translate More menu. It opens a text-model picker and proofreads all pages in
 the current chapter, including already approved lines. It saves corrections as
 suggestions for review and keeps the saved page proofreader selection unchanged.
 The requests contain original text, current English, saved page descriptions,

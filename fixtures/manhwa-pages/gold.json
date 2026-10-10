@@ -1,0 +1,1279 @@
+[
+  {
+    "id": "001",
+    "file": "fixtures/manhwa-pages/001.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Rooftop conversation: dialogue and outlined sigh",
+    "lines": [
+      {
+        "id": "001-understand",
+        "kind": "speech",
+        "boxes": [
+          [
+            85,
+            81,
+            286,
+            193
+          ]
+        ],
+        "source": "…그래서 네가 그렇게 생각하는 거구나.",
+        "en": "…So that’s why you feel that way.",
+        "literal": "…So that is why you think that way.",
+        "keys": [
+          [
+            "why"
+          ],
+          [
+            "feel",
+            "think"
+          ]
+        ]
+      },
+      {
+        "id": "001-now",
+        "kind": "speech",
+        "boxes": [
+          [
+            703,
+            451,
+            864,
+            566
+          ]
+        ],
+        "source": "응. 지금은 그렇게 생각해.",
+        "en": "Yeah. That’s how I feel right now.",
+        "literal": "Yes. Right now I think that way.",
+        "keys": [
+          [
+            "yeah",
+            "yes"
+          ],
+          [
+            "now"
+          ]
+        ]
+      },
+      {
+        "id": "001-hurt",
+        "kind": "speech",
+        "boxes": [
+          [
+            676,
+            807,
+            865,
+            963
+          ]
+        ],
+        "source": "…좀 서운하다. 적어도 나한테는 먼저 말해줬으면 좋았는데.",
+        "en": "…That hurts a little. I wish you’d at least told me first.",
+        "literal": "…I feel a little hurt. I wish you had at least told me first.",
+        "keys": [
+          [
+            "hurt",
+            "upset",
+            "disappoint"
+          ],
+          [
+            "told",
+            "tell"
+          ],
+          [
+            "first"
+          ]
+        ]
+      },
+      {
+        "id": "001-sigh",
+        "kind": "sfx",
+        "boxes": [
+          [
+            48,
+            1002,
+            128,
+            1063
+          ]
+        ],
+        "source": "하아..",
+        "en": "Sigh…",
+        "literal": "Haa… (sigh)",
+        "keys": [
+          [
+            "sigh",
+            "haa"
+          ]
+        ]
+      },
+      {
+        "id": "001-sorry",
+        "kind": "speech",
+        "boxes": [
+          [
+            133,
+            1328,
+            265,
+            1481
+          ]
+        ],
+        "source": "미안. 나도 어떻게 말해야 할지 잘 몰랐어.",
+        "en": "Sorry. I didn’t really know how to tell you either.",
+        "literal": "Sorry. I also did not really know how I should say it.",
+        "keys": [
+          [
+            "sorry"
+          ],
+          [
+            "know"
+          ],
+          [
+            "tell",
+            "say"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "002",
+    "file": "fixtures/manhwa-pages/002.png",
+    "width": 941,
+    "height": 1672,
+    "note": "School hallway: thoughts, classroom sign, turn SFX",
+    "lines": [
+      {
+        "id": "002-room",
+        "kind": "sign",
+        "boxes": [
+          [
+            398,
+            72,
+            477,
+            111
+          ]
+        ],
+        "source": "2-3",
+        "latin": true
+      },
+      {
+        "id": "002-distant-sign",
+        "kind": "sign",
+        "boxes": [
+          [
+            498,
+            205,
+            546,
+            233
+          ]
+        ],
+        "source": "",
+        "ocr": false,
+        "note": "Tiny distant classroom lettering cannot be transcribed reliably."
+      },
+      {
+        "id": "002-there",
+        "kind": "speech",
+        "boxes": [
+          [
+            291,
+            232,
+            430,
+            315
+          ]
+        ],
+        "source": "…어, 저기 있다.",
+        "en": "…Oh, there he is.",
+        "literal": "…Oh, he is over there.",
+        "keys": [
+          [
+            "oh"
+          ],
+          [
+            "there"
+          ]
+        ]
+      },
+      {
+        "id": "002-talk",
+        "kind": "speech",
+        "boxes": [
+          [
+            681,
+            739,
+            833,
+            861
+          ]
+        ],
+        "source": "오늘은 말이라도 걸어볼까…?",
+        "en": "Should I at least try talking to him today…?",
+        "literal": "Shall I at least try starting a conversation today…?",
+        "keys": [
+          [
+            "today"
+          ],
+          [
+            "talk",
+            "conversation"
+          ]
+        ]
+      },
+      {
+        "id": "002-turn",
+        "kind": "sfx",
+        "boxes": [
+          [
+            60,
+            1182,
+            194,
+            1369
+          ]
+        ],
+        "source": "휙",
+        "en": "Swish",
+        "literal": "Swish (turning quickly)",
+        "keys": [
+          [
+            "swish",
+            "turn",
+            "whoosh"
+          ]
+        ]
+      },
+      {
+        "id": "002-reaction",
+        "kind": "speech",
+        "boxes": [
+          [
+            787,
+            1428,
+            842,
+            1470
+          ]
+        ],
+        "source": "…?"
+      }
+    ]
+  },
+  {
+    "id": "003",
+    "file": "fixtures/manhwa-pages/003.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Cafeteria: narration, free dialogue, small sign and laughter",
+    "lines": [
+      {
+        "id": "003-mood",
+        "kind": "caption",
+        "boxes": [
+          [
+            104,
+            106,
+            387,
+            240
+          ]
+        ],
+        "source": "요즘 따라 괜히 학교 분위기가 어수선하다.",
+        "en": "The atmosphere at school has been strangely unsettled lately.",
+        "literal": "Lately, for some reason, the atmosphere at school is unsettled.",
+        "keys": [
+          [
+            "school"
+          ],
+          [
+            "lately",
+            "recent"
+          ],
+          [
+            "unsettled",
+            "restless",
+            "chaotic",
+            "uneasy"
+          ]
+        ]
+      },
+      {
+        "id": "003-rumour",
+        "kind": "speech",
+        "boxes": [
+          [
+            59,
+            344,
+            269,
+            486
+          ]
+        ],
+        "source": "야 진짜야? 그 둘이 같이 있었다고?",
+        "en": "Hey, seriously? Those two were together?",
+        "literal": "Hey, is it true? Those two were together?",
+        "keys": [
+          [
+            "two"
+          ],
+          [
+            "together"
+          ]
+        ]
+      },
+      {
+        "id": "003-couple",
+        "kind": "speech",
+        "boxes": [
+          [
+            436,
+            375,
+            720,
+            477
+          ]
+        ],
+        "source": "야 몰라~ 완전 잘 어울리던데?",
+        "en": "Who knows~ They looked really good together, though.",
+        "literal": "Hey, I don’t know~ They really suited each other, though?",
+        "keys": [
+          [
+            "know"
+          ],
+          [
+            "together",
+            "suit"
+          ]
+        ]
+      },
+      {
+        "id": "003-poster",
+        "kind": "sign",
+        "boxes": [
+          [
+            771,
+            318,
+            833,
+            378
+          ]
+        ],
+        "source": "맛있게 먹어요!",
+        "en": "Enjoy your meal!",
+        "literal": "Eat deliciously!",
+        "keys": [
+          [
+            "enjoy",
+            "eat"
+          ]
+        ]
+      },
+      {
+        "id": "003-laugh",
+        "kind": "sfx",
+        "boxes": [
+          [
+            612,
+            496,
+            653,
+            542
+          ]
+        ],
+        "source": "",
+        "ocr": false,
+        "note": "Stylized generated glyphs do not support an unambiguous transcription."
+      },
+      {
+        "id": "003-silence",
+        "kind": "speech",
+        "boxes": [
+          [
+            874,
+            568,
+            901,
+            586
+          ]
+        ],
+        "source": "…"
+      },
+      {
+        "id": "003-hmm",
+        "kind": "sfx",
+        "boxes": [
+          [
+            851,
+            621,
+            896,
+            655
+          ]
+        ],
+        "source": "",
+        "ocr": false,
+        "note": "Stylized generated glyphs do not support an unambiguous transcription."
+      },
+      {
+        "id": "003-worry",
+        "kind": "caption",
+        "boxes": [
+          [
+            632,
+            1295,
+            900,
+            1433
+          ]
+        ],
+        "source": "별일 아닌 얘기일 수도 있는데 괜히 신경이 쓰인다.",
+        "en": "It might be nothing, but I can’t help worrying about it.",
+        "literal": "It might be an insignificant story, but for some reason it bothers me.",
+        "keys": [
+          [
+            "nothing",
+            "insignificant",
+            "trivial",
+            "big deal"
+          ],
+          [
+            "worry",
+            "bother",
+            "mind",
+            "concern"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "004",
+    "file": "fixtures/manhwa-pages/004.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Dark room: reflective captions and white lettering",
+    "lines": [
+      {
+        "id": "004-alone",
+        "kind": "caption",
+        "boxes": [
+          [
+            318,
+            169,
+            629,
+            327
+          ]
+        ],
+        "source": "지금까진 나 혼자만의 일이 아니었으면 좋겠어.",
+        "en": "I hope I haven’t been the only one feeling this way all this time.",
+        "literal": "I hope that, up until now, this has not been something for me alone.",
+        "keys": [
+          [
+            "hope"
+          ],
+          [
+            "only",
+            "alone"
+          ]
+        ]
+      },
+      {
+        "id": "004-tap",
+        "kind": "sfx",
+        "boxes": [
+          [
+            240,
+            635,
+            411,
+            894
+          ]
+        ],
+        "source": "탁",
+        "en": "Tap",
+        "literal": "Tak (a sharp tap)",
+        "keys": [
+          [
+            "tap",
+            "tak",
+            "click"
+          ]
+        ]
+      },
+      {
+        "id": "004-listen",
+        "kind": "caption",
+        "boxes": [
+          [
+            361,
+            1340,
+            592,
+            1498
+          ]
+        ],
+        "source": "이번에는 꼭 네 얘기도 들어주고 싶어.",
+        "en": "This time, I really want to hear your side too.",
+        "literal": "This time, I definitely want to listen to your story too.",
+        "keys": [
+          [
+            "this time"
+          ],
+          [
+            "hear",
+            "listen"
+          ],
+          [
+            "you",
+            "your"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "005",
+    "file": "fixtures/manhwa-pages/005.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Rainy bus stop: dialogue, startle and distant signage",
+    "lines": [
+      {
+        "id": "005-wait",
+        "kind": "speech",
+        "boxes": [
+          [
+            485,
+            102,
+            610,
+            175
+          ]
+        ],
+        "source": "많이 기다렸지?",
+        "en": "You’ve been waiting a while, haven’t you?",
+        "literal": "You waited a long time, right?",
+        "keys": [
+          [
+            "wait"
+          ],
+          [
+            "while",
+            "long"
+          ]
+        ]
+      },
+      {
+        "id": "005-startle",
+        "kind": "sfx",
+        "boxes": [
+          [
+            23,
+            914,
+            103,
+            980
+          ]
+        ],
+        "source": "흠칫",
+        "en": "Flinch",
+        "literal": "A startled flinch",
+        "keys": [
+          [
+            "flinch",
+            "startl"
+          ]
+        ]
+      },
+      {
+        "id": "005-arrived",
+        "kind": "speech",
+        "boxes": [
+          [
+            749,
+            934,
+            870,
+            1008
+          ]
+        ],
+        "source": "아니, 방금 왔어.",
+        "en": "No, I just got here.",
+        "literal": "No, I arrived just now.",
+        "keys": [
+          [
+            "no"
+          ],
+          [
+            "just"
+          ],
+          [
+            "here",
+            "arriv",
+            "got"
+          ]
+        ]
+      },
+      {
+        "id": "005-thanks",
+        "kind": "speech",
+        "boxes": [
+          [
+            544,
+            1258,
+            743,
+            1334
+          ]
+        ],
+        "source": "…고마워. 우산 가져와줘서.",
+        "en": "…Thanks for bringing an umbrella.",
+        "literal": "…Thank you. For bringing an umbrella.",
+        "keys": [
+          [
+            "thank"
+          ],
+          [
+            "umbrella"
+          ]
+        ]
+      },
+      {
+        "id": "005-bus-board",
+        "kind": "sign",
+        "boxes": [
+          [
+            132,
+            0,
+            178,
+            27
+          ]
+        ],
+        "source": "",
+        "ocr": false,
+        "note": "Bus-stop heading is clipped at the top edge."
+      },
+      {
+        "id": "005-routes",
+        "kind": "sign",
+        "boxes": [
+          [
+            98,
+            27,
+            132,
+            206
+          ]
+        ],
+        "source": "301 302 302 303 320",
+        "latin": true
+      },
+      {
+        "id": "005-timetable",
+        "kind": "sign",
+        "boxes": [
+          [
+            137,
+            43,
+            213,
+            246
+          ]
+        ],
+        "source": "",
+        "ocr": false,
+        "note": "Generated timetable marks resemble text but do not support a reliable reading."
+      }
+    ]
+  },
+  {
+    "id": "006",
+    "file": "fixtures/manhwa-pages/006.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Convenience store: casual dialogue and small expressive lettering",
+    "lines": [
+      {
+        "id": "006-drink",
+        "kind": "speech",
+        "boxes": [
+          [
+            313,
+            77,
+            485,
+            154
+          ]
+        ],
+        "source": "뭐 마실 거야? 또 딸기우유?",
+        "en": "What are you going to drink? Strawberry milk again?",
+        "literal": "What will you drink? Strawberry milk again?",
+        "keys": [
+          [
+            "drink"
+          ],
+          [
+            "strawberry"
+          ],
+          [
+            "milk"
+          ],
+          [
+            "again"
+          ]
+        ]
+      },
+      {
+        "id": "006-reach",
+        "kind": "sfx",
+        "boxes": [
+          [
+            794,
+            258,
+            839,
+            322
+          ]
+        ],
+        "source": "슥",
+        "en": "Slide",
+        "literal": "Seuk (a smooth reaching motion)",
+        "keys": [
+          [
+            "slide",
+            "reach",
+            "swish",
+            "seuk"
+          ]
+        ]
+      },
+      {
+        "id": "006-caught",
+        "kind": "speech",
+        "boxes": [
+          [
+            117,
+            628,
+            270,
+            826
+          ]
+        ],
+        "source": "…어? 들켰네. 역시 이게 제일 맛있어.",
+        "en": "…Huh? You caught me. This really is the best.",
+        "literal": "…Oh? I was found out. As expected, this tastes the best.",
+        "keys": [
+          [
+            "caught",
+            "found out"
+          ],
+          [
+            "best"
+          ]
+        ]
+      },
+      {
+        "id": "006-unchanged",
+        "kind": "speech",
+        "boxes": [
+          [
+            537,
+            1003,
+            765,
+            1207
+          ]
+        ],
+        "source": "초등학생 때부터 지금까지 변함없네. 진짜 딸기우유 평생 마실 거지?",
+        "en": "You haven’t changed since elementary school. You really are going to drink strawberry milk for the rest of your life, aren’t you?",
+        "literal": "You have not changed from elementary school until now. You really will drink strawberry milk your whole life, right?",
+        "keys": [
+          [
+            "elementary",
+            "primary"
+          ],
+          [
+            "chang"
+          ],
+          [
+            "strawberry"
+          ],
+          [
+            "life"
+          ]
+        ]
+      },
+      {
+        "id": "006-haha",
+        "kind": "sfx",
+        "boxes": [
+          [
+            84,
+            1182,
+            147,
+            1226
+          ]
+        ],
+        "source": "하하",
+        "en": "Haha",
+        "literal": "Haha",
+        "keys": [
+          [
+            "haha",
+            "ha ha"
+          ]
+        ]
+      },
+      {
+        "id": "006-yes",
+        "kind": "speech",
+        "boxes": [
+          [
+            108,
+            1413,
+            291,
+            1495
+          ]
+        ],
+        "source": "응. 평생 마실 거야.",
+        "en": "Yep. For the rest of my life.",
+        "literal": "Yes. I will drink it my whole life.",
+        "keys": [
+          [
+            "yep",
+            "yes",
+            "yeah"
+          ],
+          [
+            "life"
+          ]
+        ]
+      },
+      {
+        "id": "006-gasp",
+        "kind": "sfx",
+        "boxes": [
+          [
+            564,
+            1373,
+            637,
+            1443
+          ]
+        ],
+        "source": "헉!",
+        "en": "Gasp!",
+        "literal": "Heok! (gasp)",
+        "keys": [
+          [
+            "gasp",
+            "heok"
+          ]
+        ]
+      },
+      {
+        "id": "006-delicious",
+        "kind": "speech",
+        "boxes": [
+          [
+            725,
+            1453,
+            837,
+            1533
+          ]
+        ],
+        "source": "뭐 어때~ 맛있는걸.",
+        "en": "So what~ It’s delicious.",
+        "literal": "What does it matter~ It is delicious.",
+        "keys": [
+          [
+            "delicious",
+            "tasty",
+            "good"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "007",
+    "file": "fixtures/manhwa-pages/007.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Apartment at night: narration, phone text and outlined notification",
+    "lines": [
+      {
+        "id": "007-stairs",
+        "kind": "caption",
+        "boxes": [
+          [
+            95,
+            77,
+            312,
+            203
+          ]
+        ],
+        "source": "밤 11시가 넘은 아파트 계단은 유난히 조용했다.",
+        "en": "The apartment stairwell was unusually quiet after eleven at night.",
+        "literal": "The apartment stairs, past 11 p.m., were especially quiet.",
+        "keys": [
+          [
+            "eleven",
+            "11"
+          ],
+          [
+            "quiet"
+          ],
+          [
+            "apartment"
+          ]
+        ]
+      },
+      {
+        "id": "007-home",
+        "kind": "speech",
+        "boxes": [
+          [
+            720,
+            144,
+            890,
+            216
+          ]
+        ],
+        "source": "다 왔네… 빨리 들어가자.",
+        "en": "I’m here… Let’s get inside quickly.",
+        "literal": "I have arrived… Let us go inside quickly.",
+        "keys": [
+          [
+            "inside",
+            "in"
+          ],
+          [
+            "quick",
+            "hurry"
+          ]
+        ]
+      },
+      {
+        "id": "007-doors",
+        "kind": "sign",
+        "boxes": [
+          [
+            542,
+            249,
+            566,
+            267
+          ],
+          [
+            649,
+            225,
+            672,
+            243
+          ]
+        ],
+        "source": "401",
+        "latin": true
+      },
+      {
+        "id": "007-unknown",
+        "kind": "sign",
+        "boxes": [
+          [
+            383,
+            662,
+            546,
+            729
+          ]
+        ],
+        "source": "알 수 없는 번호",
+        "en": "Unknown number",
+        "literal": "A number that cannot be known",
+        "keys": [
+          [
+            "unknown"
+          ],
+          [
+            "number"
+          ]
+        ]
+      },
+      {
+        "id": "007-message",
+        "kind": "caption",
+        "boxes": [
+          [
+            280,
+            771,
+            424,
+            872
+          ]
+        ],
+        "source": "지금도 계단에 있어?",
+        "en": "Are you still on the stairs?",
+        "literal": "Are you on the stairs even now?",
+        "keys": [
+          [
+            "still",
+            "now"
+          ],
+          [
+            "stair"
+          ]
+        ]
+      },
+      {
+        "id": "007-time",
+        "kind": "sign",
+        "boxes": [
+          [
+            539,
+            900,
+            628,
+            944
+          ]
+        ],
+        "source": "오후 11:27",
+        "en": "11:27 p.m.",
+        "literal": "11:27 in the afternoon/evening",
+        "keys": [
+          [
+            "11"
+          ],
+          [
+            "27"
+          ]
+        ]
+      },
+      {
+        "id": "007-notification",
+        "kind": "sfx",
+        "boxes": [
+          [
+            716,
+            644,
+            931,
+            872
+          ]
+        ],
+        "source": "띠링",
+        "en": "Ding",
+        "literal": "Ttiring (notification chime)",
+        "keys": [
+          [
+            "ding",
+            "chime",
+            "ring",
+            "ttiring"
+          ]
+        ]
+      },
+      {
+        "id": "007-huh",
+        "kind": "speech",
+        "boxes": [
+          [
+            110,
+            1446,
+            200,
+            1484
+          ]
+        ],
+        "source": "…어?",
+        "en": "…Huh?",
+        "literal": "…Oh?",
+        "keys": [
+          [
+            "huh",
+            "oh",
+            "what"
+          ]
+        ]
+      },
+      {
+        "id": "007-nobody",
+        "kind": "caption",
+        "boxes": [
+          [
+            663,
+            1424,
+            849,
+            1510
+          ]
+        ],
+        "source": "분명 아무도 없었는데.",
+        "en": "But there was definitely nobody there.",
+        "literal": "There was clearly nobody there, though.",
+        "keys": [
+          [
+            "nobody",
+            "no one",
+            "no-one"
+          ],
+          [
+            "definitely",
+            "clearly",
+            "sure"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "008",
+    "file": "fixtures/manhwa-pages/008.png",
+    "width": 941,
+    "height": 1672,
+    "note": "Late arrival: chibi dialogue, punctuation and expressive SFX",
+    "lines": [
+      {
+        "id": "008-sorry",
+        "kind": "speech",
+        "boxes": [
+          [
+            89,
+            91,
+            287,
+            178
+          ]
+        ],
+        "source": "죄송합니다! 좀 늦었어요…!",
+        "en": "I’m sorry! I’m a little late…!",
+        "literal": "I am sorry! I am a little late…!",
+        "keys": [
+          [
+            "sorry"
+          ],
+          [
+            "late"
+          ]
+        ]
+      },
+      {
+        "id": "008-door",
+        "kind": "sfx",
+        "boxes": [
+          [
+            693,
+            57,
+            906,
+            193
+          ]
+        ],
+        "source": "벌컥!",
+        "en": "Burst!",
+        "literal": "Beolkeok! (door bursting open)",
+        "keys": [
+          [
+            "burst",
+            "slam",
+            "fling",
+            "beolkeok"
+          ]
+        ]
+      },
+      {
+        "id": "008-silence",
+        "kind": "caption",
+        "boxes": [
+          [
+            378,
+            578,
+            628,
+            608
+          ]
+        ],
+        "source": "• • • • •"
+      },
+      {
+        "id": "008-glance",
+        "kind": "sfx",
+        "boxes": [
+          [
+            591,
+            622,
+            702,
+            687
+          ]
+        ],
+        "source": "힐끔…",
+        "en": "Glance…",
+        "literal": "A sidelong glance…",
+        "keys": [
+          [
+            "glance",
+            "peek"
+          ]
+        ]
+      },
+      {
+        "id": "008-blush",
+        "kind": "sfx",
+        "boxes": [
+          [
+            11,
+            992,
+            200,
+            1119
+          ]
+        ],
+        "source": "화끈…",
+        "en": "Flush…",
+        "literal": "A hot flush…",
+        "keys": [
+          [
+            "flush",
+            "blush",
+            "hot",
+            "burn"
+          ]
+        ]
+      },
+      {
+        "id": "008-trouble",
+        "kind": "speech",
+        "boxes": [
+          [
+            644,
+            959,
+            903,
+            1080
+          ]
+        ],
+        "source": "아… 큰일 났다… 왜 이렇게 조용해… 다 쳐다보잖아…",
+        "en": "Ah… I’m in trouble… Why is it so quiet… Everyone’s staring…",
+        "literal": "Ah… Something bad has happened… Why is it this quiet… They are all looking at me…",
+        "keys": [
+          [
+            "trouble",
+            "bad"
+          ],
+          [
+            "quiet"
+          ],
+          [
+            "star",
+            "look"
+          ]
+        ]
+      },
+      {
+        "id": "008-sit",
+        "kind": "speech",
+        "boxes": [
+          [
+            142,
+            1245,
+            301,
+            1324
+          ]
+        ],
+        "source": "일단… 조용히 앉자…",
+        "en": "For now… let’s just sit down quietly…",
+        "literal": "First… let us sit quietly…",
+        "keys": [
+          [
+            "sit"
+          ],
+          [
+            "quiet"
+          ]
+        ]
+      },
+      {
+        "id": "008-awkward",
+        "kind": "sfx",
+        "boxes": [
+          [
+            567,
+            1443,
+            671,
+            1519
+          ]
+        ],
+        "source": "쭈뼛…",
+        "en": "Fidget…",
+        "literal": "An awkward, hesitant movement…",
+        "keys": [
+          [
+            "fidget",
+            "awkward",
+            "hesitat"
+          ]
+        ]
+      }
+    ]
+  }
+]

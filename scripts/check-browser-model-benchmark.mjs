@@ -55,6 +55,17 @@ try {
     listed.pages.map((item) => item.id),
     ["001", "002", "003", "004", "005", "006", "007", "008", "009", "010"],
   );
+  assert.equal(listed.dataset.id, "manga-ja");
+  const korean = await (await context.request.get(`${api}?dataset=manhwa-ko`)).json();
+  assert.equal(korean.dataset.lang, "korean");
+  assert.equal(korean.available, true);
+  assert.equal(korean.pages.length, 8);
+  assert.equal(korean.baseline.official, 1);
+  assert.equal((await context.request.get(`${api}?dataset=manhwa-ko&page=001`)).status(), 200);
+  assert.equal((await context.request.get(`${api}?dataset=manhwa-ko&page=001&lang=en`)).status(), 404);
+  assert.equal((await context.request.get(`${api}?dataset=unknown`)).status(), 400);
+  assert.equal((await context.request.post(api, { data: { dataset: "unknown", kind: "ocr", detectors: ["heuristic"] } })).status(), 400);
+  assert.ok(!korean.translationModels.some(row => row.id === "opus-mt-ja-en"));
   const setups = listed.detectors.map((item) => item.id);
   for (const id of ["rtdetr", "ctd", "paddle", "heuristic", "coo", "koharu", "rtdetr+coo+koharu"])
     assert.ok(setups.includes(id), `detector setup ${id}`);
@@ -72,6 +83,7 @@ try {
   assert.equal(retired.status(), 400);
   assert.equal((await context.request.post(api, { data: { kind: "ocr", detectors: ["nope"] } })).status(), 400);
   assert.equal((await context.request.post(api, { data: { kind: "translation", models: [] } })).status(), 400);
+  assert.equal((await context.request.post(api, { data: { kind: "review" } })).status(), 400);
   assert.equal((await context.request.post(api, { data: {} })).status(), 400);
   assert.deepEqual(await (await context.request.post(api, { data: { action: "cancel" } })).json(), { ok: true, cancelled: false });
 
@@ -87,6 +99,7 @@ try {
   await expect(page.getByRole("spinbutton", { name: "Detection confidence" })).toHaveValue("0.35");
   // The heuristic detector runs alone, so both add-ons are locked off.
   await expect(page.getByRole("checkbox", { name: "COO", exact: true })).toBeDisabled();
+  await page.goto(`${base}/admin/models/benchmark`);
   const panel = page.getByRole("region", { name: "Benchmark" });
   await expect(panel.getByText("Give My Regards to Black Jack", { exact: false })).toBeVisible();
   await expect(panel.getByText("Text detectors")).toBeVisible();
@@ -148,7 +161,9 @@ try {
   await expect(panel.getByText("No lettering to read on this page.")).toBeVisible();
   await expect(panel.getByText(/qwen3-vl-4b/)).toHaveCount(0);
 
+  await expect(panel.getByRole("tab", { name: "Translation" })).toBeVisible();
   await panel.getByRole("tab", { name: "Translation" }).click();
+  await expect(panel.getByText("Meaning review")).toBeVisible();
   await expect(panel.getByText("Translation models")).toBeVisible();
   await expect(panel.getByRole("button", { name: "Run translation benchmark" })).toBeVisible();
   const trResults = panel.getByRole("table", { name: "Translation results" });
@@ -163,8 +178,100 @@ try {
   await expect(panel.getByText("研修医というのは要するに見習いだ")).toBeVisible();
   await expect(panel.getByText("Interns are basically apprentices.")).toBeVisible();
   await expect(panel.getByRole("img", { name: "Page 009, official English" })).toBeVisible();
+  // Korean pages and results are independent of the legacy Japanese files.
+  const koLines = korean.dataset.pages[0].lines;
+  const koOcr = { ...ocrPage, page: "001", lines: [], output: koLines.map(line => line.source).join("\n") };
+  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v1-ocr.json"), JSON.stringify({
+    kind: "ocr", dataset: "manhwa-ko", datasetVersion: 1, id: "ko-ocr", at: 1, state: "done",
+    progress: { done: 1, total: 1, step: "Finished" }, pages: ["001"],
+    models: [{ id: "ko-reader", name: "Korean Reader", source: "gold", sourceLabel: "Gold boxes", state: "done", pages: [koOcr], totals: { dialogue: 1, other: 1, noise: 0, exact: 4, lines: 4 } }],
+    detectors: [{ id: "heuristic", label: "Geometric bubbles", state: "done", pages: [{ ...blank, page: "001", boxes: koLines.flatMap(line => line.boxes) }], totals: score }],
+  }));
+  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v1-translation.json"), JSON.stringify({
+    kind: "translation", dataset: "manhwa-ko", datasetVersion: 1, id: "ko-tr", at: 1, state: "done",
+    progress: { done: 1, total: 1, step: "Finished" }, pages: ["001"],
+    models: [{ id: "ko-translator", name: "Korean Translator", state: "done", pages: [{ page: "001", ms: 100, lines: [] }], totals: { official: 0.8, literal: 0.7, meaning: 1, lines: 5, missing: 0 } }],
+  }));
+  await panel.getByRole("combobox", { name: "Benchmark dataset" }).selectOption("manhwa-ko");
+  await expect(panel.getByText("ManhwaFixture", { exact: false })).toBeVisible();
+  await expect(panel.getByRole("table", { name: "Translation results" })).toContainText("Korean Translator");
+  await expect(panel.getByRole("table", { name: "Translation results" })).not.toContainText("Zeta Translate");
+  await expect(panel.getByRole("button", { name: "chrF · reference" })).toBeVisible();
+  await expect(panel.getByRole("columnheader", { name: "Korean", exact: true })).toBeVisible();
+  await expect(panel.getByRole("img", { name: "Page 001", exact: true })).toBeVisible();
+  await expect(panel.getByRole("img")).toHaveCount(1);
+  await expect(panel.getByText(koLines[0].source, { exact: true })).toBeVisible();
+  await expect(panel.locator("svg").first()).toHaveAttribute("viewBox", "0 0 941 1672");
+  await expect(panel.getByRole("tab", { name: "009", exact: true })).toHaveCount(0);
+  // Intercept only the submission, so model calls never leave this isolated test.
+  const submitted = [];
+  await page.route("**/api/admin/model-benchmark?dataset=*", async route => {
+    if (route.request().method() === "POST") {
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.continue();
+  });
+  await panel.getByRole("button", { name: "Select all", exact: true }).click();
+  await panel.getByRole("button", { name: "Run translation benchmark" }).click();
+  await expect.poll(() => submitted.length).toBe(1);
+  assert.equal(submitted[0].dataset, "manhwa-ko");
+  assert.equal(submitted[0].kind, "translation");
+  await panel.getByRole("tab", { name: "Detection & OCR" }).click();
+  await expect(panel.getByRole("table", { name: "OCR results" })).toContainText("Korean Reader");
+  await expect(panel.getByRole("columnheader", { name: "Gold Korean" })).toBeVisible();
+  await expect(panel.getByRole("img", { name: "Page 001", exact: true })).toBeVisible();
+  await panel.getByRole("tab", { name: "003", exact: true }).click();
+  await expect(panel.getByText(/Detection only .*uncertain lettering/)).toBeVisible();
+  await panel.getByRole("button", { name: "Select none", exact: true }).click();
+  await panel.getByRole("checkbox", { name: /^Geometric bubbles/ }).first().check();
+  await panel.getByRole("button", { name: "Run OCR benchmark" }).click();
+  await expect.poll(() => submitted.length).toBe(2);
+  assert.equal(submitted[1].dataset, "manhwa-ko");
+  assert.equal(submitted[1].kind, "ocr");
+  assert.deepEqual(submitted[1].detectors, ["heuristic"]);
+  await panel.getByRole("combobox", { name: "Benchmark dataset" }).selectOption("manga-ja");
+  await expect(panel.getByRole("table", { name: "OCR results" })).toContainText("Zebra OCR");
+  await expect(panel.getByRole("table", { name: "OCR results" })).not.toContainText("Korean Reader");
+  await expect(panel.getByRole("img", { name: "Page 007", exact: true })).toBeVisible();
+  await expect(panel.locator("svg").first()).toHaveAttribute("viewBox", "0 0 1414 2000");
+  await page.unroute("**/api/admin/model-benchmark?dataset=*");
+  mkdirSync("/tmp/komatose-korean-gold-qa", { recursive: true });
+  await panel.getByRole("combobox", { name: "Benchmark dataset" }).selectOption("manhwa-ko");
+  await expect(panel.getByRole("img", { name: "Page 001", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 2200 });
+  await panel.scrollIntoViewIfNeeded();
+  await panel.screenshot({ path: "/tmp/komatose-korean-gold-qa/benchmark-ocr.png" });
+  await panel.getByRole("tab", { name: "Translation" }).click();
+  await expect(panel.getByRole("button", { name: "chrF · reference" })).toBeVisible();
+  await panel.scrollIntoViewIfNeeded();
+  await panel.screenshot({ path: "/tmp/komatose-korean-gold-qa/benchmark-translation.png" });
+  // An older status response (or error) must not replace a newer selection.
+  for (const delayedStatus of [200, 500]) {
+    let release;
+    let started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const seen = new Promise(resolve => { started = resolve; });
+    const pattern = "**/api/admin/model-benchmark?dataset=manga-ja";
+    await page.route(pattern, async route => {
+      started();
+      await gate;
+      return route.fulfill({ status: delayedStatus, json: delayedStatus === 200 ? listed : { ok: false, error: "stale failure" } });
+    });
+    await panel.getByRole("combobox", { name: "Benchmark dataset" }).selectOption("manga-ja");
+    await seen;
+    await panel.getByRole("combobox", { name: "Benchmark dataset" }).selectOption("manhwa-ko");
+    await expect(panel.getByText("ManhwaFixture", { exact: false })).toBeVisible();
+    const returned = page.waitForResponse(response => response.url().endsWith("?dataset=manga-ja"));
+    release();
+    await (await returned).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(panel.getByText("ManhwaFixture", { exact: false })).toBeVisible();
+    await expect(panel.getByRole("alert")).toHaveCount(0);
+    await page.unroute(pattern);
+  }
   assert.deepEqual(errors, []);
-  console.log("Benchmark panel is on Admin → Models → Jobs & defaults");
+  console.log("Benchmark panel is on Admin → Models → Benchmark");
 } finally {
   await browser.close();
 }

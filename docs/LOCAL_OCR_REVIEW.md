@@ -181,8 +181,13 @@ Run local reviewers with the region's **AI Review** button, or accept/edit a sou
 manually. On Japanese chapters, **Enter characters** (Review sidebar and the AI
 Review dialog) opens a hiragana chart with diacritic, digraph, and katakana
 toggles, series-glossary kanji keys, and a scratchpad that OCRs a handwritten
-glyph with Accept/Reject before inserting. Korean chapters keep the plain
-source textarea only.
+glyph with Accept/Reject before inserting. On Korean chapters, **Enter characters**
+opens a Hangul syllable builder in the same two locations. Choose an initial
+consonant, vowel, and optional final consonant, then insert the preview at the
+caret. Use ㅇ for syllables starting with a vowel. Standalone letter buttons
+support expressions such as ㅋㅋ; Korean glossary terms are also available as
+shortcuts. Both panels keep edits in a draft until **Apply to source**; **Cancel**
+discards them. English is unchanged.
 
 The review dialog opens with **Mask crop with detected text** enabled
 and starts detection immediately. Send waits for detection; brush or erase to
@@ -232,7 +237,7 @@ GPU mode keeps Hayai on `SCAN_REVIEW_HAYAI_PORT` (18083), PaddleOCR-VL on
 `SCAN_REVIEW_PADDLE_PORT` (18081), and Qwen3-VL-8B on `SCAN_REVIEW_QWEN_PORT`
 (18082). Chat models must use `SCAN_LLM_PORT` (18080).
 
-**Admin → Models → Jobs & defaults → Benchmark** scores models against the ten pages
+**Admin → Models → Benchmark** scores models against the ten pages
 in `fixtures/test-pages` (*Give My Regards to Black Jack* vol. 1, pp. 1–10). The gold
 standard is in `src/lib/benchmarkGold.ts`: a box around every piece of lettering, the
 Japanese as printed, the official English from `fixtures/test-pages/english`, a literal
@@ -338,6 +343,7 @@ npm run test:review
 npm run test:model-benchmark
 npm run test:review-workflow
 npm run test:kana-entry
+npm run test:browser-character-entry
 node scripts/test-browser.mjs scripts/check-browser-page-proofread.mjs
 node scripts/test-browser.mjs scripts/check-browser-local-review.mjs
 node --import tsx scripts/smoke-review-models.ts /path/to/japanese-crop.jpg /path/to/korean-crop.jpg

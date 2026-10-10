@@ -30,6 +30,7 @@
 		{ href: '/admin/models/list', label: 'Models', icon: 'bi-collection', match: (path: string) => path.startsWith('/admin/models/list') },
 		{ href: '/admin/models/install', label: 'Install', icon: 'bi-download', match: (path: string) => path.startsWith('/admin/models/install') },
 		{ href: '/admin/models/jobs', label: 'Jobs & defaults', icon: 'bi-table', match: (path: string) => path.startsWith('/admin/models/jobs') },
+		{ href: '/admin/models/benchmark', label: 'Benchmark', icon: 'bi-bar-chart', match: (path: string) => path.startsWith('/admin/models/benchmark') },
 		{ href: '/admin/models/hardware', label: 'Hardware & services', icon: 'bi-gpu-card', match: (path: string) => path.startsWith('/admin/models/hardware') },
 		{ href: '/admin/models/setup', label: 'Guided setup', icon: 'bi-magic', match: (path: string) => path.startsWith('/admin/models/setup') },
 	];

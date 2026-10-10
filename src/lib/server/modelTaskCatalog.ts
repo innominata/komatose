@@ -82,12 +82,18 @@ export const MODEL_TASK_CATALOG = MODEL_TASKS.map(definition => ({
   fixture: () => taskFixture(definition.id),
   fixtures: async () => {
     const first = await taskFixture(definition.id);
-    // Detect always exposes both a dialogue crop and an SFX crop; probeModelRow
-    // runs both and passes if either finds a region (COO only hits SFX).
+    // Source choice must pass both candidate orders. Vision, translation, and detect
+    // try Japanese and Korean and pass if either language succeeds; detect also keeps the SFX crop.
     if (definition.id === 'sourceDecide') return [first, { ...first, candidates: first.candidates.map((c: any) => ({ ...c, id: c.id === 'A' ? 'B' : 'A' })).reverse() }];
-    if (definition.id === 'detect') return [first, { ...first, jpeg: await sfxProbeJpeg() }];
-    if (definition.id === 'vision') return [first, { ...first, lang: 'korean', jpeg: Buffer.from(KOREAN_VISION_PROBE_PNG) }];
+    const koreanPage = async () => sharp(Buffer.from(KOREAN_VISION_PROBE_PNG)).jpeg().toBuffer();
+    if (definition.id === 'detect') return [
+      { ...first, probeLabel: 'dialogue' },
+      { ...first, lang: 'korean', jpeg: await koreanPage(), probeLabel: 'korean' },
+      { ...first, jpeg: await sfxProbeJpeg(), probeLabel: 'sfx' },
+    ];
+    if (definition.id === 'vision') return [first, { ...first, lang: 'korean', jpeg: await koreanPage() }];
     return definition.id === 'translate' ? [first, { ...first, lang: 'korean',
+      script: 'Complete chapter: 1 lines on 1 pages.\n[1] p1: 테스트 → Test.',
       boxes: first.boxes.map((box: any) => ({ ...box, source: '테스트' })) }] : [first];
   },
   validate: (output: unknown) => validateTaskOutput(definition.id, output),

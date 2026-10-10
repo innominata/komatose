@@ -362,14 +362,14 @@
   .jobs {
     flex-shrink: 0;
     border-top: 1px solid var(--hud-line);
-    background: #141922;
+    background: var(--hud-bg-2);
     font: 12px Inter, system-ui, sans-serif;
     color: var(--hud-text);
   }
   .jobs.flash { animation: jobs-attention 0.55s ease-in-out 3; }
-  .jobs.flash h2 { color: var(--hud-teal); }
+  .jobs.flash h2 { color: var(--hud-teal-ink); }
   @keyframes jobs-attention {
-    0%, 100% { background-color: #141922; box-shadow: inset 0 0 0 0 transparent; }
+    0%, 100% { background-color: var(--hud-bg-2); box-shadow: inset 0 0 0 0 transparent; }
     40% { background-color: var(--hud-teal-dim); box-shadow: inset 0 0 0 2px var(--hud-teal); }
   }
   .jobs-head {
@@ -401,7 +401,7 @@
     border: 0;
     background: none;
     padding: 0;
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
     font: 12px Inter, system-ui, sans-serif;
     text-decoration: none;
     white-space: nowrap;
@@ -419,15 +419,15 @@
     background: transparent;
     color: var(--hud-muted);
   }
-  .icon-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--hud-text); }
-  .bar { display: inline-block; width: 90px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.1); overflow: hidden; vertical-align: middle; flex: none; }
+  .icon-btn:hover { background: var(--hud-hover); color: var(--hud-text); }
+  .bar { display: inline-block; width: 90px; height: 4px; border-radius: 2px; background: var(--hud-hover); overflow: hidden; vertical-align: middle; flex: none; }
   .bar i { display: block; height: 100%; background: var(--hud-teal); }
   .spin {
     display: inline-block;
     width: 12px;
     height: 12px;
-    border: 2px solid rgba(255, 255, 255, 0.15);
-    border-top-color: var(--hud-teal);
+    border: 2px solid var(--hud-hover);
+    border-top-color: var(--hud-teal-ink);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     flex: none;
@@ -441,7 +441,7 @@
     gap: 10px;
     align-items: center;
     padding: 5px 8px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--hud-hover);
     border-radius: 4px;
   }
   .jstate { display: inline-grid; place-items: center; color: var(--hud-muted); }
@@ -457,9 +457,9 @@
     display: inline-flex;
     align-items: center;
     padding: 2px 8px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     border-radius: 5px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--hud-hover);
     color: var(--hud-text);
     font: 500 11.5px Inter, system-ui, sans-serif;
     letter-spacing: 0;
@@ -467,22 +467,22 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .jact button:hover, .btn-link:hover, .list-foot button:hover:not(:disabled) { border-color: var(--hud-teal); color: var(--hud-teal); }
-  .jact .accent { border-color: rgba(45, 226, 197, 0.5); color: var(--hud-teal); }
+  .jact button:hover, .btn-link:hover, .list-foot button:hover:not(:disabled) { border-color: var(--hud-teal-ink); color: var(--hud-teal-ink); }
+  .jact .accent { border-color: rgba(45, 226, 197, 0.5); color: var(--hud-teal-ink); }
   .jact .ghost, .list-foot .ghost { border-color: transparent; background: transparent; color: var(--hud-muted); }
   .list-foot button:disabled { opacity: 0.4; }
   .list-foot { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; }
   .job-log { margin: 0 0 4px 32px; padding: 6px 8px; border-left: 2px solid var(--hud-line); display: grid; gap: 6px; }
   .job-pages { display: flex; flex-wrap: wrap; gap: 4px; }
-  .chip { padding: 2px 6px; border-radius: 3px; font-size: 11px; background: rgba(255, 255, 255, 0.04); }
+  .chip { padding: 2px 6px; border-radius: 3px; font-size: 11px; background: var(--hud-hover); }
   .chip.completed { color: #5ee39a; }
   .chip.failed { color: #ff8a9a; }
-  .chip.running { color: var(--hud-teal); }
+  .chip.running { color: var(--hud-teal-ink); }
   .job-error, .log pre {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
-    background: #0e1117;
+    background: var(--hud-bg);
     padding: 8px;
     border-radius: 4px;
     font-size: 11.5px;

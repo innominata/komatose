@@ -17,7 +17,7 @@
 	<div class="alert-hud mb-3">{form.error}</div>
 {/if}
 {#if form?.ok}
-	<div class="hud-card mb-3" style="border-color: var(--hud-teal)">Password updated.</div>
+	<div class="hud-card mb-3" style="border-color: var(--hud-teal-ink)">Password updated.</div>
 {/if}
 
 <div class="hud-card" style="max-width: 420px">

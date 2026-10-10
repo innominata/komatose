@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { CAPABILITIES, CAPABILITY_REQUIREMENTS, qualificationChecks, qualificationQueue, qualificationWarnings, type CapabilityId } from '../src/lib/modelCapabilities';
+import { CAPABILITIES, CAPABILITY_REQUIREMENTS, conversationAvailable, qualificationChecks, qualificationQueue, qualificationWarnings, type CapabilityId } from '../src/lib/modelCapabilities';
 import { rowHasOperation, allowedOperations, type ModelRow } from '../src/lib/modelRegistry';
 import { MODEL_TASK_IDS } from '../src/lib/modelTasks';
 
@@ -76,6 +76,32 @@ test('image checks share one call and record independent outcomes, including abs
   assert.deepEqual(inverse.samples.map(s => s.ok), [false, true]);
   const both = await runQualification(general(), 'transcription', { invoke: async () => ({ source: '待って！', firstHasText: true, secondHasText: false, secondShape: 'circle', secondColor: 'blue' }) });
   assert.ok(both.samples.every(s => s.ok));
+});
+
+test('image transcription accepts a Korean reading when the Japanese fixture misses', async () => {
+  let calls = 0;
+  const result = await runQualification(general(), 'transcription', { invoke: async () => {
+    calls++;
+    return calls === 1
+      ? { source: 'not the japanese fixture', firstHasText: false, secondHasText: true, secondShape: 'square', secondColor: 'red' }
+      : { source: '기다려!', firstHasText: true, secondHasText: false, secondShape: 'circle', secondColor: 'blue' };
+  } });
+  assert.equal(calls, 2);
+  assert.deepEqual(result.samples.map(s => [s.capability, s.ok]), [['transcription', true], ['imageUnderstanding', true]]);
+  assert.match(result.samples[0].outputPreview || '', /기다려/);
+});
+
+test('translation accepts the Korean fixture when the Japanese one fails', async () => {
+  const { probeModelRow } = await import('../src/lib/server/modelProbe');
+  let langs: string[] = [];
+  const sample = await probeModelRow(general(), 'translate', { invoke: async (_row, _task, input) => {
+    langs.push(input.lang);
+    if (input.lang === 'japanese') throw new Error('Model returned no translation for the corrected source. Previous English was preserved.');
+    return input.boxes.map((box: any) => ({ ...box, translation: 'This is a test.' }));
+  } });
+  assert.deepEqual(langs, ['japanese', 'korean']);
+  assert.equal(sample.ok, true);
+  assert.match(sample.reason || '', /korean/);
 });
 
 test('conversation checks structured context and instruction following', async () => {
@@ -257,5 +283,13 @@ test('stale successes and failures remain executable without an automatic retest
     assert.equal(rowHasOperation(currentFailed, 'translate'), false);
     assert.equal(rowHasOperation({ ...currentFailed, probes: { translate: { operation: 'translate', fingerprint: 'legacy', ok: true, at: 1 } } }, 'translate'), false,
       'a current failure cannot be bypassed by an older job check');
+    const bare = { ...general(), capabilities: {} };
+    assert.equal(conversationAvailable(bare), false);
+    const passed = { ...general(), capabilities: { conversation: pass(general(), 'conversation') } };
+    assert.equal(conversationAvailable(passed), true);
+    const stale = { ...general(), capabilities: { conversation: { ...pass(general(), 'conversation'), fingerprint: 'old-code' } } };
+    assert.equal(conversationAvailable(stale), true, 'a stale pass still counts as chat');
+    const failedChat = { ...general(), capabilities: { conversation: { ...pass(general(), 'conversation'), ok: false, outcome: 'failed_validation' } } };
+    assert.equal(conversationAvailable(failedChat), false);
   } finally { globalThis.fetch = originalFetch; }
 });

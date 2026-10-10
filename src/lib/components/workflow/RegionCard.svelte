@@ -9,7 +9,7 @@
   import SourceRomanization from "../SourceRomanization.svelte";
   import SfxHints from "../SfxHints.svelte";
   import GlossaryChips from "../GlossaryChips.svelte";
-  import KanaEntryPanel from "../KanaEntryPanel.svelte";
+  import CharacterEntryPanel from "../CharacterEntryPanel.svelte";
   import {
     type GlossaryTerm,
     type LineRow,
@@ -221,9 +221,10 @@
     ></textarea>
     <SourceRomanization text={line.source ?? ""} />
     <div class="helpers">
-      {#if japanese}
-        <div data-find="kana" class="kana-wrap">
-          <KanaEntryPanel
+      {#key line.id}
+        <div data-find={japanese ? "kana" : "hangul"} class="kana-wrap">
+          <CharacterEntryPanel
+            lang={japanese ? "japanese" : "korean"}
             source={line.source ?? ""}
             {glossary}
             canEdit={canEdit && !busy && line.sourceState !== "ignored"}
@@ -235,7 +236,7 @@
             onreadDrawing={onreaddrawing ? (image, signal) => onreaddrawing(line, image, signal) : undefined}
           />
         </div>
-      {/if}
+      {/key}
       <GlossaryChips source={line.source ?? ""} english={line.body} terms={glossary} />
       <SfxHints source={line.source ?? ""} current={line.body} disabled={!canEdit} onpick={(meaning) => onedit(line, { body: meaning })} />
     </div>
@@ -285,9 +286,9 @@
 <style>
   .rcard {
     margin: 8px;
-    border: 1px solid rgba(45, 226, 197, 0.45);
-    border-radius: 7px;
-    background: #1a2030;
+    border: 1px solid var(--hud-line);
+    border-radius: 12px;
+    background: var(--hud-bg-2);
     padding: 10px;
     display: grid;
     gap: 10px;
@@ -303,13 +304,13 @@
   .small { font-size: 11.5px; }
   .spacer { flex: 1; }
   .rid { border: 0; background: none; padding: 0 2px; color: var(--hud-muted); font-size: 11px; }
-  .rid:hover { color: var(--hud-teal); }
+  .rid:hover { color: var(--hud-teal-ink); }
   .icon-btn { border: 0; background: transparent; color: var(--hud-muted); padding: 3px 5px; border-radius: 4px; }
-  .icon-btn:hover:not(:disabled) { color: var(--hud-text); background: rgba(255, 255, 255, 0.07); }
+  .icon-btn:hover:not(:disabled) { color: var(--hud-text); background: var(--hud-hover); }
   .alert { display: flex; gap: 7px; align-items: flex-start; padding: 6px 8px; border-radius: 4px; font-size: 12px; }
   .alert.attn { background: rgba(245, 184, 92, 0.12); color: #f8d49c; }
   .alert.bad { background: rgba(255, 93, 115, 0.12); color: #ffb3bf; }
-  .alert.muted { background: rgba(255, 255, 255, 0.05); }
+  .alert.muted { background: var(--hud-hover); }
   .field { display: grid; gap: 5px; }
   .field-head { display: flex; align-items: center; justify-content: space-between; }
   .flabel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--hud-muted); margin: 0; }
@@ -317,7 +318,7 @@
   .kana-wrap { width: 100%; }
   .btn-row { display: flex; gap: 6px; align-items: center; }
   .btn-row.wrap { flex-wrap: wrap; }
-  button.accent { color: var(--hud-teal); border-color: rgba(45, 226, 197, 0.45); }
+  button.accent { color: var(--hud-teal-ink); border-color: rgba(45, 226, 197, 0.45); }
   .sugg {
     border-left: 3px solid #f5b85c;
     background: rgba(245, 184, 92, 0.06);
@@ -329,5 +330,5 @@
   .sugg-head { display: flex; justify-content: space-between; gap: 8px; }
   .sugg-head small { color: var(--hud-muted); font-size: 11px; text-align: right; white-space: pre-line; }
   .sugg p { margin: 0; white-space: pre-wrap; color: var(--hud-text); }
-  .sugg .sugg-en { color: #ecddbd; }
+  .sugg .sugg-en { color: var(--hud-suggestion-en); }
 </style>

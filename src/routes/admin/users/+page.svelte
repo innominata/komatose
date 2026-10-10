@@ -23,7 +23,7 @@
 	<div class="alert-hud mb-3">{form.error}</div>
 {/if}
 {#if form?.ok && form?.message}
-	<div class="hud-card mb-3" style="border-color: var(--hud-teal)">{form.message}</div>
+	<div class="hud-card mb-3" style="border-color: var(--hud-teal-ink)">{form.message}</div>
 {/if}
 
 {#if data.signedIn}

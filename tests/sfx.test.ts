@@ -123,3 +123,61 @@ test('standalone hits supply lettering-ready English without a model', () => {
   assert.equal(sfxTranslateHit('待って！'), null);
   assert.equal(sfxTranslateHit(''), null);
 });
+
+test('Korean SFX match exact, punctuated, elongated, and repeated forms', () => {
+  assert.equal(lookupStandaloneSfx('두근두근')?.meanings[0], 'thump thump');
+  assert.equal(lookupStandaloneSfx('하아..')?.meanings[0], 'sigh');
+  assert.equal(lookupStandaloneSfx('하아아아')?.source, '하아');
+  assert.equal(lookupStandaloneSfx('휙')?.meanings[0], 'swish');
+  assert.equal(lookupStandaloneSfx('탁')?.meanings[0], 'tap');
+  assert.equal(lookupStandaloneSfx('흠칫')?.meanings[0], 'flinch');
+  assert.equal(lookupStandaloneSfx('슥')?.meanings[0], 'slide');
+  assert.equal(lookupStandaloneSfx('하하')?.meanings[0], 'haha');
+  assert.equal(lookupStandaloneSfx('하하하')?.source, '하하');
+  assert.equal(lookupStandaloneSfx('헉!')?.meanings[0], 'gasp');
+  assert.equal(lookupStandaloneSfx('헉ㅋㅋ')?.source, '헉');
+  assert.equal(lookupStandaloneSfx('띠링')?.meanings[0], 'ding');
+  assert.equal(lookupStandaloneSfx('벌컥!')?.meanings[0], 'burst');
+  assert.equal(lookupStandaloneSfx('힐끔…')?.meanings[0], 'glance');
+  assert.equal(lookupStandaloneSfx('화끈…')?.meanings[0], 'flush');
+  assert.equal(lookupStandaloneSfx('쭈뼛…')?.meanings[0], 'fidget');
+  assert.equal(lookupStandaloneSfx('쿵쿵쿵')?.source, '쿵쿵');
+  assert.equal(lookupStandaloneSfx('두근두근두근')?.source, '두근두근');
+  assert.equal(lookupStandaloneSfx('크아아아악')?.source, '크아');
+  assert.equal(lookupStandaloneSfx('ㅋㅋㅋ')?.source, 'ㅋㅋ');
+  assert.equal(lookupStandaloneSfx('휘이잉')?.source, '휘이');
+  assert.equal(sfxTranslateHit('탁!')?.translation, 'tap');
+});
+
+test('Korean matching stays on the sound and does not swallow ordinary words', () => {
+  assert.equal(lookupStandaloneSfx('탁자'), null);
+  assert.equal(lookupStandaloneSfx('기다려'), null);
+  assert.equal(lookupStandaloneSfx('사람'), null);
+  assert.equal(lookupStandaloneSfx('나아'), null);
+  assert.equal(findSfxInText('오늘은 말이라도 걸어볼까').length, 0);
+  assert.equal(findSfxInText('탁자를 봤다').length, 0);
+  assert.equal(findSfxInText('확 달라졌다').length, 0);
+  assert.deepEqual(findSfxInText('심장이 두근두근 뛰었다').map((e) => e.source), ['두근두근']);
+  assert.deepEqual(findSfxInText('사람이 하아 하고 쉬었다').map((e) => e.source), ['하아']);
+  const extra = sfxGlossaryPrompt(['심장이 두근두근 뛰었다', '기다려!']);
+  assert.match(extra, /두근두근 → thump thump/);
+  assert.doesNotMatch(extra, /쾅 →/);
+  assert.equal(lookupStandaloneSfx('ドキドキ')?.source, 'ドキドキ');
+});
+
+test('Korean region type follows the dictionary, and hangul sentences stay speech', () => {
+  assert.equal(classifyRegionLineType('bubble', '두근두근'), '::');
+  assert.equal(classifyRegionLineType('bubble', '하아……'), '::');
+  assert.equal(classifyRegionLineType('bubble', '탁'), '::');
+  assert.equal(classifyRegionLineType('bubble', '기다려 주세요'), '""');
+  assert.equal(classifyRegionLineType('free', '오늘은 학교 분위기가 어수선하다'), '//');
+  assert.equal(classifyRegionLineType('free', '응!', { sfxDetector: true }), '//');
+  assert.equal(classifyRegionLineType('free', '미안. 나도 어떻게 말해야 할지 잘 몰랐어.', { sfxDetector: true }), '//');
+  assert.equal(classifyRegionLineType('unknown', '다다다'), '::');
+  assert.equal(classifyRegionLineType('unknown', '기다려'), '""');
+  assert.equal(looksLikeDialogue('기다려'), true);
+  assert.equal(looksLikeDialogue('두근두근'), false);
+  assert.equal(looksLikeDialogue('하아'), false);
+  assert.equal(looksLikeOnomatopoeia('쿵쿵쿵'), true);
+  assert.equal(looksLikeOnomatopoeia('기다려 주세요'), false);
+});

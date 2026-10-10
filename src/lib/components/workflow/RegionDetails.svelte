@@ -168,24 +168,24 @@
     gap: 4px;
   }
   .subtabs button:hover:not(:disabled) { background: transparent; color: var(--hud-text); border-color: transparent; }
-  .subtabs button.on { color: var(--hud-text); border-bottom-color: var(--hud-teal); }
+  .subtabs button.on { color: var(--hud-text); border-bottom-color: var(--hud-teal-ink); }
   .subbody { display: grid; gap: 8px; }
   .badge {
     display: inline-block;
     min-width: 16px;
     padding: 0 5px;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--hud-hover);
     font-size: 10.5px;
     line-height: 16px;
     text-align: center;
     color: var(--hud-text);
   }
   .muted { color: var(--hud-muted); font-size: 11.5px; margin: 0; }
-  .comment, .hist { display: grid; gap: 2px; padding: 6px 8px; background: rgba(255, 255, 255, 0.03); border-radius: 4px; }
+  .comment, .hist { display: grid; gap: 2px; padding: 6px 8px; background: var(--hud-hover); border-radius: 4px; }
   .comment small, .hist small { color: var(--hud-muted); font-size: 11px; }
   .hist p { margin: 0; color: var(--hud-text); white-space: pre-wrap; }
-  .link { border: 0; background: none; color: var(--hud-teal); padding: 0; font-size: 12px; justify-self: start; }
+  .link { border: 0; background: none; color: var(--hud-teal-ink); padding: 0; font-size: 12px; justify-self: start; }
   .link:hover:not(:disabled) { background: none; text-decoration: underline; }
   .btn-row { display: flex; gap: 6px; align-items: flex-end; }
   .grow { flex: 1; min-width: 0; }

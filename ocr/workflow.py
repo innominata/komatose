@@ -659,9 +659,131 @@ def geometry_result(mask, req, confidence):
             'uncertain': split or confidence < .9, 'split': split}
 
 
+def _black_border_rectangle(gray, box):
+    """Caption box: a thin black rectangular stroke around this region.
+
+    The stroke may lie inside the region or in a margin around it. A frame
+    that covers much of the page is a panel or a phone, not a caption.
+    """
+    H, W = gray.shape[:2]
+    x, y, w, h = [float(v) for v in box]
+    px, py = x * W, y * H
+    pw, ph = max(1.0, w * W), max(1.0, h * H)
+    # Enough for the padding inside a caption box, not for a surrounding panel.
+    pad = max(16.0, min(pw, ph) * 0.85)
+    x0 = max(0, int(math.floor(px - pad)))
+    y0 = max(0, int(math.floor(py - pad)))
+    x1 = min(W, int(math.ceil(px + pw + pad)))
+    y1 = min(H, int(math.ceil(py + ph + pad)))
+    crop = gray[y0:y1, x0:x1]
+    ch, cw = crop.shape[:2]
+    if ch < 16 or cw < 16:
+        return None
+    dark_at = 96
+    ink = np.uint8(crop < dark_at)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    contours, _ = cv2.findContours(ink * 255, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    rx0, ry0 = px - x0, py - y0
+    rx1, ry1 = rx0 + pw, ry0 + ph
+    best = None
+    for contour in contours:
+        bx, by, bw, bh = cv2.boundingRect(contour)
+        if bw < 24 or bh < 18 or bw * bh > W * H * 0.45:
+            continue
+        # A stroke clipped by the search window is a panel edge, not a closed box.
+        # Touching the page edge itself is allowed.
+        clipped = (
+            (bx <= 1 and x0 > 0) or (by <= 1 and y0 > 0) or
+            (bx + bw >= cw - 1 and x1 < W) or (by + bh >= ch - 1 and y1 < H))
+        if clipped:
+            continue
+        def side(vals):
+            return float((vals < dark_at).mean()) if vals.size else 0.0
+        sides = (
+            side(crop[by, bx:bx + bw]),
+            side(crop[min(ch - 1, by + bh - 1), bx:bx + bw]),
+            side(crop[by:by + bh, bx]),
+            side(crop[by:by + bh, min(cw - 1, bx + bw - 1)]),
+        )
+        if min(sides) < 0.9:
+            continue
+        cx = min(cw - 1, max(0, bx + bw // 2))
+        cy = min(ch - 1, max(0, by + bh // 2))
+        column = crop[by:by + bh, cx]
+        row = crop[cy, bx:bx + bw]
+
+        def run(vals):
+            n = 0
+            for value in vals:
+                if value < dark_at:
+                    n += 1
+                else:
+                    break
+            return n
+
+        runs = (run(column), run(column[::-1]), run(row), run(row[::-1]))
+        # A caption stroke is a few pixels. A long dark run is the page or a fill.
+        if min(runs) < 1 or max(runs) > max(10, int(min(bw, bh) * 0.08)):
+            continue
+        inset = int(max(runs)) + 2
+        if bw <= inset * 2 + 8 or bh <= inset * 2 + 8:
+            continue
+
+        def light(vals):
+            return float((vals > 170).mean()) if vals.size else 0.0
+
+        inner = (
+            light(crop[by + inset, bx + inset:bx + bw - inset]),
+            light(crop[by + bh - 1 - inset, bx + inset:bx + bw - inset]),
+            light(crop[by + inset:by + bh - inset, bx + inset]),
+            light(crop[by + inset:by + bh - inset, bx + bw - 1 - inset]),
+        )
+        if min(inner) < 0.85:
+            continue
+        tcx, tcy = (rx0 + rx1) / 2, (ry0 + ry1) / 2
+        if not (bx - 4 <= tcx <= bx + bw + 4 and by - 4 <= tcy <= by + bh + 4):
+            continue
+        overlap_w = max(0.0, min(rx1, bx + bw) - max(rx0, bx))
+        overlap_h = max(0.0, min(ry1, by + bh) - max(ry0, by))
+        overlap = overlap_w * overlap_h
+        if overlap < pw * ph * 0.5 and overlap < bw * bh * 0.5:
+            continue
+        ratio = (bw * bh) / (pw * ph)
+        if ratio < 0.25 or ratio > 8:
+            continue
+        if best is None or bw * bh < best[0]:
+            best = (bw * bh, bx, by, bw, bh, runs)
+    if best is None:
+        return None
+    _, bx, by, bw, bh, runs = best
+    stroke = max(1, int(round(float(np.median(runs)))))
+    left, top = x0 + bx + stroke, y0 + by + stroke
+    right, bottom = x0 + bx + bw - stroke, y0 + by + bh - stroke
+    if right - left < 8 or bottom - top < 8:
+        return None
+
+    def norm(value, limit):
+        return float(min(1.0, max(0.0, value / limit)))
+
+    return {
+        'polygon': [
+            {'x': norm(left, W), 'y': norm(top, H)},
+            {'x': norm(right, W), 'y': norm(top, H)},
+            {'x': norm(right, W), 'y': norm(bottom, H)},
+            {'x': norm(left, W), 'y': norm(bottom, H)},
+        ],
+        'confidence': 0.9, 'uncertain': False, 'boxed': True,
+    }
+
+
 def geometry(img, req):
     H, W = img.shape[:2]
     box = req.get('box', [0, 0, 1, 1])
+    if req.get('method') not in ('split', 'sam'):
+        gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        bordered = _black_border_rectangle(gray, box)
+        if bordered is not None:
+            return bordered
     if req.get('kind') == 'free' and req.get('method') != 'split':
         return _open_boundary()
     if req.get('method') == 'split':

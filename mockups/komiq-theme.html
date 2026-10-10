@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Series · Komatose (komiq-style mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f4f2ee; --surface: #fbfaf7; --line: #e3dfd8;
+    --text: #1c1b19; --muted: #6f6a63; --accent: #2bd9a5; --accent-ink: #08785a; --header: var(--bg); --ok: #2f9e5b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, system-ui, sans-serif; padding-bottom: 80px; }
+  h1, h2, h3, .brand { font-family: Manrope, Inter, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 14px 24px; background: var(--header); border-bottom: 1px solid var(--line); }
+  .brand { margin-right: auto; display: flex; }
+  .brand img { height: 34px; width: auto; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; color: var(--text); cursor: pointer; }
+  .pill { border-radius: 999px; padding: 10px 20px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 14px; }
+  .pill.dark { background: var(--text); color: #fff; border-color: var(--text); }
+  .pill.accent { background: transparent; color: var(--accent-ink); border-color: var(--accent-ink); }
+  main { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+
+  .hero { display: grid; grid-template-columns: 220px 1fr; gap: 24px; padding: 28px 0; border-bottom: 1px solid var(--line); }
+  .hero img { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+  .eyebrow { color: var(--accent-ink); font-size: 12px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
+  .hero h1 { font-size: 30px; line-height: 1.15; margin: 8px 0 4px; }
+  .hero .jp { color: var(--muted); margin: 0 0 12px; }
+  .hero p { color: var(--muted); margin: 0 0 18px; }
+  .hero .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .section-head { display: flex; align-items: center; gap: 12px; margin: 32px 0 12px; }
+  .section-head::before { content: ""; width: 4px; height: 24px; border-radius: 2px; background: var(--accent); }
+  .section-head h2 { font-size: 22px; margin: 0; margin-right: auto; }
+  .link { color: var(--muted); font-weight: 500; text-decoration: none; }
+
+  .add { display: flex; gap: 10px; margin-bottom: 8px; }
+  .add input { flex: 1; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); padding: 12px 18px; font: inherit; }
+  .add input:focus { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+
+  .row { display: grid; grid-template-columns: 76px 1fr auto; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); align-items: start; }
+  .row:last-child { border-bottom: 0; }
+  .cover { width: 76px; aspect-ratio: 3/4; border-radius: 8px; object-fit: cover; background: linear-gradient(135deg, #b8f3e0, #08785a); display: grid; place-items: center; color: #fff; font-family: Manrope; font-weight: 800; font-size: 24px; }
+  .row h3 { margin: 0; font-size: 17px; }
+  .row .sub { color: var(--muted); font-size: 14px; }
+  .meta { display: flex; gap: 12px; margin-top: 10px; font-size: 13px; align-items: center; }
+  .tag { padding: 2px 10px; border-radius: 999px; background: #ece8e1; color: var(--muted); font-weight: 500; }
+  .ok { color: var(--ok); font-weight: 500; }
+  .time { color: var(--muted); font-size: 13px; }
+
+  .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tool { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .tool b { display: block; font-family: Manrope; margin-bottom: 2px; }
+  .tool span { color: var(--muted); font-size: 13px; }
+
+  nav.tabs { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; background: var(--surface); border-top: 1px solid var(--line); padding: 8px 0 10px; }
+  nav.tabs a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); text-decoration: none; }
+  nav.tabs a.on { color: var(--accent-ink); font-weight: 600; }
+  svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-width: 640px) { .hero { grid-template-columns: 1fr; } .hero img { max-width: 220px; } .tools { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="#"><img src="komatose-logo-inverted.png" alt="Komatose" /></a>
+  <button class="icon-btn" title="Sync"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-4M4 13a8 8 0 0 0 14.9 4M4 4v4h4M20 20v-4h-4"/></svg></button>
+  <button class="icon-btn" title="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+  <button class="icon-btn" title="Account: admin"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></button>
+  <button class="pill dark">Sign out</button>
+</header>
+
+<main>
+  <section class="hero">
+    <img src="../fixtures/test-pages/001.jpg" alt="Give My Regards to Black Jack cover" />
+    <div>
+      <div class="eyebrow">Continue translating</div>
+      <h1>Give My Regards to Black Jack</h1>
+      <p class="jp">ブラックジャックによろしく · 佐藤秀峰 (Shuho Sato)</p>
+      <p>Episode 1 · 11 pages · detection and OCR done, 3 pages left to typeset.</p>
+      <div class="actions">
+        <button class="pill accent">Open episode 1</button>
+        <button class="pill">Series settings</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="section-head"><h2>Library</h2><a class="link" href="#">Shared font library ›</a></div>
+  <div class="add">
+    <input placeholder="New series title" />
+    <button class="pill dark">Add</button>
+    <button class="pill">Add test pages</button>
+  </div>
+
+  <div>
+    <div class="row">
+      <img class="cover" src="../fixtures/test-pages/001.jpg" alt="" />
+      <div>
+        <h3>Give My Regards to Black Jack</h3>
+        <div class="sub">ブラックジャックによろしく · Shuho Sato</div>
+        <div class="meta"><span class="tag">1 episode</span><span class="ok">In progress</span></div>
+      </div>
+      <span class="time">2m</span>
+    </div>
+    <div class="row">
+      <div class="cover">K</div>
+      <div>
+        <h3>Kimi to Sakura no Hanataba wo</h3>
+        <div class="sub">kimi-to-sakura-no-hanataba-wo</div>
+        <div class="meta"><span class="tag">3 episodes</span></div>
+      </div>
+      <span class="time">1d</span>
+    </div>
+    <div class="row">
+      <div class="cover" style="background:linear-gradient(135deg,#c9c3ba,#8f887e)">T</div>
+      <div>
+        <h3>Test</h3>
+        <div class="sub">test</div>
+        <div class="meta"><span class="tag">3 episodes</span></div>
+      </div>
+      <span class="time">3d</span>
+    </div>
+  </div>
+
+  <div class="section-head"><h2>Admin</h2></div>
+  <div class="tools">
+    <div class="tool"><b>API keys</b><span>Providers and model credentials</span></div>
+    <div class="tool"><b>Users</b><span>Accounts and roles</span></div>
+    <div class="tool"><b>Settings</b><span>Pipeline defaults and benchmarks</span></div>
+  </div>
+</main>
+
+<nav class="tabs">
+  <a class="on" href="#"><svg viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9H3z"/></svg>Library</a>
+  <a href="#"><svg viewBox="0 0 24 24"><circle cx="8" cy="7" r="3"/><path d="M14 13h7M14 17h7M3 20a5 5 0 0 1 10 0"/></svg>Users</a>
+  <a href="#"><svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3"/></svg>Keys</a>
+  <a href="#"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>Settings</a>
+</nav>
+</body>
+</html>

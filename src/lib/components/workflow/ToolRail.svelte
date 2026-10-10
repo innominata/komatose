@@ -122,38 +122,53 @@
 
 <style>
   .tool-rail {
-    width: 52px;
-    flex: 0 0 52px;
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    z-index: 6;
     display: flex;
     flex-direction: column;
     gap: 8px;
     align-items: center;
-    padding: 8px 4px;
-    border-right: 1px solid var(--hud-line);
-    background: var(--hud-bg-2);
+    max-height: calc(100% - 24px);
     overflow: auto;
+    pointer-events: none;
+    background: transparent;
+    border: 0;
   }
-  .rail-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .rail-group { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
   .rail-label {
     font-size: 9px;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--hud-muted);
     text-align: center;
+    line-height: 1.1;
   }
   .ed-rail-btn {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     display: grid;
     place-items: center;
-    border: 1px solid transparent;
-    background: transparent;
+    border: 1px solid var(--hud-line);
+    background: var(--hud-bg-2);
     color: var(--hud-text);
-    border-radius: 6px;
+    border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  .ed-rail-btn:hover:not(:disabled) {
+    border-color: var(--hud-teal-ink);
+    color: var(--hud-teal-ink);
   }
   .ed-rail-btn.active, .ed-rail-btn[aria-pressed="true"] {
     background: var(--hud-teal-dim);
-    color: var(--hud-teal);
-    border-color: var(--hud-teal);
+    color: var(--hud-teal-ink);
+    border-color: var(--hud-teal-ink);
+  }
+  .ed-rail-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>

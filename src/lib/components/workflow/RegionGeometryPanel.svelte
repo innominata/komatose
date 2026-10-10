@@ -38,7 +38,7 @@
   }
   h2 {
     font:
-      700 12px "Rajdhani", sans-serif;
+      700 12px "Manrope", sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 0;

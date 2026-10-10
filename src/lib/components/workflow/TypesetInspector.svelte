@@ -273,10 +273,10 @@
   .ts-insp details { border: 1px solid var(--hud-line); border-radius: 5px; padding: 8px 10px; display: grid; gap: 8px; }
   .ts-insp summary { cursor: pointer; font-size: 12px; color: var(--hud-text); }
   .ts-insp fieldset { border: 0; padding: 0; margin: 8px 0; display: grid; gap: 8px; }
-  .ts-insp pre { margin: 0; padding: 8px; background: #0e1117; border-radius: 4px; font-size: 11.5px; white-space: pre-wrap; }
+  .ts-insp pre { margin: 0; padding: 8px; background: var(--hud-bg); border-radius: 4px; font-size: 11.5px; white-space: pre-wrap; }
   h2 {
     font:
-      700 12px "Rajdhani", sans-serif;
+      700 12px "Manrope", sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 0;
@@ -288,7 +288,7 @@
   }
   .sec { display: grid; gap: 8px; }
   .sec h3 {
-    font: 700 12px "Rajdhani", sans-serif;
+    font: 700 12px "Manrope", sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 0;

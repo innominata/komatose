@@ -110,7 +110,7 @@
   .grow-amount-label {
     color: var(--ed-muted, var(--hud-muted));
     font:
-      600 10px "Rajdhani",
+      600 10px "Manrope",
       sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;

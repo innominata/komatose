@@ -124,9 +124,9 @@
 </section>
 
 <style>
-  .documents { grid-column: 1 / -1; display: grid; gap: 12px; border: 1px solid var(--hud-line); border-radius: 8px; padding: 16px; background: #141922; }
+  .documents { grid-column: 1 / -1; display: grid; gap: 12px; border: 1px solid var(--hud-line); border-radius: 8px; padding: 16px; background: var(--hud-bg-2); }
   header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
-  h3 { margin: 0 0 6px; font: 700 16px Rajdhani, sans-serif; }
+  h3 { margin: 0 0 6px; font: 700 16px Manrope, sans-serif; }
   p { margin: 0; color: var(--hud-muted); }
   .document-controls, .chapter-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
   label { display: grid; gap: 4px; margin: 0; }

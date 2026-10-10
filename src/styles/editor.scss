@@ -6,7 +6,7 @@
 	--ed-text: var(--hud-text);
 	--ed-muted: var(--hud-muted);
 	--ed-hover: var(--hud-teal-dim);
-	--ed-active: var(--hud-teal);
+	--ed-active: var(--hud-teal-ink);
 	--ed-active-dim: var(--hud-teal-dim);
 	--ed-danger: var(--hud-danger);
 	flex: 1;
@@ -39,9 +39,9 @@
 .ed-docbar button,
 .ed-docbar .ed-btn {
 	font-size: 0.78rem;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	font-family: Rajdhani, sans-serif;
+	letter-spacing: 0;
+	text-transform: none;
+	font-family: Inter, system-ui, sans-serif;
 	font-weight: 600;
 }
 
@@ -94,10 +94,10 @@
 	text-transform: none;
 	font-size: 12.5px;
 	border: 1px solid var(--ed-line);
-	background: rgba(255, 255, 255, 0.04);
+	background: var(--hud-btn-bg);
 	color: var(--ed-text);
 	padding: 5px 10px;
-	border-radius: 5px;
+	border-radius: 999px;
 	line-height: 1.3;
 	text-decoration: none;
 	display: inline-flex;
@@ -108,8 +108,29 @@
 
 .ed-btn:hover:not(:disabled) {
 	background: var(--ed-hover);
-	color: var(--ed-active);
-	border-color: var(--ed-active);
+	color: var(--hud-teal-ink);
+	border-color: var(--hud-teal-ink);
+}
+
+.ed-btn.primary {
+	background: transparent;
+	color: var(--hud-teal-ink);
+	border-color: var(--hud-teal-ink);
+	font-weight: 600;
+}
+
+.ed-btn.forward {
+	background: var(--hud-primary);
+	color: var(--hud-on-primary);
+	border-color: var(--hud-primary);
+	font-weight: 600;
+}
+
+.ed-btn.forward:hover:not(:disabled) {
+	background: var(--hud-primary);
+	color: var(--hud-on-primary);
+	border-color: var(--hud-primary);
+	filter: brightness(1.08);
 }
 
 .ed-btn:disabled {
@@ -163,7 +184,7 @@
 	bottom: 0;
 	z-index: 8;
 	border: 0;
-	background: rgba(0, 0, 0, 0.55);
+	background: var(--hud-bg-2);
 	color: var(--hud-text);
 	font-size: 0.72rem;
 	text-align: left;
@@ -346,16 +367,16 @@
 
 /* Compact editor controls use the same interaction colours as management pages. */
 .editor-workspace :is(button, a, input, select, textarea):focus-visible {
-  outline: 2px solid var(--hud-teal);
+  outline: 2px solid var(--hud-teal-ink);
   outline-offset: 1px;
 }
 
 .editor-workspace :is(input, select, textarea):focus {
-  border-color: var(--hud-teal);
+  border-color: var(--hud-teal-ink);
 }
 
 .editor-workspace :is(input[type="checkbox"], input[type="range"]) {
-  accent-color: var(--hud-teal);
+  accent-color: var(--hud-teal-ink);
 }
 
 .editor-workspace .hud-kicker {

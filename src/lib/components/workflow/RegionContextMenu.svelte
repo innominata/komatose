@@ -726,7 +726,7 @@
     outline: 1px solid var(--accent, var(--ed-active, var(--hud-teal)));
   }
   .accent-save {
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
   }
   .accent-save i {
     margin-right: 0.35rem;

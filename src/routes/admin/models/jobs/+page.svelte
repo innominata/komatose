@@ -13,7 +13,6 @@
 	import { CHAT_AND_CLI_OPERATIONS, rowHasOperation } from '$lib/modelRegistry';
 	import { MODEL_TASKS, taskLabel } from '$lib/modelTasks';
 	import type { ProviderOperation } from '$lib/providerCatalog';
-	import ModelBenchmark from '$lib/components/ModelBenchmark.svelte';
 	import {
 		DETECTOR_ADDON_LABELS,
 		DETECTOR_BASE_LABELS,
@@ -365,8 +364,4 @@
 		{/if}
     <p class="muted small">Choose the transcription readers, Review Transcription reviewers, and Review Translation council as lists in each series’ AI model settings.</p>
 	</div>
-</div>
-
-<div class="section">
-	<ModelBenchmark />
 </div>

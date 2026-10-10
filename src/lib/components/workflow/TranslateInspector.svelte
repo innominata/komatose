@@ -342,7 +342,7 @@
   .sec { padding: 12px 14px; border-bottom: 1px solid var(--hud-line); display: grid; gap: 8px; }
   .sec h3 {
     margin: 0;
-    font: 700 12.5px Rajdhani, sans-serif;
+    font: 700 12.5px Manrope, sans-serif;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     display: flex;
@@ -357,7 +357,7 @@
     text-transform: none;
     padding: 1px 6px;
     border-radius: 8px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     color: var(--hud-muted);
   }
   .badge {
@@ -365,7 +365,7 @@
     min-width: 16px;
     padding: 0 5px;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--hud-hover);
     font: 500 10.5px/16px Inter, sans-serif;
     text-align: center;
     color: var(--hud-text);
@@ -377,8 +377,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    background: rgba(8, 10, 14, 0.7);
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    background: var(--hud-input-bg);
+    border: 1px solid var(--hud-line);
     border-radius: 4px;
     padding: 0 8px;
     color: var(--hud-muted);
@@ -404,7 +404,7 @@
     color: var(--hud-text);
     white-space: normal;
   }
-  .rrow:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); border-color: var(--hud-line); color: var(--hud-text); }
+  .rrow:hover:not(:disabled) { background: var(--hud-hover); border-color: var(--hud-line); color: var(--hud-text); }
   .rrow.sel, .rrow.sel:hover { background: var(--hud-teal-dim); }
   .rnum {
     flex: none;
@@ -427,11 +427,11 @@
   .chip-attn { background: rgba(245, 184, 92, 0.15); color: #f5b85c; }
   .chip-bad { background: rgba(255, 93, 115, 0.15); color: #ff5d73; }
   .chip-todo { background: rgba(125, 211, 252, 0.12); color: #7dd3fc; }
-  .chip-ignored { background: rgba(255, 255, 255, 0.07); color: var(--hud-muted); }
+  .chip-ignored { background: var(--hud-hover); color: var(--hud-muted); }
   .queue h4 {
     margin: 0;
     padding: 9px 12px 4px;
-    font: 700 11px Rajdhani, sans-serif;
+    font: 700 11px Manrope, sans-serif;
     letter-spacing: 0.07em;
     text-transform: uppercase;
     color: #f5b85c;

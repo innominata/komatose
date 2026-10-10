@@ -25,7 +25,7 @@
 <style>
 	.preview {
 		min-height: 100vh;
-		background: #080a0e;
+		background: var(--hud-canvas);
 		padding: 0.75rem 1rem 3rem;
 		overflow-x: auto;
 	}

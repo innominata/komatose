@@ -1,4 +1,6 @@
-/** Japanese manga SFX that translation models routinely miss or romanize. */
+/** Japanese and Korean comics SFX that translation models routinely miss or romanize. */
+
+import { KOREAN_SFX_TEXT } from './sfxKo';
 
 export type SfxEntry = {
 	source: string;
@@ -3162,6 +3164,34 @@ for (const line of SFX_TEXT.split('\n')) {
 
 longKeys.push(...[...byNorm.keys()].filter((key) => key.length >= 3).sort((a, b) => b.length - a.length));
 
+const koByNorm = new Map<string, SfxEntry>();
+
+function addKoreanEntry(source: string, meanings: string[]) {
+	if (!source || !meanings.length) return;
+	const norm = normalizeSfx(source);
+	if (!norm) return;
+	const existing = koByNorm.get(norm);
+	if (existing) {
+		mergeMeanings(existing.meanings, meanings);
+		return;
+	}
+	koByNorm.set(norm, { source, meanings: [...meanings] });
+}
+
+for (const line of KOREAN_SFX_TEXT.split('\n')) {
+	const trimmed = line.trim();
+	if (!trimmed || trimmed.startsWith('#')) continue;
+	const eq = trimmed.indexOf('=');
+	if (eq < 1) continue;
+	const source = trimmed.slice(0, eq).trim();
+	const meanings = trimmed
+		.slice(eq + 1)
+		.split(/\s+\/\s+/)
+		.map((part) => part.trim())
+		.filter(Boolean);
+	addKoreanEntry(source, meanings);
+}
+
 function lookupExact(norm: string) {
 	return byNorm.get(norm) ?? null;
 }
@@ -3215,9 +3245,96 @@ function lookupRepetition(norm: string) {
 	return null;
 }
 
+const HANGUL_BASE = 0xac00;
+const HANGUL_COUNT = 11172;
+const IEUNG = 11;
+/** Trailing stops used to cut an elongated vowel short: none, ㄱ, ㅅ, ㅆ, ㅇ, ㅋ. */
+const ECHO_FINALS = new Set([0, 1, 19, 20, 21, 24]);
+
+function hangulSyllable(ch: string) {
+	const code = ch.codePointAt(0) ?? 0;
+	if (code < HANGUL_BASE || code >= HANGUL_BASE + HANGUL_COUNT) return null;
+	const n = code - HANGUL_BASE;
+	return { initial: Math.floor(n / 588), medial: Math.floor((n % 588) / 28), final: n % 28 };
+}
+
+// Syllables, compatibility jamo, and the conjoining jamo NFKC rewrites ㅋㅎㅠㅜㅡ into.
+const KO_LETTER = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]/u;
+const KO_EMPHASIS = /[\u110f\u1112\u116e\u1172\u1173\u314b\u314e\u315c\u3160\u3161]/u;
+
+function isKoreanLettering(norm: string) {
+	return KO_LETTER.test(norm) && !/[\u3040-\u30ff\u4e00-\u9fff]/u.test(norm);
+}
+
+function stripKoEmphasis(text: string) {
+	const emphasis = new RegExp(`^(?:${KO_EMPHASIS.source})+$`, 'u');
+	if (emphasis.test(text)) return text;
+	return text.replace(new RegExp(`(?:${KO_EMPHASIS.source})+$`, 'u'), '') || text;
+}
+
+/** A following syllable that only stretches the previous vowel, including a hard stop (악, 앙, 앗). */
+function isKoEcho(prev: string, last: string) {
+	if (prev === last) return true;
+	const a = hangulSyllable(prev);
+	const b = hangulSyllable(last);
+	if (!a || !b || b.initial !== IEUNG || b.medial !== a.medial) return false;
+	return ECHO_FINALS.has(b.final);
+}
+
+function elongationForms(text: string) {
+	const forms = [text];
+	let cur = text;
+	while ([...cur].length > 1) {
+		const chars = [...cur];
+		const last = chars[chars.length - 1] ?? '';
+		const prev = chars[chars.length - 2] ?? '';
+		if (!isKoEcho(prev, last)) break;
+		cur = chars.slice(0, -1).join('');
+		forms.push(cur);
+	}
+	return forms;
+}
+
+function tilesAsRepeat(text: string, key: string) {
+	if (key.length < 1 || key.length >= text.length) return false;
+	if (key.repeat(Math.floor(text.length / key.length)) === text && text.length >= key.length * 2) return true;
+	const unit = smallestRepeatUnit(key);
+	return (
+		unit.length >= 1 &&
+		madeOf(text, unit) &&
+		madeOf(key, unit) &&
+		text.length > key.length &&
+		(unit.length >= 2 || [...key].length >= 2)
+	);
+}
+
+function lookupKorean(norm: string) {
+	const folded = stripKoEmphasis(norm);
+	if (!folded) return null;
+	let best: SfxEntry | null = null;
+	let bestLen = 0;
+	const consider = (key: string) => {
+		if (key.length <= bestLen) return;
+		const hit = koByNorm.get(key);
+		if (!hit) return;
+		best = hit;
+		bestLen = key.length;
+	};
+	for (const form of elongationForms(folded)) {
+		consider(form);
+		for (const key of koByNorm.keys()) {
+			if (key.length <= bestLen || key.length >= form.length) continue;
+			if (tilesAsRepeat(form, key)) consider(key);
+		}
+	}
+	return best;
+}
+
 /** Whole region is a known SFX, including punctuation, elongation, and repeats. */
 export function lookupStandaloneSfx(source: string): SfxEntry | null {
 	const norm = normalizeSfx(source);
+	if (!norm) return null;
+	if (isKoreanLettering(norm)) return lookupKorean(norm);
 	if (norm.length < 2) return null;
 	return lookupExact(norm) ?? lookupSokuon(norm) ?? lookupCore(norm) ?? lookupRepetition(norm);
 }
@@ -3240,18 +3357,33 @@ function lookupKanaRun(run: string) {
 	return found;
 }
 
-/** SFX that appear as their own kana run or as a 3+ mora term inside one. */
+function hangulGlossaryHit(token: string) {
+	const entry = lookupStandaloneSfx(token);
+	if (!entry) return null;
+	const key = normalizeSfx(entry.source);
+	const syllables = key.match(/[가-힣]/gu)?.length ?? 0;
+	// A one-syllable sound is only lettering when it is the whole region. Inside a sentence it is too easy to be a word.
+	if (syllables >= 2 || (syllables === 0 && [...key].length >= 2)) return entry;
+	return null;
+}
+
+/** SFX that appear as their own kana run, as a 3+ mora term inside one, or as a hangul token. */
 export function findSfxInText(source: string): SfxEntry[] {
 	const standalone = lookupStandaloneSfx(source);
 	if (standalone) return [standalone];
 	const found: SfxEntry[] = [];
 	const seen = new Set<SfxEntry>();
+	const push = (entry: SfxEntry) => {
+		if (seen.has(entry)) return;
+		seen.add(entry);
+		found.push(entry);
+	};
 	for (const run of source.normalize('NFKC').match(KANA_RUN) ?? []) {
-		for (const entry of lookupKanaRun(run)) {
-			if (seen.has(entry)) continue;
-			seen.add(entry);
-			found.push(entry);
-		}
+		for (const entry of lookupKanaRun(run)) push(entry);
+	}
+	for (const token of source.normalize('NFKC').match(/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]+/gu) ?? []) {
+		const entry = hangulGlossaryHit(token);
+		if (entry) push(entry);
 	}
 	return found;
 }
@@ -3293,14 +3425,55 @@ export function sfxTranslateHit(source: string): SfxHit | null {
 }
 
 export function sfxEntries() {
-	return [...new Set(byNorm.values())];
+	return [...new Set([...byNorm.values(), ...koByNorm.values()])];
 }
 
 export type RegionDetectionKind = 'bubble' | 'free' | 'unknown';
 
+/** Short Korean that is said, not lettered. One-syllable replies live here; longer speech is judged by shape. */
+const KO_SPOKEN =
+	/^(응|어|아|네|예|야|왜|뭐|음|오|아니|그래|맞아|진짜|정말|잠깐|저기|안녕|고마워|미안|좋아|싫어|가자|설마|뭐야|왜요|그래요|아니야|알았어|알겠어|괜찮아|어서|아이고|아이구|어머|어머나|대박|잠깐만|기다려|여기|거기|네네|응응|어어|예예)$/;
+
+function koreanPlain(text: string) {
+	return text.replace(/[\s\u3000…‥.。．·・･,，、!！?？~～〜'"″“”‘’「」『』()（）♪♡♥]/g, '');
+}
+
+/** The whole string is a repeated or stretched hangul burst, not a word that merely contains one. */
+function koreanOnomatopoeiaShape(plain: string) {
+	const core = stripKoEmphasis(plain);
+	if (!core || KO_SPOKEN.test(core)) return false;
+	const unit = smallestRepeatUnit(core);
+	if (unit !== core && KO_SPOKEN.test(unit)) return false;
+	if (/^(.)\1+$/u.test(core)) return true;
+	if (/^(.{2,3})\1+$/u.test(core)) return true;
+	if ([...core].length > 12) return false;
+	const short = elongationForms(core).at(-1) ?? core;
+	if (short === core) return false;
+	if ([...short].length === 1) return true;
+	const tail = hangulSyllable([...short].at(-1) ?? '');
+	return [...short].length === 2 && tail?.initial === IEUNG && tail.final === 0;
+}
+
+function looksLikeKoreanSpeech(text: string) {
+	if (/[\u3040-\u30ff\u4e00-\u9fff]/u.test(text)) return false;
+	const plain = koreanPlain(text);
+	if (!plain || !/^[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]+$/u.test(plain)) return false;
+	if (KO_SPOKEN.test(plain)) return true;
+	const core = stripKoEmphasis(plain);
+	return [...core].length >= 2 && !koreanOnomatopoeiaShape(core);
+}
+
+function looksLikeKoreanSentence(text: string) {
+	if (/[\u3040-\u30ff\u4e00-\u9fff]/u.test(text)) return false;
+	const plain = text.replace(/[^\uac00-\ud7a3]/g, '');
+	if ([...plain].length < 2) return false;
+	return !koreanOnomatopoeiaShape(plain);
+}
+
 /**
  * A reading is dialogue when it is not itself a dictionary SFX and it contains
- * kanji, or enough hiragana to be a spoken line. Katakana lettering stays eligible.
+ * kanji, enough hiragana to be a spoken line, or hangul that is not a sound effect.
+ * Katakana lettering stays eligible.
  */
 export function looksLikeDialogue(source: string) {
 	const text = source.normalize('NFKC').trim();
@@ -3308,23 +3481,31 @@ export function looksLikeDialogue(source: string) {
 	if (/[\u4e00-\u9fff]/.test(text)) return true;
 	const hiragana = text.match(/[\u3041-\u3096]/g)?.length ?? 0;
 	const katakana = text.match(/[\u30a1-\u30fa]/g)?.length ?? 0;
-	return hiragana >= 4 && hiragana > katakana;
+	if (hiragana >= 4 && hiragana > katakana) return true;
+	return looksLikeKoreanSpeech(text);
 }
 
-/** A reading that is plainly a sentence: three kanji, six hiragana, or kanji with okurigana. */
+/** A reading that is plainly a sentence: three kanji, six hiragana, kanji with okurigana, or a hangul phrase. */
 function looksLikeSentence(text: string) {
 	const kanji = text.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
 	const hiragana = text.match(/[\u3041-\u3096]/g)?.length ?? 0;
-	return kanji >= 3 || hiragana >= 6 || (kanji >= 1 && hiragana >= 3);
+	if (kanji >= 3 || hiragana >= 6 || (kanji >= 1 && hiragana >= 3)) return true;
+	return looksLikeKoreanSentence(text);
 }
 
 /**
  * The shape of an onomatopoeia that is not in the dictionary: kana only, short,
  * and either one sound stretched or repeated (ババババ, ちゅううう, ズバズバ) or a
- * katakana burst cut off by a small tsu (ドキッ, チッ).
+ * katakana burst cut off by a small tsu (ドキッ, チッ). Hangul uses the same idea
+ * for a repeated or stretched syllable, and any Korean dictionary hit.
  */
 export function looksLikeOnomatopoeia(source: string) {
 	const text = source.normalize('NFKC').replace(/[\s…・。、！？!?.,'"「」『』()（）~〜♪♡]/g, '');
+	if (isKoreanLettering(text)) {
+		if (!text) return false;
+		if (lookupStandaloneSfx(text)) return true;
+		return koreanOnomatopoeiaShape(text);
+	}
 	if (text.length < 2 || text.length > 12) return false;
 	if (!/^[\u3041-\u3096\u30a1-\u30fc]+$/.test(text)) return false;
 	// A repeated word is still a word: "yeah yeah", "no no".
@@ -3350,6 +3531,7 @@ const SPOKEN_PARTICLE = /(よ|ね|だ|ぞ|ぜ|か|な|わ)[！？!?…。、]*$/
 /** Hiragana-only and not a sound: "そう！" in a margin is speech even though the sound-effect detector fired. */
 function looksSpoken(text: string) {
 	const plain = text.replace(/[\s…・。、！？!?.,'"「」『』()（）~〜♪♡]/g, '');
+	if (/^[가-힣]+$/u.test(plain) && KO_SPOKEN.test(plain)) return true;
 	if (plain.length < 2 || plain.length > 8) return false;
 	if (!/^[\u3041-\u3096ー]+$/.test(plain)) return false;
 	if (looksLikeOnomatopoeia(plain)) return false;

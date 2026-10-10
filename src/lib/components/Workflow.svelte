@@ -73,13 +73,14 @@
     regionKindUsage,
     type RegionKind,
   } from "$lib/regionCatalog";
-  import { regionOval, regionRectangle, bubbleFitPoints } from "$lib/regionGeometry";
+  import { regionOval, regionRectangle, bubbleFitPoints, translatePolygon } from "$lib/regionGeometry";
   import {
     chapterExceptions,
     exceptionCursorFromView,
     needsTranslationReview,
     nextException,
     nextTranslationReview,
+    pageTranslationsSettled,
     type ChapterException,
   } from "$lib/exceptions";
   import { STUDIO_STAGE_ORDER, studioStepName, type StudioAction } from "$lib/studioActions";
@@ -235,6 +236,7 @@
     regionRevision?: number;
     rotation?: { initial: number; angle: number; center: Point; style: TextStyle };
     skew?: { axis: "x" | "y"; initial: number; angle: number; center: Point; style: TextStyle };
+    polygonDrag?: boolean;
   } | null>(null);
   let svgEl = $state<SVGSVGElement>();
   let canvasWidth = $state(0);
@@ -1982,6 +1984,7 @@
     };
   }
   function dragRegion(e: PointerEvent, l: LineRow, corner?: number) {
+    if (!["Translate", "Review"].includes(step)) return;
     if (e.button !== 0 || (!canEdit && !canClean) || tool !== "select" || busy || studioState?.regions[l.id]?.data.locked) return;
     e.stopPropagation();
     selectLine(l.id, "page");
@@ -2028,6 +2031,22 @@
     if (drawing.bounds && drawing.corner == null)
       return `transform:translate(${(adjustedBounds(drawing).x - drawing.bounds.x) * 100}%, ${(adjustedBounds(drawing).y - drawing.bounds.y) * 100}%)`;
     return undefined;
+  }
+  function startPolygonDrag(e: PointerEvent) {
+    e.stopPropagation();
+    if (e.button !== 0 || step !== "Typeset" || tool !== "select" || !canClean || busy) return;
+    if (!selected || !regionDoc || regionDoc.data.locked || selectedPolygon.length < 3) return;
+    e.preventDefault();
+    svgEl!.setPointerCapture(e.pointerId);
+    const p = coords(e);
+    drawing = {
+      start: p,
+      end: p,
+      points: [],
+      polygonDrag: true,
+      regionId: selected.id,
+      revision: regionDoc.revision,
+    };
   }
   function startRotation(e: PointerEvent) {
     e.stopPropagation();
@@ -2142,6 +2161,18 @@
         id: selected.id,
         expectedRevision: d.revision ?? regionDoc.revision,
         data: { polygon: poly, geometryApproved: false },
+      });
+      return;
+    }
+    if (d.polygonDrag && d.regionId && selected?.id === d.regionId && regionDoc) {
+      const dx = d.end.x - d.start.x;
+      const dy = d.end.y - d.start.y;
+      if (Math.abs(dx) + Math.abs(dy) < 0.002) return;
+      await act({
+        action: "region",
+        id: selected.id,
+        expectedRevision: d.revision ?? regionDoc.revision,
+        data: { polygon: translatePolygon(selectedPolygon, dx, dy), geometryApproved: false },
       });
       return;
     }
@@ -2452,9 +2483,21 @@
   }
   async function approveAndNext(line: LineRow) {
     lastException = null;
+    const imageId = line.imageId;
     edit(line, { status: "approved" });
     await saves.flush(line.id);
     if (saves.drafts.has(line.id)) return;
+    const stepKind = historyStep === "translate" || historyStep === "review" ? historyStep : null;
+    if (
+      imageId &&
+      stepKind &&
+      pageTranslationsSettled(studioState?.lines ?? [], imageId) &&
+      !pageStepDone(imageId, stepKind)
+    ) {
+      const result = await act({ action: "forget-page-history", imageId, step: stepKind });
+      if (!result) return;
+      notify(`Page marked done in ${pageStepLabel(stepKind)}.`);
+    }
     const next = nextTranslationReview(reviewLines, line.id);
     if (!next) {
       notify("Nothing left to review.");
@@ -2466,19 +2509,18 @@
     if (!pageId || busy) return;
     const currentId = pageId;
     const kind = step === "Review" ? "review" : step === "Clean" ? "clean" : step === "Typeset" ? "typeset" : "translate";
-    if (kind !== "clean" && kind !== 'typeset' && !confirm("Mark this page done for this step? That records it as finished for export and clears the saved undo history for this step. The current text and artwork stay. Editing again reopens it."))
-      return;
     const result = await act({ action: "forget-page-history", imageId: currentId, step: kind });
     if (!result) return;
     if (kind === 'clean') {
       discardMaskDraft(currentId);
     }
-    notify(kind === "clean" ? "Cleaning applied and approved. Page marked done in Clean." : kind === 'typeset' ? 'Page marked done in Typeset.' : "Saved history for this step was removed.");
+    const stepLabel = kind === "clean" ? "Clean" : kind === "typeset" ? "Typeset" : kind === "review" ? "Review" : "Translate";
+    notify(kind === "clean" ? "Cleaning applied and approved. Page marked done in Clean." : `Page marked done in ${stepLabel}.`);
     if (kind === "clean" && step === "Clean" && pageId === currentId) shiftPage(1);
-    if (kind === 'typeset' && step === 'Typeset' && pageId === currentId) {
-      const next = nextUnfinishedPage(studioState?.images ?? [], currentId, id => pageStepDone(id, 'typeset'));
+    if ((kind === "typeset" || kind === "translate" || kind === "review") && pageId === currentId) {
+      const next = nextUnfinishedPage(studioState?.images ?? [], currentId, (id) => pageStepDone(id, kind));
       if (next) choosePage(next.id);
-      else notify('All pages are marked done in Typeset.');
+      else notify(`All pages are marked done in ${stepLabel}.`);
     }
   }
   async function approveCleanedAndNext() {
@@ -3920,8 +3962,11 @@
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
             <button type="button" class="ed-btn" data-find="fill-missing" aria-label="Fill missing source &amp; English" title="Transcribe empty sources and fill empty English. Never overwrites." disabled={busy || !canEdit} onclick={() => fillMissing(scope === "page" ? page?.id : undefined)}><i class="bi bi-plus-square" aria-hidden="true"></i> Fill missing</button>
           {:else if step === "Review"}
-            <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
-            <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
+            {#if scope === "chapter"}
+              <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
+            {:else}
+              <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
+            {/if}
             <button type="button" class="ed-btn" data-find="accept-all" disabled={!canEdit || busy} onclick={async () => { const result = await act({ action: "approve-all-translations" }); if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`); }}><i class="bi bi-check2-all" aria-hidden="true"></i> Accept all translations</button>
           {:else if step === "Clean"}
             {@const maskDone = !!pageDoc?.data.maskApproved}
@@ -3980,7 +4025,9 @@
               <button type="button" role="menuitem" data-find="renumber" onclick={() => { moreOpen = false; void act({ action: "renumber" }); }}>Renumber pages</button>
               <button type="button" role="menuitem" data-find="prepare-undo" disabled={busy || !pageUndoCount} onclick={() => { moreOpen = false; pageOperation({ op: "undo" }); }}>{pageUndo?.label ?? 'Undo page edit'}</button>
             {:else if step === "Translate" || step === "Review"}
-              <button type="button" role="menuitem" disabled={busy || aiRunning || !canEdit} onclick={() => { moreOpen = false; scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire]); }}>Proofread entire script</button>
+              {#if step !== "Review" || scope === "chapter"}
+                <button type="button" role="menuitem" disabled={busy || aiRunning || !canEdit} onclick={() => { moreOpen = false; scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire]); }}>Proofread entire script</button>
+              {/if}
               <button type="button" role="menuitem" disabled={busy || !canEdit} onclick={() => { moreOpen = false; void rereadMissing(scope === "page" ? page?.id : undefined); }}>Retry uncertain image reading</button>
               <button type="button" role="menuitem" disabled={busy || !canUpload} onclick={() => { moreOpen = false; void describe(page ? [page.id] : undefined, true); }}>Refresh scene context</button>
               <button type="button" role="menuitem" disabled={!canEdit || busy || !blankRegionCount} onclick={() => { moreOpen = false; void removeBlankRegions(); }}>Remove all blank regions</button>
@@ -4216,6 +4263,7 @@
               {reorderFromId}
               onreorderclick={clickReorder}
               onstylebrush={paintStyle}
+              {startPolygonDrag}
               {startRotation}
               {rotationKey}
               {startSkew}
@@ -4910,7 +4958,7 @@
     height: 48px;
     margin: -24px 0 0 -24px;
     border: 8px solid var(--hud-line);
-    border-top-color: var(--hud-teal);
+    border-top-color: var(--hud-teal-ink);
     border-radius: 50%;
     animation: jobspin 0.8s linear infinite;
     pointer-events: none;
@@ -4940,7 +4988,7 @@
   }
   .workspace-tabs .ed-btn.active {
     background: var(--hud-teal-dim);
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
     border-bottom-color: var(--accent);
   }
   .ed-docbar .ed-btn {
@@ -4953,7 +5001,7 @@
   }
   .bilingual h2 {
     font:
-      700 12px "Rajdhani", sans-serif;
+      700 12px "Manrope", sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 14px 0 8px;
@@ -5016,8 +5064,8 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--hud-line);
+    background: var(--hud-btn-bg);
     color: var(--hud-text);
     font-family: Inter, system-ui, sans-serif;
     font-weight: 500;
@@ -5026,35 +5074,35 @@
     letter-spacing: 0;
     text-transform: none;
     white-space: nowrap;
-    border-radius: 5px;
+    border-radius: 999px;
     padding: 5px 10px;
     cursor: pointer;
   }
   button:hover:not(:disabled) {
     background: var(--hud-teal-dim);
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   button:disabled {
     opacity: 0.4;
     cursor: default;
   }
   button.primary {
-    background: var(--hud-teal);
-    color: #04201b;
-    border-color: var(--hud-teal);
+    background: transparent;
+    color: var(--hud-teal-ink);
+    border-color: var(--hud-teal-ink);
     font-weight: 600;
   }
   button.primary:hover:not(:disabled) {
-    background: #5cf0d8;
-    color: #04201b;
+    background: var(--hud-teal-dim);
+    color: var(--hud-teal-ink);
   }
   button.ghost {
     background: transparent;
     border-color: transparent;
   }
   button.ghost:hover:not(:disabled) {
-    border-color: rgba(244, 247, 251, 0.18);
-    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--hud-line);
+    background: var(--hud-hover);
   }
   button.icon-only {
     padding: 5px 7px;
@@ -5073,7 +5121,7 @@
   }
   .seg {
     display: inline-flex;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     border-radius: 5px;
     overflow: hidden;
     flex: none;
@@ -5091,16 +5139,16 @@
   }
   .seg button.on {
     background: var(--hud-teal-dim);
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
   }
   input,
   textarea,
   select {
-    background: rgba(8, 10, 14, 0.7);
-    border: 1px solid rgba(244, 247, 251, 0.18);
-    border-radius: 4px;
-    color: var(--ink);
-    padding: 5px 7px;
+    background: var(--hud-input-bg);
+    border: 1px solid var(--hud-line);
+    border-radius: 999px;
+    color: var(--hud-text);
+    padding: 5px 10px;
     font-size: 12.5px;
     width: 100%;
   }
@@ -5108,10 +5156,11 @@
   textarea:focus,
   select:focus {
     outline: none;
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   textarea {
     resize: vertical;
+    border-radius: 12px;
   }
   input[type="checkbox"] {
     width: auto;
@@ -5192,6 +5241,7 @@
     overflow: hidden;
   }
   .canvas-column {
+    position: relative;
     flex: 1;
     min-width: 0;
     min-height: 0;
@@ -5215,15 +5265,20 @@
     align-items: center;
     gap: 10px;
     padding: 14px 18px;
-    border: 2px solid #ffffff;
+    border: 1px solid var(--hud-line);
     border-radius: 14px;
-    background: #087f6b;
-    color: #fff;
+    background: var(--hud-bg-2);
+    color: var(--hud-text);
     font: 700 14px Inter, system-ui, sans-serif;
-    box-shadow: 0 4px 18px #0009;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   }
   .floating-apply-clean .bi { font-size: 24px; }
-  .floating-apply-clean:hover:not(:disabled) { background: #086451; }
+  .floating-apply-clean:hover:not(:disabled) {
+    background: var(--hud-teal-dim);
+    color: var(--hud-teal-ink);
+    border-color: var(--hud-teal-ink);
+    filter: none;
+  }
   .floating-apply-clean:disabled { opacity: .55; cursor: default; }
   .ed-main {
     position: relative;
@@ -5244,8 +5299,8 @@
     flex-direction: column;
     min-width: 250px;
     padding: 4px;
-    background: #171d28;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    background: var(--hud-bg-2);
+    border: 1px solid var(--hud-line);
     border-radius: 7px;
     box-shadow: 0 14px 44px rgba(0, 0, 0, 0.65);
   }
@@ -5287,14 +5342,14 @@
   }
   .insp-tabs button[aria-selected="true"] {
     color: var(--hud-text);
-    border-bottom-color: var(--hud-teal);
+    border-bottom-color: var(--hud-teal-ink);
   }
   :global(.studio .badge) {
     display: inline-block;
     min-width: 16px;
     padding: 0 5px;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--hud-hover);
     color: var(--hud-text);
     font-size: 10.5px;
     text-align: center;
@@ -5309,7 +5364,7 @@
   }
   .icon-btn:hover:not(:disabled) {
     color: var(--hud-text);
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--hud-hover);
   }
   .sec {
     padding: 12px 14px;
@@ -5319,7 +5374,7 @@
   }
   .sec h3 {
     margin: 0;
-    font: 700 12.5px Rajdhani, sans-serif;
+    font: 700 12.5px Manrope, sans-serif;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--hud-text);
@@ -5330,16 +5385,16 @@
     align-items: center;
     gap: 6px;
     padding: 3px 8px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     border-radius: 5px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--hud-hover);
     color: var(--hud-text);
     font: 500 12px Inter, system-ui, sans-serif;
     letter-spacing: 0;
     text-transform: none;
   }
   .sec > :global(button:hover:not(:disabled)) {
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
     background: var(--hud-teal-dim);
   }
   .bilingual :global(.page-meta textarea) {
@@ -5348,16 +5403,16 @@
   .bilingual :global(.page-meta .ed-btn) {
     justify-self: start;
     padding: 3px 8px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     border-radius: 5px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--hud-hover);
     color: var(--hud-text);
     font: 500 12px Inter, system-ui, sans-serif;
     letter-spacing: 0;
     text-transform: none;
   }
   .bilingual :global(.page-meta .ed-btn:hover:not(:disabled)) {
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
     background: var(--hud-teal-dim);
   }
   .nudge {
@@ -5397,12 +5452,12 @@
     display: grid;
     place-items: center;
     font-size: 10.5px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
   }
   .pipeline li.done { color: #5ee39a; border-color: rgba(94, 227, 154, 0.35); }
   .pipeline li.done span { background: #5ee39a; color: #03220f; border-color: #5ee39a; }
-  .pipeline li.now { color: var(--hud-teal); border-color: rgba(45, 226, 197, 0.5); background: var(--hud-teal-dim); }
-  .pipeline li.now span { border-color: var(--hud-teal); }
+  .pipeline li.now { color: var(--hud-teal-ink); border-color: rgba(45, 226, 197, 0.5); background: var(--hud-teal-dim); }
+  .pipeline li.now span { border-color: var(--hud-teal-ink); }
   .issues-pop {
     position: absolute;
     z-index: 40;
@@ -5476,7 +5531,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 8px 0 12px;
-    font: 600 10.5px Rajdhani, sans-serif;
+    font: 600 10.5px Manrope, sans-serif;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--hud-muted);
@@ -5570,7 +5625,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
     font-size: 12px;
   }
   .job-spinner .spin,
@@ -5578,7 +5633,7 @@
     width: 12px;
     height: 12px;
     border: 2px solid var(--hud-line);
-    border-top-color: var(--hud-teal);
+    border-top-color: var(--hud-teal-ink);
     border-radius: 50%;
     animation: jobspin 0.8s linear infinite;
   }
@@ -5611,7 +5666,7 @@
     position: sticky;
     top: 0;
     z-index: 3;
-    background: #141922;
+    background: var(--hud-bg-2);
   }
   .prepare,
   .export {
@@ -5638,7 +5693,7 @@
   }
   .upload {
     padding: 24px;
-    border: 1px dashed var(--hud-teal);
+    border: 1px dashed var(--hud-teal-ink);
     background: var(--hud-teal-dim);
     max-width: 700px;
   }
@@ -5718,7 +5773,7 @@
     overflow-anchor: none;
     overscroll-behavior: contain;
     scrollbar-width: thin;
-    background: #141922;
+    background: var(--hud-bg-2);
     border-left: 1px solid var(--hud-line);
     min-height: 0;
   }

@@ -6,6 +6,7 @@ import {
   regionPaintOrder,
   sameDetectedTextBox,
   regionRectangle,
+  translatePolygon,
 } from "../src/lib/regionGeometry";
 
 test("overlapping text of different sizes remains distinct; duplicate boxes collapse", () => {
@@ -90,6 +91,20 @@ test("matching text lets redetection tighten a box, differing text never merges"
   // Text on one side only leaves the geometry to decide.
   assert.equal(sameDetectedTextBox(large,tightened,"待って",""),false);
   assert.equal(sameDetectedTextBox(large,tightened,"待って",undefined),false);
+});
+
+test("translating a polygon keeps its shape on the page", () => {
+  const shape = [{ x: 0.25, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.375, y: 0.75 }];
+  assert.deepEqual(translatePolygon(shape, 0.25, -0.25), [
+    { x: 0.5, y: 0.25 },
+    { x: 0.75, y: 0.25 },
+    { x: 0.625, y: 0.5 },
+  ]);
+  assert.deepEqual(translatePolygon(shape, 5, -5), [
+    { x: 0.75, y: 0 },
+    { x: 1, y: 0 },
+    { x: 0.875, y: 0.25 },
+  ]);
 });
 
 test("overlapping regions paint the smallest box on top", () => {

@@ -48,6 +48,7 @@
 	let remoteSlug = $state('');
 	let probe = $state<{ keySet: boolean; models: { id: string; label: string }[]; error?: string } | null>(null);
 	let picked = $state<Set<string>>(new Set());
+	let modelQuery = $state('');
 
 	// ---- cli
 	let cliAdapter = $state('codex');
@@ -115,7 +116,15 @@
 		remoteKeyVar = item.apiKeyEnv;
 		probe = null;
 		picked = new Set();
+		modelQuery = '';
 	}
+
+	const shownModels = $derived.by(() => {
+		const models = probe?.models || [];
+		const query = modelQuery.trim().toLowerCase();
+		if (!query) return models;
+		return models.filter((model) => `${model.id} ${model.label}`.toLowerCase().includes(query));
+	});
 
 	const llamaOptions = $derived(deviceOptions('llama', data.hardware));
 	const cliTools = $derived(data.cliTools);
@@ -232,6 +241,7 @@
 	async function probeRemote() {
 		await run(async () => {
 			probe = null;
+			modelQuery = '';
 			const json = await apiPost('/api/admin/remote-providers', { action: 'probe', baseUrl: remoteBase, apiKeyEnv: remoteKeyVar });
 			probe = {
 				keySet: json.keySet === true,
@@ -381,12 +391,16 @@
 					{/if}
 					{#if probe.models.length}
 						<div class="kicker" style="margin-top:.7rem">Models this endpoint offers</div>
+						<input type="search" placeholder="Search returned models" aria-label="Search returned models" bind:value={modelQuery} />
+						<p class="muted small" style="margin:.35rem 0 0">{shownModels.length} of {probe.models.length} shown{picked.size ? ` · ${picked.size} selected` : ''}</p>
 						<div class="pick-list">
-							{#each probe.models as model (model.id)}
+							{#each shownModels as model (model.id)}
 								<label class="pick">
 									<input type="checkbox" checked={picked.has(model.id)} onchange={(e) => { const next = new Set(picked); e.currentTarget.checked ? next.add(model.id) : next.delete(model.id); picked = next; }} />
-									<span class="grow"><code>{model.id}</code></span>
+									<span class="grow"><code>{model.id}</code>{#if model.label && model.label !== model.id} <span class="muted">{model.label}</span>{/if}</span>
 								</label>
+							{:else}
+								<p class="muted small">No models match that search.</p>
 							{/each}
 						</div>
 					{:else}

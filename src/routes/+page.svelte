@@ -31,7 +31,7 @@
 			<form method="POST" action="?/create" use:enhance class="d-flex flex-column align-items-end gap-2">
 				<div class="d-flex gap-2">
 					<input class="form-control" name="title" placeholder="New series title" bind:value={newTitle} required />
-					<button class="btn-hud" type="submit">Add</button>
+					<button class="btn-hud-primary" type="submit">Add</button>
 				</div>
 				<WorkCredit title={newTitle} />
 			</form>

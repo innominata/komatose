@@ -90,7 +90,7 @@
     padding: 8px;
     border-radius: 6px;
   }
-  nav button.on { background: var(--hud-teal-dim); color: var(--hud-teal); }
+  nav button.on { background: var(--hud-teal-dim); color: var(--hud-teal-ink); }
   nav small { color: var(--hud-muted); font-size: 11px; }
   .drawer-panel { flex: 1; min-width: 0; overflow: auto; padding: 16px; }
 </style>

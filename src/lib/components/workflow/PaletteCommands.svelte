@@ -294,7 +294,7 @@
       aria-label="Apply cleaning &amp; start new mask"
       disabled={busy || !canClean || !pageDoc?.data.cleaned || strokes.length > 0}
       onclick={ops.applyCleaningPass}
-      style="color: var(--hud-teal)"
+      style="color: var(--hud-teal-ink)"
       ><i class="bi bi-floppy" aria-hidden="true"></i></button
     >
     <button

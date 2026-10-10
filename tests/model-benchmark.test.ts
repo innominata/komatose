@@ -14,6 +14,11 @@ import {
 	ocrKey,
 	officialBaseline,
 	parseBenchmarkOutput,
+	parseReviewGrades,
+	parseReviewScore,
+	REVIEW_SYSTEM,
+	reviewLetter,
+	reviewUserPrompt,
 	scoreDetection,
 	scoreOcrPage,
 	scoreTranslationPage,
@@ -39,7 +44,7 @@ test('the gold covers all ten fixture pages with sane boxes and references', () 
 	const ids = new Set<string>();
 	for (const item of GOLD_PAGES) {
 		assert.ok(existsSync(join(process.cwd(), item.file)), item.file);
-		assert.ok(existsSync(join(process.cwd(), item.english)), item.english);
+		assert.ok(existsSync(join(process.cwd(), item.english!)), item.english);
 		for (const line of item.lines) {
 			assert.ok(!ids.has(line.id), `duplicate ${line.id}`);
 			ids.add(line.id);
@@ -98,7 +103,7 @@ test('OCR: fuzzy alignment ignores order and punctuation, charges edits, and mea
 	assert.equal(fuzzyFind('xxabdxx', 'abc').distance, 1);
 
 	const p = page('007');
-	const perfect = scoreOcrPage(p, [...p.lines].reverse().map((line) => line.ja).join('\n'));
+	const perfect = scoreOcrPage(p, [...p.lines].reverse().map((line) => line.source).join('\n'));
 	assert.ok(perfect.lines.every((line) => line.accuracy === 1));
 	assert.equal(perfect.noise, 0);
 
@@ -207,7 +212,7 @@ test('OCR run: every detector setup is scored per page, and crop models read gol
 			const [x, y] = JSON.parse(jpeg.toString()) as number[];
 			const line = pages.flatMap((p) => p.lines).find((item) => item.boxes.some((b) => Math.abs(b[0] - x) <= 12 && Math.abs(b[1] - y) <= 12));
 			readTexts.push(line?.id || '?');
-			return line?.ja || '';
+			return line?.source || '';
 		},
 	});
 	const { ocr } = await waitBenchmark();
@@ -259,7 +264,7 @@ test('OCR run: one failed crop does not fail the page, and English misreads are 
 			if (Math.abs(x - art[0]) <= 12 && Math.abs(y - art[1]) <= 12) return 'HOSARY';
 			const line = p.lines.find((item) => item.boxes.some((b) => Math.abs(b[0] - x) <= 12 && Math.abs(b[1] - y) <= 12));
 			if (line?.id === '007-me-too') throw new Error('reached its output limit');
-			return line?.ja || '';
+			return line?.source || '';
 		},
 	});
 	const { ocr } = await waitBenchmark();
@@ -410,4 +415,88 @@ test('benchmark column sort puts missing values last and toggles on the same hea
 		(row) => row.n,
 	);
 	assert.deepEqual(rows.map((row) => row.id), ['high', 'low', 'empty']);
+});
+
+test('meaning review grades saved translations without rewarding a copied reference', async () => {
+	assert.equal(parseReviewScore(96), 0.96);
+	assert.equal(parseReviewScore('0.82'), 0.82);
+	assert.equal(parseReviewScore('B'), 0.82);
+	assert.equal(parseReviewScore(1), 1);
+	assert.equal(reviewLetter(0.96), 'A');
+	assert.equal(reviewLetter(0.82), 'B');
+	assert.match(REVIEW_SYSTEM, /Do not reward copying the reference/);
+	assert.match(REVIEW_SYSTEM, /assessment of two to four sentences/);
+	const graded = parseReviewGrades('```json\n{"assessment":"Holds the meaning in different words.","lines":[{"id":"007-i-win","score":96,"note":"Same win, different words."},{"id":"other","score":10,"note":"no"}]}\n```', ['007-i-win']);
+	assert.equal(graded.assessment, 'Holds the meaning in different words.');
+	assert.deepEqual(graded.lines, [{ id: '007-i-win', comparable: 0.96, note: 'Same win, different words.' }]);
+	assert.throws(() => parseReviewGrades({ lines: [] }, ['007-i-win']), /did not grade/);
+
+	const { startTranslationBenchmark, startTranslationReview, waitBenchmark, listBenchmarkStatus } = await import('../src/lib/server/modelBenchmark');
+	const hy = structuredClone(SEED_ROWS.find((item) => item.id === 'hy-mt2-manga-v5')!);
+	const opus = structuredClone(SEED_ROWS.find((item) => item.id === 'opus-mt-ja-en')!);
+	const reviewer = {
+		...hy,
+		id: 'meaning-grader',
+		name: 'Meaning grader',
+		slug: 'meaning-grader',
+		managedLaunch: null,
+		capabilities: { conversation: { capability: 'conversation' as const, ok: true, fingerprint: 'chat', at: 1 } },
+		capabilityFingerprints: { conversation: 'chat' },
+	};
+	const failed = { ...reviewer, id: 'failed-chat', capabilities: { conversation: { ...reviewer.capabilities!.conversation!, ok: false } } };
+	const pages = [page('007'), page('009')];
+	const translate = async (_row: typeof hy, boxes: { id?: string }[], p: ReturnType<typeof page>) => boxes.map((box) => {
+		const line = p.lines.find((item) => item.id === box.id)!;
+		const translation = box.id === '007-i-win' ? 'I take this round.' : (line.en || '');
+		return { ...box, translation, literal: line.literal || '' };
+	});
+	startTranslationBenchmark({ models: [hy.id, opus.id], rows: [hy, opus], pages, translate });
+	await waitBenchmark();
+	assert.throws(() => startTranslationReview({ reviewer: failed.id, rows: [failed] }), /Conversation check/);
+	assert.throws(() => startTranslationReview({ reviewer: 'missing', rows: [reviewer] }), /Conversation check/);
+
+	let prompts = 0;
+	startTranslationReview({
+		reviewer: reviewer.id,
+		rows: [reviewer, failed],
+		models: [hy.id],
+		review: async (_row, prompt, abort) => {
+			abort.throwIfAborted();
+			prompts += 1;
+			const body = JSON.parse(prompt) as { lines: { id: string; page?: string; source: string; response: string }[] };
+			assert.ok(body.lines.some((line) => line.page === '007' && line.source && line.response === 'I take this round.'));
+			assert.ok(body.lines.some((line) => line.page === '009'));
+			return {
+				assessment: 'A close localization. The win is reworded and still means the same thing.',
+				lines: body.lines.map((line) => ({ id: line.id, score: line.id === '007-i-win' ? 96 : 90, note: 'Comparable.' })),
+			};
+		},
+	});
+	assert.throws(() => startTranslationBenchmark({ models: [hy.id], rows: [hy], pages, translate }), /already running/);
+	await waitBenchmark();
+	const status = listBenchmarkStatus();
+	assert.equal(status.review?.state, 'done');
+	assert.equal(status.review?.progress.total, 1, 'every page of a saved translation is one request');
+	assert.equal(status.review?.reviewerName, 'Meaning grader');
+	const gradedModel = status.runs.translation!.models.find((item) => item.id === hy.id)!;
+	const untouched = status.runs.translation!.models.find((item) => item.id === opus.id)!;
+	assert.equal(untouched.review, undefined);
+	assert.equal(gradedModel.review?.error, undefined);
+	assert.equal(gradedModel.review?.assessment, 'A close localization. The win is reworded and still means the same thing.');
+	assert.equal(reviewLetter(gradedModel.review!.totals.comparable), 'A');
+	assert.equal(gradedModel.review!.totals.lines, gradedModel.pages.reduce((sum, item) => sum + item.lines.length, 0));
+	const win = gradedModel.pages[0].lines.find((line) => line.id === '007-i-win')!;
+	assert.ok(win.chrfOfficial < 0.5, 'the localization does not copy the official wording');
+	assert.ok((gradedModel.review!.lines.find((line) => line.id === '007-i-win')?.comparable || 0) >= 0.9);
+	assert.equal(prompts, 1);
+
+	startTranslationBenchmark({
+		models: [hy.id],
+		rows: [hy, opus],
+		pages: [page('007')],
+		translate,
+	});
+	await waitBenchmark();
+	const replaced = listBenchmarkStatus().runs.translation!.models.find((item) => item.id === hy.id)!;
+	assert.equal(replaced.review, undefined, 'benchmarking the model again drops the grade for the old responses');
 });

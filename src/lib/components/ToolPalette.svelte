@@ -464,7 +464,7 @@
     grid-column: 1 / -1;
     color: var(--ed-muted);
     font:
-      600 10px "Rajdhani",
+      600 10px "Manrope",
       sans-serif;
     text-align: center;
     text-transform: uppercase;
@@ -490,7 +490,7 @@
   .palette .ed-rail-btn:hover:not(:disabled),
   .palette :global(.palette-command:hover:not(:disabled)) {
     background: var(--ed-hover);
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   .palette .ed-rail-btn.active,
   .palette :global(.palette-command[aria-pressed="true"]) {

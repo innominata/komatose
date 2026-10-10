@@ -128,8 +128,8 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Delete region", "Region menu · Order & bounds tab · Delete key", "Region context menu", regionMenu("translate", "Delete region")),
 
   A("Review translations (go to review)", "Review step", "Translate panel button · palette", { stage: "review", tab: "queue" }, "tab-review-queue", "approve queue"),
-  A("Proofread edited English", "Review › Stage bar · Translate › More", "Chapter/Page menus · palette · Optional tools", { stage: "review" }, "proofread-english"),
-  A("Proofread entire script", "Review › Stage bar · Translate/Review › More", "Chapter menu", { stage: "review" }, "proofread-script", "whole chapter English text proofreading"),
+  A("Proofread edited English", "Review › Stage bar (this page) · Translate › More", "Chapter/Page menus · palette · Optional tools", { stage: "review", scope: "page" }, "proofread-english"),
+  A("Proofread entire script", "Review › Stage bar (whole chapter) · Translate/Review › More", "Chapter menu", { stage: "review", scope: "chapter" }, "proofread-script", "whole chapter English text proofreading"),
   A("View / copy scripts and metadata", "Export › Scripts & metadata", "Bilingual script, English script, JSON, font manifest and readiness notes", { stage: "export" }, "export-documents", "scene notes multiple chapters download text"),
   A("Accept all translations", "Review › Stage bar · Export › Quick fixes", "Export panel", { stage: "review" }, "accept-all"),
   A("Copy raw image", "Review › Stage bar · Typeset › More", "Palette Images group", { stage: "review" }, "copy-raw", "clipboard"),

@@ -1161,11 +1161,13 @@ async function runTranscribeJob(
               y: place.y,
               w: place.w,
               h: place.h,
-              lineType: classifyRegionLineType(
-                item.region.kind,
-                sfxClassificationSource(item.consensus.source, item.consensus.readings),
-                { sfxDetector: item.region.provenance?.backend?.startsWith("coo") },
-              ),
+              lineType: item.region.boxed
+                ? "[]"
+                : classifyRegionLineType(
+                    item.region.kind,
+                    sfxClassificationSource(item.consensus.source, item.consensus.readings),
+                    { sfxDetector: item.region.provenance?.backend?.startsWith("coo") },
+                  ),
               source: "",
               literal: "",
               translation: "",
@@ -1178,6 +1180,7 @@ async function runTranscribeJob(
             putDoc(job.episodeId, doc.id, {
               ...doc.data, polygon: item.region.polygon,
               detectionKind: item.region.kind,
+              ...(item.region.boxed ? { boxed: true } : {}),
               detectionProvenance: item.region.provenance,
               bubbleBounds: item.region.bubble,
               geometryConfidence: item.region.geometryConfidence, geometryApproved: false,

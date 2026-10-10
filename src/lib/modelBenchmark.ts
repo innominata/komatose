@@ -7,9 +7,10 @@ import {
 	type GoldLine,
 	type GoldPage,
 } from './benchmarkGold';
+import type { BenchmarkDataset } from './benchmarkDatasets';
 
 /**
- * Scoring for the ten-page benchmark in fixtures/test-pages; the gold is in benchmarkGold.
+ * Shared scoring for the Japanese manga and Korean manhwa gold datasets.
  *
  * Detection: a gold box is found when detections cover at least half of it. A detection
  * is correct when it sits mostly on required lettering, or covers most of one required
@@ -20,8 +21,10 @@ import {
  * reading order and line breaks do not matter. Line accuracy is 1 − edits / length,
  * weighted by characters. Output that no gold line accounts for is noise.
  *
- * Translation: chrF (character 1–6-grams, β = 2, case-insensitive) against the official
+ * Translation: chrF (character 1–6-grams, β = 2, case-insensitive) against the reference
  * English and against the literal reference, plus meaning checks from the gold keys.
+ * A chat model can also grade saved translations for meaning: different wording that
+ * keeps the same facts, names, and intent still counts as comparable.
  */
 
 export type DetectionScore = {
@@ -224,8 +227,8 @@ export function scoreOcrPage(page: GoldPage, output: string): OcrPageScore {
 	const free = () => chars.map((ch, i) => (used[i] ? '\u0000' : ch)).join('');
 	const scored = new Map<string, OcrLineScore>();
 	const order = page.lines
-		.map((line) => ({ line, gold: ocrKey(line.ja) }))
-		.filter((item) => item.gold)
+		.map((line) => ({ line, gold: ocrKey(line.source) }))
+		.filter((item) => item.gold && item.line.ocr !== false)
 		.sort((a, b) => [...b.gold].length - [...a.gold].length);
 	for (const { line, gold } of order) {
 		const size = [...gold].length;
@@ -234,7 +237,7 @@ export function scoreOcrPage(page: GoldPage, output: string): OcrPageScore {
 			const accuracy = Math.max(0, 1 - hit.distance / size);
 			if (copy === 0) {
 				const group = goldOcrGroup(line);
-				if (group) scored.set(line.id, { id: line.id, group, gold: line.ja, read: chars.slice(hit.start, hit.end).join(''), accuracy, chars: size });
+				if (group) scored.set(line.id, { id: line.id, group, gold: line.source, read: chars.slice(hit.start, hit.end).join(''), accuracy, chars: size });
 			}
 			if (accuracy < 0.5) break;
 			for (let i = hit.start; i < hit.end; i++) used[i] = true;
@@ -359,12 +362,12 @@ export function keyHits(keys: string[][] | undefined, text: string): { hit: numb
 
 export type TranslationLineScore = {
 	id: string;
-	ja: string;
+	source: string;
 	official: string;
 	goldLiteral: string;
 	translation: string;
 	literal: string;
-	/** chrF of the translation against the official English. */
+	/** chrF against natural English (official edition or checked reference). */
 	chrfOfficial: number;
 	/** chrF of the model's literal (or its translation when it gives none) against the literal reference. */
 	chrfLiteral: number;
@@ -386,7 +389,7 @@ export function scoreTranslationLine(line: GoldLine, out: TranslationOutput | un
 	const keys = keyHits(line.keys, translation);
 	return {
 		id: line.id,
-		ja: line.ja,
+		source: line.source,
 		official: line.en || '',
 		goldLiteral: line.literal || '',
 		translation,
@@ -422,9 +425,9 @@ export function totalTranslation(lines: TranslationLineScore[]): TranslationTota
 	};
 }
 
-/** The official English scored against the literal reference: a ceiling for how "literal" a fluent line reads. */
-export function officialBaseline(): TranslationTotals {
-	return totalTranslation(GOLD_PAGES.flatMap((page) =>
+/** Natural English scored against the literal reference: the dataset reference baseline. */
+export function officialBaseline(pages: GoldPage[] = GOLD_PAGES): TranslationTotals {
+	return totalTranslation(pages.flatMap((page) =>
 		scoreTranslationPage(page, goldTranslationLines(page).map((line) => ({ id: line.id, translation: line.en || '' })))));
 }
 
@@ -517,9 +520,44 @@ export type TranslationResult = {
 	/** When this model was benchmarked. */
 	at?: number;
 	error?: string;
+	/** Meaning grade of these saved lines. Dropped when this model is benchmarked again. */
+	review?: TranslationReview;
 };
 
+export type LineReview = { id: string; comparable: number; note: string };
+export type ReviewTotals = { comparable: number; graded: number; lines: number };
+export type TranslationReview = {
+	reviewerId: string;
+	reviewerName: string;
+	at: number;
+	/** `at` of the translation result these grades belong to. */
+	resultAt: number;
+	lines: LineReview[];
+	totals: ReviewTotals;
+	/** Two to four sentences on the translation as a whole. */
+	assessment?: string;
+	error?: string;
+};
+export type ReviewProgress = {
+	state: 'running' | 'done' | 'error' | 'cancelled';
+	reviewerId: string;
+	reviewerName: string;
+	at: number;
+	finishedAt?: number;
+	progress: { done: number; total: number; step: string };
+	error?: string;
+};
+
+/** Hide a grade that belongs to an older run of the same model. */
+export function attachedReview(row: { at?: number; review?: TranslationReview }): TranslationReview | undefined {
+	const review = row.review;
+	if (!review || (row.at && review.resultAt && review.resultAt !== row.at)) return;
+	return review;
+}
+
 type RunBase = {
+	dataset: string;
+	datasetVersion: number;
 	id: string;
 	at: number;
 	finishedAt?: number;
@@ -536,6 +574,9 @@ export type BenchmarkKind = 'ocr' | 'translation';
 export type BenchmarkModel = { id: string; name: string; local?: boolean; billed?: boolean; crops?: boolean; specialist?: boolean };
 
 export type BenchmarkStatus = {
+	dataset: BenchmarkDataset;
+	datasets: { id: string; label: string }[];
+	runningDataset: string | null;
 	ok: boolean;
 	available: boolean;
 	pages: { id: string; note: string }[];
@@ -543,8 +584,11 @@ export type BenchmarkStatus = {
 	chapterSetup: string;
 	ocrModels: BenchmarkModel[];
 	translationModels: BenchmarkModel[];
+	/** Models with a passing Conversation check. Any of them can grade saved translations. */
+	reviewModels: BenchmarkModel[];
+	review: ReviewProgress | null;
 	baseline: TranslationTotals;
-	running: BenchmarkKind | null;
+	running: BenchmarkKind | 'review' | null;
 	runs: { ocr: OcrRun | null; translation: TranslationRun | null };
 };
 
@@ -573,7 +617,7 @@ export function parseBenchmarkOutput(text: string): { source: string } {
 	return { source: raw };
 }
 
-export const BENCHMARK_PAGE_SYSTEM = 'You transcribe manga pages. Return JSON only, no markdown.';
+export const BENCHMARK_PAGE_SYSTEM = 'You transcribe comic pages. Return JSON only, no markdown.';
 export const BENCHMARK_PAGE_USER =
 	'Transcribe every piece of Japanese lettering on this page — speech balloons, captions, sound effects, and signs — in reading order (right-to-left, top-to-bottom). Leave out furigana. JSON: {"lines":["one balloon or caption per entry"]}';
 export const BENCHMARK_PAGE_SCHEMA = {
@@ -582,3 +626,132 @@ export const BENCHMARK_PAGE_SCHEMA = {
 	required: ['lines'],
 	properties: { lines: { type: 'array', items: { type: 'string' } } },
 };
+
+/** Language and reading order belong to the fixture, not the model. */
+export function benchmarkPagePrompt(lang: 'japanese' | 'korean') {
+  return lang === 'japanese' ? BENCHMARK_PAGE_USER
+    : 'Transcribe every piece of Korean lettering on this page — speech balloons, captions, sound effects, and signs — in reading order (top-to-bottom, left-to-right within panels). Preserve standalone Hangul consonants. JSON: {"lines":["one balloon or caption per entry"]}';
+}
+
+export const REVIEW_SYSTEM = `You grade a comic translation against a checked English reference. Compare meaning, not words.
+
+The reference is one good rendering, not the only wording. A different localization is highly comparable when a reader would take away the same facts, names, numbers, relationships, tone, and intent. Do not reward copying the reference. Do not mark a line down only because it is more literal or more natural than the reference.
+
+Grade the response field. responseLiteral, when present, is the model's own close rendering and is context only.
+
+Score each line as an integer from 0 to 100:
+- 100: same meaning, facts, and tone; the wording may differ completely
+- 75: the meaning is there, with a small miss in tone or a minor detail
+- 50: the point survives, but a fact, name, number, or the tone is wrong
+- 25: only partly related
+- 0: empty, unrelated, or the opposite meaning
+
+Return JSON only: an assessment of two to four sentences on the translation as a whole, plus one note of at most 20 words per line. The assessment should say what the translation keeps, what it changes or drops, and whether a different localization still carries the meaning.`;
+
+export const REVIEW_SCHEMA = {
+	type: 'object',
+	additionalProperties: false,
+	required: ['assessment', 'lines'],
+	properties: {
+		assessment: { type: 'string' },
+		lines: {
+			type: 'array',
+			items: {
+				type: 'object',
+				additionalProperties: false,
+				required: ['id', 'score', 'note'],
+				properties: {
+					id: { type: 'string' },
+					score: { type: 'number' },
+					note: { type: 'string' },
+				},
+			},
+		},
+	},
+};
+
+export type ReviewRequestLine = {
+	id: string;
+	page?: string;
+	source: string;
+	reference: string;
+	literal: string;
+	response: string;
+	responseLiteral?: string;
+};
+
+export function reviewUserPrompt(input: { language: string; referenceKind: string; lines: ReviewRequestLine[] }): string {
+	return JSON.stringify({
+		language: input.language,
+		referenceKind: input.referenceKind,
+		lines: input.lines.map((line) => ({
+			id: line.id,
+			...(line.page ? { page: line.page } : {}),
+			source: line.source,
+			reference: line.reference,
+			literal: line.literal,
+			response: line.response,
+			...(line.responseLiteral ? { responseLiteral: line.responseLiteral } : {}),
+		})),
+	});
+}
+
+const REVIEW_LETTERS: Record<string, number> = { A: 0.95, B: 0.82, C: 0.67, D: 0.5, F: 0.2 };
+
+/** 0–1. Integers above 1 are the 0–100 scale the prompt asks for. */
+export function parseReviewScore(value: unknown): number | undefined {
+	if (typeof value === 'string' && /^[abcdf]$/i.test(value.trim())) return REVIEW_LETTERS[value.trim().toUpperCase()];
+	const score = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+	if (!Number.isFinite(score)) return;
+	if (score > 1) return Math.min(100, Math.max(0, score)) / 100;
+	return Math.max(0, score);
+}
+
+export function reviewLetter(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
+	if (score >= 0.9) return 'A';
+	if (score >= 0.75) return 'B';
+	if (score >= 0.6) return 'C';
+	if (score >= 0.4) return 'D';
+	return 'F';
+}
+
+function reviewObject(raw: unknown): unknown {
+	if (typeof raw !== 'string') return raw;
+	const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+	const text = fenced?.[1] || raw;
+	const match = text.match(/\{[\s\S]*\}/);
+	if (!match) throw new Error('Review did not return JSON');
+	try {
+		return JSON.parse(match[0]);
+	} catch {
+		throw new Error('Review did not return JSON');
+	}
+}
+
+export type ParsedReview = { lines: LineReview[]; assessment: string };
+
+/** Grades for the ids this request sent, plus the overall written assessment. */
+export function parseReviewGrades(raw: unknown, expectedIds: string[]): ParsedReview {
+	const value = reviewObject(raw) as { lines?: unknown; assessment?: unknown };
+	if (!Array.isArray(value?.lines)) throw new Error('Review did not return line grades');
+	const wanted = new Set(expectedIds);
+	const seen = new Set<string>();
+	const grades: LineReview[] = [];
+	for (const item of value.lines) {
+		if (!item || typeof item !== 'object') continue;
+		const row = item as { id?: unknown; score?: unknown; note?: unknown };
+		const id = String(row.id || '');
+		if (!wanted.has(id) || seen.has(id)) continue;
+		const comparable = parseReviewScore(row.score);
+		if (comparable == null) continue;
+		seen.add(id);
+		grades.push({ id, comparable, note: String(row.note || '').trim().slice(0, 240) });
+	}
+	if (!grades.length && expectedIds.length) throw new Error('Review did not grade any lines');
+	return { lines: grades, assessment: String(value.assessment || '').trim().slice(0, 2000) };
+}
+
+export function totalReview(lines: LineReview[], expected: number): ReviewTotals {
+	const comparable = lines.length ? lines.reduce((sum, line) => sum + line.comparable, 0) / lines.length : 0;
+	return { comparable, graded: lines.length, lines: expected };
+}

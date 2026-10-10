@@ -196,9 +196,9 @@
     align-items: center;
     gap: 6px;
     padding: 3px 8px;
-    border: 1px solid rgba(244, 247, 251, 0.18);
+    border: 1px solid var(--hud-line);
     border-radius: 5px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--hud-hover);
     color: var(--hud-text);
     font: 500 12px Inter, system-ui, sans-serif;
     letter-spacing: 0;
@@ -206,16 +206,16 @@
     white-space: nowrap;
     cursor: pointer;
   }
-  .ed-btn:hover:not(:disabled) { border-color: var(--hud-teal); background: var(--hud-teal-dim); }
+  .ed-btn:hover:not(:disabled) { border-color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
   .ed-btn:disabled { opacity: 0.4; cursor: default; }
   .ed-btn.ghost { background: transparent; border-color: transparent; }
-  .ed-btn.accent { color: var(--hud-teal); border-color: rgba(45, 226, 197, 0.45); }
+  .ed-btn.accent { color: var(--hud-teal-ink); border-color: rgba(45, 226, 197, 0.45); }
   .ed-btn.danger { color: #ff5d73; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
-  .gcard { position: relative; background: #141922; border: 1px solid var(--hud-line); border-radius: 6px; overflow: hidden; }
-  .gcard.picked { border-color: var(--hud-teal); box-shadow: 0 0 0 2px var(--hud-teal); }
-  .gcheck { position: absolute; left: 7px; top: 7px; z-index: 2; background: rgba(0, 0, 0, 0.6); padding: 4px; border-radius: 4px; display: block; margin: 0; line-height: 0; }
-  .gcheck input { width: 15px; height: 15px; margin: 0; accent-color: var(--hud-teal); }
+  .gcard { position: relative; background: var(--hud-bg-2); border: 1px solid var(--hud-line); border-radius: 6px; overflow: hidden; }
+  .gcard.picked { border-color: var(--hud-teal-ink); box-shadow: 0 0 0 2px var(--hud-teal); }
+  .gcheck { position: absolute; left: 7px; top: 7px; z-index: 2; background: var(--hud-bg-2); padding: 4px; border-radius: 6px; border: 1px solid var(--hud-line); display: block; margin: 0; line-height: 0; }
+  .gcheck input { width: 15px; height: 15px; margin: 0; accent-color: var(--hud-teal-ink); }
   .gimg { display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: var(--hud-canvas); cursor: pointer; }
   .gimg img { display: block; width: 100%; aspect-ratio: 1414 / 2000; object-fit: cover; }
   .gmeta { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 9px; font-size: 11.5px; }
@@ -228,5 +228,5 @@
   .credit-img { width: 70%; max-height: 110px; object-fit: contain; }
   .drop { cursor: pointer; border-color: rgba(45, 226, 197, 0.5); background: var(--hud-teal-dim); display: block; color: var(--hud-text); margin: 0; }
   .drop input { display: none; }
-  .drop .bi { color: var(--hud-teal); }
+  .drop .bi { color: var(--hud-teal-ink); }
 </style>

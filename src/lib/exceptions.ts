@@ -121,6 +121,15 @@ export function nextTranslationReview<T extends LineRow>(
   return pending.find((line) => lines.findIndex((row) => row.id === line.id) > idx) ?? pending[0];
 }
 
+/** Every region on the page is approved or ignored, with source and English where it is read. */
+export function pageTranslationsSettled(
+  lines: readonly Pick<LineRow, "imageId" | "sourceState" | "status" | "source" | "body">[],
+  imageId: string,
+): boolean {
+  const pageLines = lines.filter((line) => line.imageId === imageId);
+  return pageLines.length > 0 && pageLines.every((line) => !needsTranslationReview(line));
+}
+
 /** OCR, blank English, and unapproved translations first; then masks; then overflow. */
 export function chapterExceptions(src: ExceptionSource): ChapterException[] {
   const pendingSource = new Set(

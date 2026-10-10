@@ -47,6 +47,11 @@ export function qualificationAllowsUse(row: ModelRow, id: QualificationId): bool
   const sample = qualificationSample(row, id);
   return !!sample && (!qualificationCurrent(row, id) || sample.ok);
 }
+/** A Conversation check that passed, including one this build has not re-run. A failure does not count. */
+export function conversationAvailable(row: ModelRow): boolean {
+  const sample = row.capabilities?.conversation;
+  return sample?.ok === true && !!sample.fingerprint;
+}
 export function qualificationWarnings(row: ModelRow): string[] {
   const checks = new Set<QualificationId>([...qualificationChecks(row), ...Object.keys(row.probes || {}) as ModelTaskId[]]);
   const stale = [...checks].filter(id => qualificationSample(row, id) && !qualificationCurrent(row, id));

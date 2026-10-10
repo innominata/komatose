@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { GOLD_PAGE_SIZE, goldRequired, type GoldPage, type GoldBox } from '$lib/benchmarkGold';
+	import { goldRequired, type GoldPage, type GoldBox } from '$lib/benchmarkGold';
 
 	let {
 		page,
+		dataset = 'manga-ja',
 		english = false,
 		gold = true,
 		detections = [],
@@ -10,6 +11,7 @@
 		highlight = '',
 	}: {
 		page: GoldPage;
+		dataset?: string;
 		english?: boolean;
 		gold?: boolean;
 		detections?: GoldBox[];
@@ -18,13 +20,13 @@
 	} = $props();
 
 	const falses = $derived(new Set(falseIndexes));
-	const src = $derived(`/api/admin/model-benchmark?page=${page.id}${english ? '&lang=en' : ''}`);
+	const src = $derived(`/api/admin/model-benchmark?dataset=${dataset}&page=${page.id}${english ? '&lang=en' : ''}`);
 </script>
 
 <figure class="overlay">
 	<img {src} alt={`Page ${page.id}${english ? ', official English' : ''}`} loading="lazy" />
 	{#if !english}
-		<svg viewBox={`0 0 ${GOLD_PAGE_SIZE.width} ${GOLD_PAGE_SIZE.height}`} preserveAspectRatio="none" aria-hidden="true">
+		<svg viewBox={`0 0 ${page.width} ${page.height}`} preserveAspectRatio="none" aria-hidden="true">
 			{#each detections as box, i (i)}
 				<rect class="det" class:false={falses.has(i)} x={box[0]} y={box[1]} width={box[2] - box[0]} height={box[3] - box[1]} />
 			{/each}
@@ -33,7 +35,7 @@
 					{#each line.boxes as box, i (i)}
 						<rect class="gold" class:optional={!goldRequired(line)} class:hl={highlight === line.id}
 							x={box[0]} y={box[1]} width={box[2] - box[0]} height={box[3] - box[1]}>
-							<title>{line.id} · {line.kind}</title>
+							<title>{line.id} · {line.kind}{line.ocr === false ? ` · detection only: ${line.note}` : ''}</title>
 						</rect>
 					{/each}
 				{/each}

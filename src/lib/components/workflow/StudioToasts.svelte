@@ -53,7 +53,7 @@
     padding: 10px 12px;
     background: var(--hud-bg-2);
     border: 1px solid var(--ed-line, var(--hud-line));
-    border-left: 3px solid var(--ed-active, #2de2c5);
+    border-left: 3px solid var(--ed-active, var(--hud-teal));
     box-shadow: 0 10px 28px #0008;
     color: var(--ed-text, var(--hud-text));
     font-size: 12px;

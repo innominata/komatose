@@ -71,8 +71,8 @@ Imsbee, the proofreading service, Komatose GPU mode.
    - **Remote** — **Add model → Remote API** picks from a searchable provider
      list (global, Chinese and local servers) with the base URL and key
      variable filled in; **Check endpoint & list models** probes the endpoint
-     before anything is saved and can add several models at once. Put the
-     secret in `.env` under the variable name stored on the row.
+     before anything is saved. Search the returned model list, then add several
+     at once. Put the secret in `.env` under the variable name stored on the row.
    - **CLI** — install Grok, Codex, or Cursor on this machine (not in the
      browser), sign in as the server user, then **Add model → CLI agent**.
      Environment `GROK_BIN` / `CODEX_BIN` / `CURSOR_BIN` still override a

@@ -105,9 +105,10 @@ Region IDs, original source and geometry are retained; empty source is skipped.
 Empty, truncated or invalid output fails without publishing partial region mappings.
 The existing job, suggestion, cancellation and revision checks still apply.
 
-A shared Japanese SFX dictionary handles lettering that these models romanize or
-miss. If a region's source is a known SFX (punctuation, kana, elongation, and
-repeats included), English comes from the dictionary and the model is not called.
+A shared Japanese and Korean SFX dictionary handles lettering that these models
+romanize or miss. If a region's source is a known SFX (punctuation, kana or hangul,
+elongation, and repeats included), English comes from the dictionary and the model
+is not called.
 When SFX appears inside other text, only the matching terms are appended to that
 request's glossary. The full list is never sent. Region cards also show the
 dictionary meanings as clickable alternatives. Series glossary words or phrases

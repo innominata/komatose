@@ -316,8 +316,8 @@
     font: 12.5px Inter, system-ui, sans-serif;
   }
   .export-main, .export-side { min-width: 0; display: grid; gap: 12px; align-content: start; }
-  .export-main h2 { margin: 0; font: 700 20px Rajdhani, sans-serif; letter-spacing: 0.04em; text-transform: none; }
-  .export-main h4 { margin: 4px 0 0; font: 700 12px Rajdhani, sans-serif; letter-spacing: 0.07em; text-transform: uppercase; color: var(--hud-muted); }
+  .export-main h2 { margin: 0; font: 700 20px Manrope, sans-serif; letter-spacing: 0.04em; text-transform: none; }
+  .export-main h4 { margin: 4px 0 0; font: 700 12px Manrope, sans-serif; letter-spacing: 0.07em; text-transform: uppercase; color: var(--hud-muted); }
   p { margin: 0; }
   .muted { color: var(--hud-muted); }
   .small { font-size: 11.5px; }
@@ -326,11 +326,11 @@
     border: 1px solid var(--hud-line);
     border-radius: 8px;
     padding: 14px 16px;
-    background: #141922;
+    background: var(--hud-bg-2);
     display: grid;
     gap: 10px;
   }
-  .export-card h3 { margin: 0; font: 700 14px Rajdhani, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; display: flex; gap: 8px; align-items: center; }
+  .export-card h3 { margin: 0; font: 700 14px Manrope, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; display: flex; gap: 8px; align-items: center; }
   .export-card label { margin: 0; }
   .matrix { width: 100%; max-width: 520px; border-collapse: collapse; font-size: 12px; }
   .matrix th, .matrix td { border-bottom: 1px solid var(--hud-line); padding: 3px 8px; text-align: center; color: var(--hud-muted); font-weight: 500; }
@@ -342,14 +342,14 @@
     text-align: left;
     white-space: normal;
     padding: 7px 10px;
-    background: #141922;
+    background: var(--hud-bg-2);
     border: 1px solid var(--hud-line);
     border-left: 3px solid #ff5d73;
     border-radius: 4px;
     display: block;
   }
   .issue.warning { border-left-color: #f5b85c; }
-  .issue:hover { border-color: var(--hud-teal); }
+  .issue:hover { border-color: var(--hud-teal-ink); }
   .issue-regions { display: block; font-size: 11px; color: var(--hud-muted); }
   .export-need { color: #ff5d73; }
 </style>

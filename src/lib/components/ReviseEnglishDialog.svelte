@@ -422,7 +422,7 @@
   dialog {
     color: var(--hud-text);
     background: var(--hud-bg-2);
-    border: 1px solid var(--hud-teal);
+    border: 1px solid var(--hud-teal-ink);
     border-radius: 2px;
     width: min(1500px, 96vw);
     max-width: 96vw;
@@ -521,7 +521,7 @@
     font-style: italic;
   }
   .action-card {
-    border: 1px solid var(--hud-teal);
+    border: 1px solid var(--hud-teal-ink);
     padding: 0.8rem;
     margin: 0.7rem 0 0;
     border-radius: 2px;

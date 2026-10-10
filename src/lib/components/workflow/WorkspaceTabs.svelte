@@ -49,7 +49,7 @@
   }
   .workspace-tabs .ed-btn.active {
     background: var(--hud-teal-dim);
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
     border-bottom-color: var(--accent, var(--ed-active, var(--hud-teal)));
   }
   .ed-steps {

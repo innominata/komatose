@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { GOLD_PAGES, goldOcrGroup } from '$lib/benchmarkGold';
+	import { goldOcrGroup } from '$lib/benchmarkGold';
 	import { nextSort, sortedBy, type SortDir, type SortState } from '$lib/benchmarkSort';
 	import { GOLD_SOURCE, medianMs, type BenchmarkStatus, type DetectionResult, type OcrResult } from '$lib/modelBenchmark';
 	import { formatDuration } from '$lib/modelEstimate';
@@ -14,7 +14,7 @@
 	} = $props();
 
 	const run = $derived(status.runs.ocr);
-	const running = $derived(status.running === 'ocr');
+	const running = $derived(status.running === 'ocr' && status.runningDataset === status.dataset.id);
 	const blocked = $derived(Boolean(status.running) || busy || !status.available);
 	const usable = $derived(status.detectors.filter((setup) => setup.available));
 
@@ -76,16 +76,16 @@
 		ocrSort = nextSort(ocrSort, key as OcrKey, prefer);
 	}
 
-	let pageId = $state('007');
+	let pageId = $state(untrack(() => status.dataset.lang === 'japanese' ? '007' : status.dataset.pages[0].id));
 	let detectorView = $state('');
 	let ocrView = $state('');
 	let hover = $state('');
-	const page = $derived(GOLD_PAGES.find((item) => item.id === pageId)!);
+	const page = $derived(status.dataset.pages.find((item) => item.id === pageId)!);
 	const shownDetector = $derived(run?.detectors.find((item) => item.id === detectorView) || detectionRows[0]);
 	const shownOcr = $derived(run?.models.find((item) => `${item.id}@${item.source}` === ocrView) || ocrRows[0]);
 	const detectorPage = $derived(shownDetector?.pages.find((item) => item.page === pageId));
 	const ocrPage = $derived(shownOcr?.pages.find((item) => item.page === pageId));
-	const goldLines = $derived(page.lines.filter((line) => goldOcrGroup(line) && /[\p{L}\p{N}]/u.test(line.ja)));
+	const goldLines = $derived(page.lines.filter((line) => goldOcrGroup(line) && /[\p{L}\p{N}]/u.test(line.source)));
 </script>
 
 <div class="card stack">
@@ -107,7 +107,7 @@
 		<div>
 			<div class="kicker">OCR models</div>
 			{#if !status.ocrModels.length}
-				<p class="muted small">No visible vision or OCR models. Install Hayai, PaddleOCR-VL, or Manga OCR, or show a vision row in pickers.</p>
+				<p class="muted small">No visible compatible vision or OCR models. Install {status.dataset.lang === 'korean' ? 'PP-OCRv5 Korean or PaddleOCR-VL' : 'Hayai, PaddleOCR-VL, or Manga OCR'}, or show a vision row in pickers.</p>
 			{:else}
 				<div class="pick-list">
 					{#each status.ocrModels as model (model.id)}
@@ -140,7 +140,7 @@
 	</div>
 	<div class="spread">
 		<div class="row">
-			<button class="btn solid {running ? 'busy' : ''}" disabled={blocked || (!detectors.length && !models.length) || (cropModels > 0 && !sources.length)}
+			<button class="btn {running ? 'busy' : ''}" disabled={blocked || (!detectors.length && !models.length) || (cropModels > 0 && !sources.length)}
 				onclick={() => void post({ kind: 'ocr', detectors, models, sources })}>
 				{#if running}<span class="test-spin" aria-hidden="true"></span> Running…{:else}<i class="bi bi-play"></i> Run OCR benchmark{/if}
 			</button>
@@ -153,7 +153,7 @@
 			{#if running}<button class="btn danger" onclick={() => void post({ action: 'cancel' })}>Cancel</button>{/if}
 		</div>
 		<span class="muted small">
-			{GOLD_PAGES.length} pages · {detectors.length} detector setups · {cropModels * sources.length + pageModels} OCR runs{#if pageModels} · full-page models make one call per page{/if}
+			{status.dataset.pages.length} pages · {detectors.length} detector setups · {cropModels * sources.length + pageModels} OCR runs{#if pageModels} · full-page models make one call per page{/if}
 		</span>
 	</div>
 	{#if status.running === 'translation'}<p class="muted small">The translation benchmark is running; one benchmark runs at a time.</p>{/if}
@@ -255,14 +255,14 @@
 	<div class="section-head">
 		<h3>Pages</h3>
 		<div class="seg" role="tablist" aria-label="Benchmark page">
-			{#each GOLD_PAGES as item (item.id)}
+			{#each status.dataset.pages as item (item.id)}
 				<button role="tab" aria-selected={pageId === item.id} class:on={pageId === item.id} title={item.note} onclick={() => (pageId = item.id)}>{item.id}</button>
 			{/each}
 		</div>
 	</div>
 	<div class="viewer">
 		<div class="stack">
-			<PageOverlay {page} detections={detectorPage?.boxes || []} falseIndexes={detectorPage?.score.falseIndexes || []} highlight={hover} />
+			<PageOverlay dataset={status.dataset.id} {page} detections={detectorPage?.boxes || []} falseIndexes={detectorPage?.score.falseIndexes || []} highlight={hover} />
 			<div class="legend">
 				<span><i class="sw" style="border:2px dashed #ff3366"></i> gold, required</span>
 				<span><i class="sw" style="border:2px dashed #4aa8ff"></i> gold, sign/title</span>
@@ -301,17 +301,20 @@
 					</select>
 				</label>
 			{/if}
+      {#if page.lines.some(line => line.ocr === false)}
+        <p class="muted small">Detection only (uncertain lettering): {page.lines.filter(line => line.ocr === false).map(line => `${line.id}: ${line.note}`).join(' · ')}</p>
+      {/if}
 			{#if goldLines.length}
 				<table class="mtable lines" aria-label="Page lines">
-					<thead><tr><th>Line</th><th>Gold Japanese</th>{#if ocrPage}<th>Read</th><th></th>{/if}</tr></thead>
+					<thead><tr><th>Line</th><th>Gold {status.dataset.lang === 'korean' ? 'Korean' : 'Japanese'}</th>{#if ocrPage}<th>Read</th><th></th>{/if}</tr></thead>
 					<tbody>
 						{#each goldLines as line (line.id)}
 							{@const score = ocrPage?.lines.find((item) => item.id === line.id)}
 							<tr onmouseenter={() => (hover = line.id)} onmouseleave={() => (hover = '')}>
 								<td class="muted small">{line.id.slice(4)}<br />{line.kind}</td>
-								<td lang="ja">{line.ja}</td>
+								<td lang={status.dataset.lang === 'korean' ? 'ko' : 'ja'}>{line.source}</td>
 								{#if ocrPage}
-									<td lang="ja">{score?.read || '—'}</td>
+									<td lang={status.dataset.lang === 'korean' ? 'ko' : 'ja'}>{score?.read || '—'}</td>
 									<td class={score ? tone(score.accuracy) : ''}>{score ? pct(score.accuracy) : '—'}</td>
 								{/if}
 							</tr>
@@ -327,7 +330,7 @@
 					{#if ocrPage.error}<div class="tone-bad small">{ocrPage.error}</div>{/if}
 					{#if ocrPage.failedCrops}<div class="tone-warn small">{ocrPage.failedCrops} of {ocrPage.regions} crops failed: {ocrPage.cropError}</div>{/if}
 					{#if ocrPage.dropped}<div class="muted small">{ocrPage.dropped} duplicate or English {ocrPage.dropped === 1 ? 'reading' : 'readings'} dropped, as chapter transcription would.</div>{/if}
-					<pre lang="ja">{ocrPage.output || '(empty)'}</pre>
+					<pre lang={status.dataset.lang === 'korean' ? 'ko' : 'ja'}>{ocrPage.output || '(empty)'}</pre>
 				</details>
 			{/if}
 		</div>

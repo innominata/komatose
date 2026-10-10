@@ -193,6 +193,9 @@ test('OCR English uses the SFX dictionary without calling the translator', async
     assert.equal(await translateOcrSource('ドーン！', new AbortController().signal, {
       engine: 'qwen', model: hy.id, lang: 'japanese',
     }), 'BOOM');
+    assert.equal(await translateOcrSource('하아', new AbortController().signal, {
+      engine: 'qwen', model: hy.id, lang: 'korean',
+    }), 'sigh');
     assert.equal(calls, 0);
   } finally {
     globalThis.fetch = oldFetch;

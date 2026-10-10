@@ -21,7 +21,7 @@
   import { providerRunGate } from "$lib/providerCatalog";
   import type { TaskEngine, EngineModelOption } from "$lib/aiTasks";
   import SourceRomanization from "./SourceRomanization.svelte";
-  import KanaEntryPanel from "./KanaEntryPanel.svelte";
+  import CharacterEntryPanel from "./CharacterEntryPanel.svelte";
   import {
     type GlossaryTerm,
     type LineRow,
@@ -29,7 +29,7 @@
     type TranslateEngine,
     type TranslateEngineInfo,
   } from "$lib/types";
-  import { isKanaEntryLang } from "$lib/kanaChart";
+  import { isCharacterEntryLang } from "$lib/hangulEntry";
   let {
     engines,
     prepare,
@@ -487,7 +487,7 @@
     <strong>Current source</strong>
     <p>{currentLine?.source || "(unreadable)"}</p>
     <SourceRomanization text={currentLine?.source ?? ""} />
-    {#if mode === "review" && isKanaEntryLang(lang) && currentLine && onedit}
+    {#if mode === "review" && isCharacterEntryLang(lang) && currentLine && onedit}
       <button
         type="button"
         disabled={busy}
@@ -578,10 +578,11 @@
       Hayai and PaddleOCR-VL readings use a separately labelled local translator.
     </p>{/if}
   </div>
-  {#if mode === "review" && kanaOpen && isKanaEntryLang(lang) && currentLine && onedit}
+  {#if mode === "review" && kanaOpen && isCharacterEntryLang(lang) && currentLine && onedit}
     {@const target = currentLine}
     <div class="kana-main" role="region" aria-label="Character entry">
-      <KanaEntryPanel
+      <CharacterEntryPanel
+        {lang}
         embedded
         source={target.source ?? ""}
         {glossary}
@@ -703,7 +704,7 @@
   dialog {
     color: var(--hud-text);
     background: var(--hud-bg-2);
-    border: 1px solid var(--hud-teal);
+    border: 1px solid var(--hud-teal-ink);
     border-radius: 2px;
     width: min(1100px, 96vw);
     max-width: 96vw;
@@ -826,7 +827,8 @@
     display: flex;
     flex-direction: column;
   }
-  .kana-main :global(.kana-entry) {
+  .kana-main :global(.kana-entry),
+  .kana-main :global(.korean-entry) {
     flex: 1;
   }
   .review-responses {
@@ -854,7 +856,7 @@
     font-style: italic;
   }
   .action-card {
-    border: 1px solid var(--hud-teal);
+    border: 1px solid var(--hud-teal-ink);
     padding: 0.8rem;
     margin: 0.7rem 0 0;
     border-radius: 2px;

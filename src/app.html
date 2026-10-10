@@ -1,6 +1,18 @@
 <!doctype html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en">
 	<head>
+		<script>
+			try {
+				var themeKey = 'komatose.theme';
+				var themeChoice = localStorage.getItem(themeKey) || 'system';
+				if (themeChoice !== 'light' && themeChoice !== 'dark') themeChoice = 'system';
+				var themeDark = themeChoice === 'dark' || (themeChoice !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+				var themeName = themeDark ? 'dark' : 'light';
+				document.documentElement.dataset.theme = themeName;
+				document.documentElement.dataset.bsTheme = themeName;
+				document.documentElement.dataset.themeChoice = themeChoice;
+			} catch (e) {}
+		</script>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />

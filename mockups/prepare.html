@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prepare · Episode 1 · Komatose (komiq-style mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f4f2ee; --surface: #fbfaf7; --line: #e3dfd8;
+    --text: #1c1b19; --muted: #6f6a63; --accent: #2bd9a5; --accent-ink: #08785a; --ok: #2f9e5b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; min-height: 100vh; }
+  button, select { font: inherit; color: inherit; }
+  h1, h2, h3 { font-family: Manrope, Inter, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .brand img { height: 30px; width: auto; display: block; }
+  .crumb { color: var(--muted); white-space: nowrap; }
+  .crumb b { color: var(--text); font-weight: 600; }
+  nav.steps { display: flex; gap: 4px; }
+  nav.steps a { text-decoration: none; color: var(--muted); padding: 8px 12px; border-radius: 999px; font-weight: 500; }
+  nav.steps a.on { color: var(--accent-ink); background: #e7f8f2; font-weight: 600; }
+  nav.steps a small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+  nav.steps a.on small { color: var(--accent-ink); }
+  .spacer { flex: 1; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; cursor: pointer; }
+  .pill { border-radius: 999px; padding: 8px 16px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); cursor: pointer; }
+  .pill.dark { background: var(--text); color: #fff; border-color: var(--text); }
+  .pill.accent { background: transparent; color: var(--accent-ink); border-color: var(--accent-ink); }
+  .pill.sm { padding: 6px 12px; font-size: 13px; }
+  .saved { color: var(--ok); font-size: 13px; font-weight: 500; }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .seg { display: flex; background: #ece8e1; border-radius: 999px; padding: 3px; }
+  .seg button { border: 0; background: transparent; border-radius: 999px; padding: 6px 14px; cursor: pointer; color: var(--muted); font-weight: 500; }
+  .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  select.slice { border-radius: 999px; border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; }
+  .label { color: var(--muted); font-size: 13px; }
+
+  .workspace { display: grid; grid-template-columns: 92px 1fr 300px; min-height: calc(100vh - 130px); }
+  .rail { border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+  .rail .count { font-size: 12px; color: var(--muted); text-align: center; }
+  .thumb { border: 2px solid transparent; border-radius: 8px; padding: 0; background: none; cursor: pointer; position: relative; }
+  .thumb img { width: 100%; aspect-ratio: 3/4; object-fit: cover; border-radius: 6px; display: block; background: #ddd; }
+  .thumb.on { border-color: var(--accent-ink); }
+  .thumb .n { position: absolute; left: 4px; bottom: 4px; background: rgba(255,255,255,.92); border-radius: 999px; font-size: 11px; font-weight: 600; padding: 0 6px; }
+  .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+
+  .stage { padding: 16px 18px 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; text-align: left; padding: 0; cursor: pointer; color: inherit; }
+  .card.on { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .card .shot { position: relative; background: #ece8e1; }
+  .card img { width: 100%; aspect-ratio: 3/4; object-fit: cover; object-position: top; display: block; }
+  .card .check { position: absolute; top: 8px; left: 8px; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #fff; background: rgba(0,0,0,.25); }
+  .card figcaption, .card .cap { padding: 10px 12px 12px; }
+  .card strong { display: block; font-family: Manrope, sans-serif; font-size: 15px; }
+  .card span { color: var(--muted); font-size: 12px; }
+  .empty { display: grid; place-items: center; aspect-ratio: 3/4; color: var(--muted); text-align: center; padding: 16px; }
+  .empty b { display: block; color: var(--text); font-family: Manrope, sans-serif; margin-top: 8px; }
+  .drop { border: 1.5px dashed var(--line); border-radius: 14px; display: grid; place-items: center; text-align: center; color: var(--muted); min-height: 160px; padding: 16px; grid-column: 1 / -1; }
+
+  .inspector { border-left: 1px solid var(--line); background: var(--surface); padding: 16px 16px 24px; }
+  .tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .tabs button { border: 0; background: none; padding: 8px 0; cursor: pointer; color: var(--muted); font-weight: 600; }
+  .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .eyebrow { color: var(--accent-ink); font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; }
+  .inspector h2 { margin: 4px 0 10px; font-size: 20px; }
+  .kv { display: grid; grid-template-columns: 52px 1fr; gap: 4px 8px; color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .kv b { color: var(--text); font-weight: 500; }
+  label.field { display: block; font-size: 12px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+  textarea { width: 100%; min-height: 110px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); padding: 10px 12px; font: inherit; resize: vertical; }
+  .stack { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .nudge { display: grid; grid-template-columns: repeat(3, 40px); grid-template-areas: ". up ." "left mid right" ". down ."; gap: 6px; justify-content: start; }
+  .nudge button, .nudge input { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); text-align: center; }
+  .nudge .u { grid-area: up; } .nudge .l { grid-area: left; } .nudge .m { grid-area: mid; } .nudge .r { grid-area: right; } .nudge .d { grid-area: down; }
+
+  .canvas-wrap { background: #e7e2da; border-radius: 16px; min-height: 640px; display: grid; place-items: center; position: relative; padding: 48px 16px 64px; }
+  .canvas-wrap img { max-width: min(520px, 100%); border-radius: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+  .tools-v { position: absolute; left: 12px; top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .float { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px 6px 14px; box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+  .pagefoot { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+  .pagefoot .spacer { flex: 1; }
+  body[data-view="grid"] .view-edit, body[data-view="edit"] .view-grid { display: none; }
+  svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } .rail, .inspector { border: 0; } nav.steps { display: none; } }
+</style>
+</head>
+<body data-view="grid">
+<header>
+  <a class="brand" href="komiq-theme.html"><img src="komatose-logo-inverted.png" alt="Komatose" /></a>
+  <div class="crumb"><b>Give My Regards to Black Jack</b> · Episode 1</div>
+  <nav class="steps" aria-label="Chapter workflow">
+    <a class="on" href="#">Prepare<small>10 pages</small></a>
+    <a href="#">Translate<small>1/10</small></a>
+    <a href="#">Review<small>1/10</small></a>
+    <a href="#">Clean<small>0/10</small></a>
+    <a href="#">Typeset<small>0/10</small></a>
+    <a href="#">Export<small>160 blockers</small></a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Find an action"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+  <button class="pill accent sm">27 to check</button>
+  <button class="pill dark sm">Next</button>
+  <span class="saved">All text saved</span>
+</header>
+
+<div class="toolbar">
+  <div class="seg" role="tablist">
+    <button class="on">All</button><button>To do</button><button>Done</button>
+  </div>
+  <div class="seg" id="mode">
+    <button class="on" data-view="grid">Organize</button>
+    <button data-view="edit">Edit page</button>
+  </div>
+  <div class="spacer"></div>
+  <span class="label">Whole chapter</span>
+  <button class="pill sm">Split spreads</button>
+  <button class="pill sm">Auto-crop</button>
+  <button class="pill sm">Auto-align</button>
+  <label class="label">Slice size
+    <select class="slice" aria-label="Strip slice size">
+      <option>Normal pages (1.5× width)</option>
+      <option>Custom height</option>
+      <option>Tall strips (16,000 px)</option>
+    </select>
+  </label>
+  <button class="pill accent sm">Split strips</button>
+  <button class="pill sm">More</button>
+</div>
+
+<div class="workspace">
+  <aside class="rail" aria-label="Pages">
+    <div class="count">10 pages</div>
+    <!-- thumbs filled by script -->
+  </aside>
+
+  <main class="stage">
+    <div class="view-grid">
+      <div class="grid" id="grid"></div>
+      <div class="drop">Add images<br>Drop, choose, or paste · order is previewed before upload</div>
+    </div>
+    <div class="view-edit">
+      <div class="canvas-wrap">
+        <div class="tools-v">
+          <button class="icon-btn" title="Select" style="color:var(--accent-ink);border-color:var(--accent-ink)"><svg viewBox="0 0 24 24"><path d="m5 3 14 8-6 1-3 6z"/></svg></button>
+          <button class="icon-btn" title="Crop"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg></button>
+          <button class="icon-btn" title="Split page"><svg viewBox="0 0 24 24"><path d="M4 4h7v16H4zM13 4h7v16h-7z"/></svg></button>
+          <button class="icon-btn" title="Reslice strips"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <button class="icon-btn" title="Zoom"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></svg></button>
+        </div>
+        <img src="../fixtures/test-pages/001.jpg" alt="Page 1" />
+        <div class="float"><span>Page 1 / 10</span><button class="icon-btn" title="Zoom out" style="width:32px;height:32px">−</button><span>Fit width</span><button class="icon-btn" title="Zoom in" style="width:32px;height:32px">+</button></div>
+      </div>
+      <div class="pagefoot"><span>Page 1 · 1414 × 2000</span><div class="spacer"></div><button class="pill sm" disabled>Undo page edit</button><button class="pill dark sm">Next page</button></div>
+    </div>
+  </main>
+
+  <aside class="inspector">
+    <div class="tabs"><button class="on">Page 1</button><button>Upload</button><button>Credits</button></div>
+    <div class="eyebrow">Page 1 of 10</div>
+    <h2>001.jpg</h2>
+    <div class="kv"><span>Size</span><b>1414 × 2000</b><span>File</span><b>01-001.jpg</b></div>
+    <label class="field" for="note">Scene note</label>
+    <textarea id="note">A close-up of a young man's face dominates the left side, with his eye and mouth visible in grayscale line art. A large, vibrant yellow paint splatter covers the right side of the image, partially obscuring the character's hair and cheek. The mood is dramatic.</textarea>
+    <div class="stack">
+      <button class="pill sm">Refresh scene context</button>
+      <button class="pill sm">Replace from image / PSD</button>
+    </div>
+    <p class="note">Translators see this. It is not drawn on the page.</p>
+    <label class="field">Scene notes model</label>
+    <button class="pill sm">Description model…</button>
+    <label class="field">Nudge page</label>
+    <div class="nudge">
+      <button class="u" title="Nudge up">↑</button>
+      <button class="l" title="Nudge left">←</button>
+      <input class="m" value="10" aria-label="Nudge pixels" />
+      <button class="r" title="Nudge right">→</button>
+      <button class="d" title="Nudge down">↓</button>
+    </div>
+  </aside>
+</div>
+<script>
+  const pages = [
+    ["01-001.jpg"], ["02-002.jpg"], ["03-003.jpg"], ["04-004.jpg"], ["05-005.jpg"],
+    ["06-006.jpg"], ["07-007.jpg"], ["08-008.jpg"], ["09-009.jpg"], ["10-010.jpg"]
+  ];
+  const rail = document.querySelector(".rail");
+  const grid = document.getElementById("grid");
+  const pre = document.createElement("button");
+  pre.className = "card";
+  pre.innerHTML = '<div class="shot"><div class="empty">No series pre-credits page saved.<b>Pre-credits</b></div></div>';
+  grid.append(pre);
+  pages.forEach((p, i) => {
+    const n = String(i + 1).padStart(3, "0");
+    const src = `../fixtures/test-pages/${n}.jpg`;
+    const t = document.createElement("button");
+    t.className = "thumb" + (i === 0 ? " on" : "");
+    t.innerHTML = `<img src="${src}" alt=""><span class="n">${i + 1}</span>${i < 3 ? '<i class="dot"></i>' : ""}`;
+    rail.append(t);
+    const c = document.createElement("button");
+    c.className = "card" + (i === 0 ? " on" : "");
+    c.innerHTML = `<div class="shot"><img src="${src}" alt=""><i class="check"></i></div><div class="cap"><strong>${i + 1}</strong><span>${p[0]}</span></div>`;
+    grid.append(c);
+  });
+  document.getElementById("mode").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-view]");
+    if (!b) return;
+    document.body.dataset.view = b.dataset.view;
+    for (const x of e.currentTarget.children) x.classList.toggle("on", x === b);
+  });
+</script>
+</body>
+</html>

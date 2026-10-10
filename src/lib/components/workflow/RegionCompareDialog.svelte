@@ -177,7 +177,7 @@
     max-height: min(92vh, 940px);
     overflow: auto;
     padding: 0;
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   .hud-window-bar {
     gap: 0.5rem;
@@ -237,8 +237,8 @@
     opacity: 0.8;
   }
   .compare-formats .active {
-    border-color: var(--hud-teal);
-    color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
+    color: var(--hud-teal-ink);
     background: var(--hud-teal-dim);
   }
   .compare-link {
@@ -266,7 +266,7 @@
     border-radius: 2px;
     padding: 0.35rem 0.75rem;
     color: var(--hud-muted);
-    font-family: "Rajdhani", sans-serif;
+    font-family: "Manrope", sans-serif;
     font-size: 0.78rem;
     font-weight: 600;
     letter-spacing: 0.1em;
@@ -274,7 +274,7 @@
     text-decoration: none;
   }
   a.compare-action:hover {
-    border-color: var(--hud-teal);
-    color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
+    color: var(--hud-teal-ink);
   }
 </style>

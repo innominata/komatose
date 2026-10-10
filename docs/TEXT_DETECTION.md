@@ -281,7 +281,9 @@ The pipeline in `detectRegions` is:
 Unknown regions are no longer typed as dialogue. The kind comes from the
 detector's own class (`text_free` and COO are free text), then from the reading
 (`looksLikeOnomatopoeia`, `looksLikeSentence` in `src/lib/sfx.ts`). Short
-hiragana in a bubble, such as a sigh, stays dialogue.
+hiragana in a bubble, such as a sigh, stays dialogue. A hangul sound effect is
+classified from the Korean dictionary even inside a bubble; a hangul sentence
+stays dialogue.
 
 `SCAN_DETECT_CROSSCHECK=0` turns the partner off and runs the base alone.
 
@@ -365,3 +367,31 @@ Read by the host application and passed as per-request arguments:
 | `src/lib/server/detect.ts` | stage orchestration |
 | `src/lib/server/detectFusion.ts` | cross-check voting and merging |
 | `scripts/eval-detection.ts` | gold-box scoring harness |
+
+## Korean benchmark dataset
+
+Admin → Models → Benchmark has a dataset selector. `manga-ja`
+is the existing Japanese default; `manhwa-ko` contains all eight synthetic pages
+from ManhwaFixture, chapter 1. Both use the same detection and OCR scoring, with
+separate saved results and dataset versions. Korean OCR/translation choices obey
+the models' declared language support and existing task qualification.
+
+The Korean gold includes visually checked source-pixel boxes, printed Korean,
+natural/literal English text and meaning alternatives. It has no English page
+images. See [the fixture notes](../fixtures/manhwa-pages/README.md) for review,
+uncertain-lettering exclusions and limitations. This is a small synthetic fixture,
+not a representative assessment of all manhwa.
+
+The detection evaluator accepts `--dataset manhwa-ko` on collection and scoring:
+
+```sh
+node --import tsx scripts/eval-detection.ts collect --dataset manhwa-ko
+node --import tsx scripts/eval-detection.ts --dataset manhwa-ko rtdetr
+node --import tsx scripts/eval-detection.ts --dataset manhwa-ko --misses rtdetr
+```
+
+Caches include dataset/version metadata; a mismatched `DETECT_EVAL_CACHE` is
+rejected. Benchmark API GET/image queries and POST run bodies accept `dataset`;
+omitting it retains Japanese behavior. English images for text-only datasets
+return 404. Existing Japanese saved results still load; new results are written
+to dataset/version-specific files in the ignored data directory.

@@ -166,7 +166,7 @@
   }
   .rebuild-btn:hover:not(:disabled) {
     opacity: 1;
-    background: var(--ed-hover, rgba(255, 255, 255, 0.08));
+    background: var(--ed-hover, var(--hud-hover));
   }
   .rebuild-btn:disabled {
     opacity: 0.4;
@@ -190,7 +190,7 @@
     width: 22px;
     height: 22px;
     border: 2px solid var(--hud-line);
-    border-top-color: var(--hud-teal);
+    border-top-color: var(--hud-teal-ink);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }

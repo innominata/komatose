@@ -147,7 +147,7 @@
   .sec { padding: 12px 14px; border-bottom: 1px solid var(--hud-line); display: grid; gap: 8px; }
   .sec h3 {
     margin: 0;
-    font: 700 12.5px Rajdhani, sans-serif;
+    font: 700 12.5px Manrope, sans-serif;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     display: flex;
@@ -156,7 +156,7 @@
     flex-wrap: wrap;
     color: var(--hud-text);
   }
-  .stepn { width: 18px; height: 18px; border-radius: 50%; background: var(--hud-teal-dim); color: var(--hud-teal); display: inline-grid; place-items: center; font: 700 11px Inter, sans-serif; }
+  .stepn { width: 18px; height: 18px; border-radius: 50%; background: var(--hud-teal-dim); color: var(--hud-teal-ink); display: inline-grid; place-items: center; font: 700 11px Inter, sans-serif; }
   .chip { display: inline-block; padding: 1px 7px; border-radius: 9px; font: 500 10.5px Inter, sans-serif; letter-spacing: 0; text-transform: none; white-space: nowrap; }
   .chip-ok { background: rgba(94, 227, 154, 0.14); color: #5ee39a; }
   .chip-attn { background: rgba(245, 184, 92, 0.15); color: #f5b85c; }
@@ -166,13 +166,13 @@
   .btn-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .muted { color: var(--hud-muted); font-size: 11.5px; margin: 0; }
   .small { font-size: 11.5px; }
-  .link { border: 0; background: none; color: var(--hud-teal); padding: 0; font-size: 12px; }
+  .link { border: 0; background: none; color: var(--hud-teal-ink); padding: 0; font-size: 12px; }
   .alert { display: flex; gap: 7px; align-items: flex-start; padding: 6px 8px; border-radius: 4px; font-size: 12px; }
   .alert.attn { background: rgba(245, 184, 92, 0.12); color: #f8d49c; }
   .list-actions { display: flex; flex-direction: column; }
   .list-actions button { justify-content: flex-start; border: 0; background: transparent; padding: 6px; border-radius: 4px; }
   .list-actions button .bi { color: var(--hud-muted); width: 16px; }
-  .list-actions button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); color: var(--hud-text); }
+  .list-actions button:hover:not(:disabled) { background: var(--hud-hover); color: var(--hud-text); }
   .methods { display: grid; gap: 2px; }
   .method {
     justify-content: flex-start;
@@ -185,7 +185,7 @@
     text-align: left;
     white-space: normal;
   }
-  .method:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); border-color: transparent; color: var(--hud-text); }
+  .method:hover:not(:disabled) { background: var(--hud-hover); border-color: transparent; color: var(--hud-text); }
   .method.on { border-color: rgba(45, 226, 197, 0.5); background: var(--hud-teal-dim); }
   .method.off, .method:disabled { opacity: 0.45; }
   .method span:last-child { display: grid; }

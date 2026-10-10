@@ -78,7 +78,7 @@
 </script>
 
 {#if show}
-  <div class="tool-options" data-find="tool-options" role="region" aria-label="Tool options">
+  <div class="tool-options" data-find="tool-options" role="region" aria-label="Tool options" title={info?.hint ?? ''}>
     {#if info}
       <i class={`bi ${info.icon}`} aria-hidden="true"></i><strong>{info.label}</strong><span class="hint">{info.hint}</span>
     {/if}
@@ -146,27 +146,33 @@
 
 <style>
   .tool-options {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 6;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 5px 12px;
-    min-height: 36px;
-    border-bottom: 1px solid var(--hud-line);
-    background: #1a2030;
+    max-width: min(460px, calc(100% - 80px));
+    padding: 8px 14px;
+    border: 1px solid var(--hud-line);
+    border-radius: 999px;
+    background: var(--hud-bg-2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     font: 12px Inter, system-ui, sans-serif;
     color: var(--hud-text);
   }
-  .tool-options > .bi { color: var(--hud-teal); }
+  .tool-options > .bi { color: var(--hud-teal-ink); }
   .tool-options strong { white-space: nowrap; font-weight: 600; }
-  .hint { color: var(--hud-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .spacer { flex: 1; }
-  .brush-size { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .tool-options input[type="range"] { width: 110px; padding: 0; accent-color: var(--hud-teal); }
+  .hint { color: var(--hud-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 80px; }
+  .spacer { flex: 0 0 8px; }
+  .brush-size { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex: none; }
+  .tool-options input[type="range"] { width: 110px; padding: 0; accent-color: var(--hud-teal-ink); }
   .tool-options label { display: inline-flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; color: var(--hud-text); }
   .tool-options input[type="number"] { width: 60px; }
   .tool-options button {
-    border: 1px solid rgba(244, 247, 251, 0.18);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--hud-line);
+    background: var(--hud-hover);
     color: var(--hud-text);
     border-radius: 5px;
     padding: 3px 8px;
@@ -175,5 +181,5 @@
     text-transform: none;
     white-space: nowrap;
   }
-  .tool-options button[aria-pressed="true"] { border-color: var(--hud-teal); color: var(--hud-teal); background: var(--hud-teal-dim); }
+  .tool-options button[aria-pressed="true"] { border-color: var(--hud-teal-ink); color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
 </style>

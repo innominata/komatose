@@ -5,11 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
+import { BENCHMARK_DATASETS, benchmarkDataset, type BenchmarkDataset } from '../benchmarkDatasets';
 import {
-	GOLD_GLOSSARY,
-	GOLD_LANG,
 	GOLD_PAGES,
-	GOLD_SERIES_NOTES,
 	goldTranslationLines,
 	type GoldBox,
 	type GoldKind,
@@ -18,23 +16,31 @@ import {
 import {
 	BENCHMARK_PAGE_SCHEMA,
 	BENCHMARK_PAGE_SYSTEM,
-	BENCHMARK_PAGE_USER,
+	benchmarkPagePrompt,
 	officialBaseline,
 	parseBenchmarkOutput,
+	parseReviewGrades,
+	REVIEW_SCHEMA,
+	REVIEW_SYSTEM,
+	reviewUserPrompt,
 	scoreDetection,
 	scoreOcrPage,
 	scoreTranslationPage,
 	totalDetection,
 	totalOcr,
+	totalReview,
 	totalTranslation,
 	DETECTOR_SETUPS,
 	GOLD_SOURCE,
 	PAGE_SOURCE,
 	type DetectorPart,
 	type DetectorSetup,
+	type LineReview,
 	type OcrPage,
 	type OcrResult,
 	type OcrRun,
+	type ReviewProgress,
+	type TranslationLineScore,
 	type TranslationRun,
 	type BenchmarkKind,
 } from '../modelBenchmark';
@@ -42,8 +48,9 @@ import {
 export { DETECTOR_SETUPS, GOLD_SOURCE, PAGE_SOURCE };
 import { detectorDefaults } from './detectorConfig';
 import { detectorSetupId, parseDetectorSetup } from '../detectorSetup';
-import { installedLocalReviewModels, withLocalReview } from './localReview';
-import { rowHasOperation, type ModelRow } from '../modelRegistry';
+import { installedLocalReviewModels } from './localReview';
+import { conversationAvailable } from '../modelCapabilities';
+import { rowHasOperation, isOcrSpecialist, type ModelRow } from '../modelRegistry';
 import { listRegistryRows } from './modelRegistryStore';
 import { holdManagedModel } from './managedModels';
 import { modelHttpConfig } from './modelConnection';
@@ -52,7 +59,6 @@ import { chatCompletions, extractJsonObject, parseReadPayload, readBubble, trans
 import { ROOT } from './paths';
 import {
 	koharuInstalled,
-	parseDetector,
 	parseKoharuRegions,
 	parseSfxRegions,
 	regionsFromDetection,
@@ -70,35 +76,41 @@ import { dropRedundantTranscriptions, transcriptionIsEnglish } from '../transcri
 import { runVisionRead } from './visionRead';
 import { readBubbleWithCli, translateScriptWithCli } from './cliTranslate';
 import { runTranslationTask } from './translationTask';
-import { modelDefaultFor } from './modelDefaultStore';
 import { translationModel, type TranslationModel } from '../translationModels';
 import { translationModelReadiness } from './translationRuntime';
-import type { LineType } from '../types';
+import type { LineType, OcrLang } from '../types';
 
 type PartOutput = { regions: WorkerRegion[]; width: number; height: number; ms: number; mask?: Buffer };
 
 export type BenchmarkDeps = {
+	dataset?: string;
 	rows?: ModelRow[];
 	pages?: GoldPage[];
 	image?: (page: GoldPage) => Promise<Buffer>;
-	detectPart?: (part: DetectorPart, page: GoldPage, path: string, abort: AbortSignal) => Promise<Omit<PartOutput, 'ms'>>;
+	detectPart?: (part: DetectorPart, page: GoldPage, path: string, abort: AbortSignal, lang: OcrLang) => Promise<Omit<PartOutput, 'ms'>>;
 	crop?: (raw: Buffer, bubble: SpeechBubble, abort: AbortSignal, mask?: Buffer) => Promise<Buffer>;
 	mask?: (raw: Buffer, bubbles: SpeechBubble[], abort: AbortSignal) => Promise<Buffer | undefined>;
-	readCrop?: (row: ModelRow, jpeg: Buffer, abort: AbortSignal) => Promise<string>;
-	readPage?: (row: ModelRow, jpeg: Buffer, abort: AbortSignal) => Promise<string>;
-	translate?: (row: ModelRow, boxes: DetectedBox[], page: GoldPage, abort: AbortSignal) => Promise<DetectedBox[]>;
+	readCrop?: (row: ModelRow, jpeg: Buffer, abort: AbortSignal, lang: OcrLang) => Promise<string>;
+	readPage?: (row: ModelRow, jpeg: Buffer, abort: AbortSignal, lang: OcrLang) => Promise<string>;
+	translate?: (row: ModelRow, boxes: DetectedBox[], page: GoldPage, abort: AbortSignal, dataset: BenchmarkDataset) => Promise<DetectedBox[]>;
+	review?: (row: ModelRow, prompt: string, abort: AbortSignal) => Promise<unknown>;
 };
 
 export type StartOcrOpts = BenchmarkDeps & { detectors?: string[]; models?: string[]; sources?: string[] };
 export type StartTranslationOpts = BenchmarkDeps & { models?: string[] };
 
+type DatasetState = { ocr?: OcrRun; translation?: TranslationRun; review?: ReviewProgress };
 type State = {
-	ocr?: OcrRun;
-	translation?: TranslationRun;
-	active?: { kind: BenchmarkKind; abort: AbortController; promise: Promise<void> };
+  runs: Record<string, DatasetState>;
+  lastDataset?: string;
+  active?: { kind: BenchmarkKind | 'review'; dataset: string; abort: AbortController; promise: Promise<void> };
 };
-const globalState = globalThis as typeof globalThis & { __scanModelBenchmark2?: State };
-const state: State = (globalState.__scanModelBenchmark2 ??= {});
+const globalState = globalThis as typeof globalThis & { __scanModelBenchmark3?: State };
+const state: State = (globalState.__scanModelBenchmark3 ??= { runs: {} });
+const datasetKey = (dataset: BenchmarkDataset) => `${dataset.id}-v${dataset.version}`;
+function liveState(dataset: BenchmarkDataset) {
+  return state.runs[datasetKey(dataset)] ??= {};
+}
 
 const PAGE_SCHEMA = {
 	type: 'json_schema',
@@ -113,16 +125,29 @@ function messageOf(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function runPath(kind: BenchmarkKind) {
+function runPath(kind: BenchmarkKind, dataset: BenchmarkDataset, legacy = false) {
 	const dir = join(process.env.SCAN_DATA_DIR || join(process.env.SCAN_ROOT || ROOT, 'data'), 'run');
 	mkdirSync(dir, { recursive: true });
-	return join(dir, `model-benchmark-${kind}.json`);
+	return join(dir, `model-benchmark-${legacy ? "" : `${datasetKey(dataset)}-`}${kind}.json`);
 }
 
-function readSaved<T extends OcrRun | TranslationRun>(kind: BenchmarkKind): T | undefined {
+function readSaved<T extends OcrRun | TranslationRun>(kind: BenchmarkKind, dataset: BenchmarkDataset): T | undefined {
 	try {
-		const value = JSON.parse(readFileSync(runPath(kind), 'utf8')) as T;
-		if (value?.kind !== kind) return;
+		const path = runPath(kind, dataset);
+    const legacy = !existsSync(path) && dataset.id === 'manga-ja' && dataset.version === 1;
+		const value = JSON.parse(readFileSync(legacy ? runPath(kind, dataset, true) : path, 'utf8')) as T;
+		if (value?.kind !== kind || (!legacy && (value.dataset !== dataset.id || value.datasetVersion !== dataset.version))
+      || (value.dataset && value.dataset !== dataset.id)
+      || (value.datasetVersion != null && value.datasetVersion !== dataset.version)) return;
+    value.dataset = dataset.id;
+    value.datasetVersion = dataset.version;
+    if (value.kind === 'translation') for (const model of value.models) for (const page of model.pages) {
+      for (const line of page.lines) {
+        const old = line as typeof line & { ja?: string };
+        line.source ??= old.ja || '';
+        delete old.ja;
+      }
+    }
 		// Rows saved before each result carried its own time share the run's time.
 		for (const item of [...(value.kind === 'ocr' ? value.detectors : []), ...value.models]) item.at ??= value.at;
 		return value;
@@ -152,33 +177,33 @@ function mergeLatest<T extends ScoredRow>(previous: T[] | undefined, current: T[
 
 function foldHistory(run: OcrRun | TranslationRun) {
 	if (run.kind === 'ocr') {
-		const saved = readSaved<OcrRun>('ocr');
+		const saved = readSaved<OcrRun>('ocr', benchmarkDataset(run.dataset));
 		run.detectors = mergeLatest(saved?.detectors, run.detectors, (item) => item.id, false);
 		run.models = mergeLatest(saved?.models, run.models, (item) => `${item.id}@${item.source}`, false);
 		return;
 	}
-	const saved = readSaved<TranslationRun>('translation');
+	const saved = readSaved<TranslationRun>('translation', benchmarkDataset(run.dataset));
 	run.models = mergeLatest(saved?.models, run.models, (item) => item.id, false);
 }
 
 /** While a run is in progress, list the rows it has not touched yet from the last saved results. */
-function shownRun<T extends OcrRun | TranslationRun>(live: T | undefined, kind: BenchmarkKind): T | null {
-	if (!live) return readSaved<T>(kind) || null;
+function shownRun<T extends OcrRun | TranslationRun>(live: T | undefined, kind: BenchmarkKind, dataset: BenchmarkDataset): T | null {
+	if (!live) return readSaved<T>(kind, dataset) || null;
 	if (live.state !== 'running') return live;
 	if (live.kind === 'ocr') {
-		const saved = readSaved<OcrRun>('ocr');
+		const saved = readSaved<OcrRun>('ocr', dataset);
 		return {
 			...live,
 			detectors: mergeLatest(saved?.detectors, live.detectors, (item) => item.id, true),
 			models: mergeLatest(saved?.models, live.models, (item) => `${item.id}@${item.source}`, true),
 		} as T;
 	}
-	const saved = readSaved<TranslationRun>('translation');
+	const saved = readSaved<TranslationRun>('translation', dataset);
 	return { ...live, models: mergeLatest(saved?.models, live.models, (item) => item.id, true) } as T;
 }
 
 function writeSaved(run: OcrRun | TranslationRun) {
-	writeFileSync(runPath(run.kind), JSON.stringify(run), { mode: 0o600 });
+	writeFileSync(runPath(run.kind, benchmarkDataset(run.dataset)), JSON.stringify(run), { mode: 0o600 });
 }
 
 function packageRoot() {
@@ -194,13 +219,15 @@ export function fixturesAvailable(pages: GoldPage[] = GOLD_PAGES) {
 	return pages.every((page) => existsSync(fixturePath(page.file)));
 }
 
-/** A reduced page for the admin viewer: the Japanese source or the official English. */
-export async function benchmarkPageImage(id: string, english = false, width = 720): Promise<Buffer> {
-	const page = GOLD_PAGES.find((item) => item.id === id);
+/** A reduced source or English edition image for the selected dataset. */
+export async function benchmarkPageImage(id: string, english = false, width = 720, datasetId = 'manga-ja'): Promise<Buffer> {
+	const page = benchmarkDataset(datasetId).pages.find((item) => item.id === id);
 	if (!page) throw httpError('Unknown benchmark page', 404);
-	const path = fixturePath(english ? page.english : page.file);
+	const file = english ? page.english : page.file;
+	if (!file) throw httpError('This dataset has text-only English references', 404);
+	const path = fixturePath(file);
 	if (!existsSync(path)) throw httpError(`Missing ${english ? page.english : page.file}`, 404);
-	return sharp(path).rotate().resize({ width: Math.min(width, 1414), withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer();
+	return sharp(path).rotate().resize({ width: Math.min(width, page.width), withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer();
 }
 
 function cooInstalled() {
@@ -231,30 +258,41 @@ export function chapterSetupId(): string {
 	});
 }
 
-export function usesCrops(row: ModelRow) {
-  return rowHasOperation(row, 'vision');
+export function usesCrops(_row: ModelRow) {
+  // Every eligible integration reads the same crop contract as chapter transcription.
+  return true;
 }
-export function usesFullPage(_row: ModelRow) {
-  // The crop benchmark compares the same contract for every integration.
-  return false;
+export function usesFullPage(_row: ModelRow) { return false; }
+function supportsLanguage(row: ModelRow, lang: OcrLang) {
+  return !row.languages || row.languages.includes(lang);
 }
-export function ocrBenchmarkRows(rows: ModelRow[] = listRegistryRows()): ModelRow[] {
-  return rows.filter(row => !row.disabled && rowHasOperation(row, 'vision'));
+export function ocrBenchmarkRows(rows: ModelRow[] = listRegistryRows(), lang: OcrLang = 'japanese'): ModelRow[] {
+  const installed = new Set(installedLocalReviewModels().map(model => model.id as string));
+  return rows.filter(row => !row.disabled && rowHasOperation(row, 'vision') && supportsLanguage(row, lang)
+    && (!isOcrSpecialist(row) || installed.has(row.id)));
 }
-export function translationBenchmarkRows(rows: ModelRow[] = listRegistryRows(), _installed?: (model: TranslationModel) => boolean): ModelRow[] {
-  return rows.filter(row => !row.disabled && rowHasOperation(row, 'translate'));
+/** Chat models that can grade saved translations. A failed Conversation check stays out. */
+export function reviewBenchmarkRows(rows: ModelRow[] = listRegistryRows()): ModelRow[] {
+	return rows.filter((row) => !row.disabled && conversationAvailable(row));
+}
+export function translationBenchmarkRows(rows: ModelRow[] = listRegistryRows(), installed = (model: TranslationModel) => translationModelReadiness(model).available, lang: OcrLang = 'japanese'): ModelRow[] {
+  return rows.filter(row => {
+    if (row.disabled || !rowHasOperation(row, 'translate') || !supportsLanguage(row, lang)) return false;
+    const model = translationModel(row.slug);
+    return !model || (model.languages.includes(lang) && installed(model));
+  });
 }
 function modelFlags(row: ModelRow) {
   return { local: row.access === 'local_http', billed: row.access === 'cli' || row.access === 'remote_http' };
 }
-function needsLocalReview(_row: ModelRow) { return false; }
+function needsLocalReview(row: ModelRow) { return isOcrSpecialist(row); }
 
 function envNumber(name: string) {
 	const value = Number(process.env[name]);
 	return process.env[name] && Number.isFinite(value) ? value : undefined;
 }
 
-async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: string, abort: AbortSignal): Promise<Omit<PartOutput, 'ms'>> {
+async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: string, abort: AbortSignal, lang: OcrLang): Promise<Omit<PartOutput, 'ms'>> {
 	if (part === 'heuristic') {
 		const bytes = await readFile(path);
 		const meta = await sharp(bytes).metadata();
@@ -286,7 +324,7 @@ async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: stri
 		tile: envNumber('SCAN_DETECT_TILE'),
 		// Comic Text Detector is its own part when a setup cross-checks with it.
 		supplement: false,
-		lang: GOLD_LANG,
+		lang,
 		abort,
 	});
 }
@@ -309,7 +347,7 @@ function boxOf(bubble: SpeechBubble): GoldBox {
 
 function goldBubbles(page: GoldPage): SpeechBubble[] {
 	return page.lines
-		.filter((line) => !line.latin && /[\p{L}\p{N}]/u.test(line.ja))
+		.filter((line) => !line.latin && line.ocr !== false && /[\p{L}\p{N}]/u.test(line.source))
 		.flatMap((line) => line.boxes)
 		.map(([x0, y0, x1, y1]) => {
 			const p = 6;
@@ -317,6 +355,17 @@ function goldBubbles(page: GoldPage): SpeechBubble[] {
 			const top = Math.max(0, y0 - p);
 			return bubbleFromNorm(page.width, page.height, left / page.width, top / page.height, (x1 + p - left) / page.width, (y1 + p - top) / page.height);
 		});
+}
+
+/** Do not ask readers to guess glyphs excluded from the gold transcription. */
+export function scoredOcrBubbles(page: GoldPage, bubbles: SpeechBubble[]): SpeechBubble[] {
+  const excluded = page.lines.filter(line => line.ocr === false).flatMap(line => line.boxes);
+  return bubbles.filter(bubble => {
+    const [x0, y0, x1, y1] = boxOf(bubble);
+    const area = Math.max(1, (x1 - x0) * (y1 - y0));
+    return !excluded.some(([a, b, c, d]) =>
+      Math.max(0, Math.min(x1, c) - Math.max(x0, a)) * Math.max(0, Math.min(y1, d) - Math.max(y0, b)) >= area / 2);
+  });
 }
 
 async function defaultMask(raw: Buffer, bubbles: SpeechBubble[], abort: AbortSignal) {
@@ -329,13 +378,13 @@ async function defaultMask(raw: Buffer, bubbles: SpeechBubble[], abort: AbortSig
 	}
 }
 
-async function defaultReadCrop(row: ModelRow, jpeg: Buffer, abort: AbortSignal) {
-	return defaultTranscriptionRead(row.id, jpeg, abort, GOLD_LANG);
+async function defaultReadCrop(row: ModelRow, jpeg: Buffer, abort: AbortSignal, lang: OcrLang) {
+	return defaultTranscriptionRead(row.id, jpeg, abort, lang);
 }
 
-async function defaultReadPage(row: ModelRow, jpeg: Buffer, abort: AbortSignal): Promise<string> {
+async function defaultReadPage(row: ModelRow, jpeg: Buffer, abort: AbortSignal, lang: OcrLang): Promise<string> {
 	if (row.access === 'cli') {
-		const read = await runVisionRead(row.id, { jpeg, lang: GOLD_LANG, model: row.slug, abort, diagnostic: true }, {
+		const read = await runVisionRead(row.id, { jpeg, lang, model: row.slug, abort, diagnostic: true }, {
 			cli: (engine, opts) => readBubbleWithCli(engine, opts.jpeg, { lang: opts.lang, model: opts.model, abort: opts.abort }),
 			local: (opts) => readBubble(opts.jpeg, opts.abort, opts.model, opts.lang),
 		});
@@ -347,7 +396,7 @@ async function defaultReadPage(row: ModelRow, jpeg: Buffer, abort: AbortSignal):
 	const text = await withAssistantHttp(cfg, () => chatCompletions(
 		[
 			{ role: 'system', content: BENCHMARK_PAGE_SYSTEM },
-			{ role: 'user', content: [{ type: 'text', text: BENCHMARK_PAGE_USER }, { type: 'image_url', image_url: { url: dataUrl } }] },
+			{ role: 'user', content: [{ type: 'text', text: benchmarkPagePrompt(lang) }, { type: 'image_url', image_url: { url: dataUrl } }] },
 		],
 		{ abort, schema: PAGE_SCHEMA, temperature: 0, maxTokens: 2048, thinking: false, model: row.slug },
 	));
@@ -370,7 +419,7 @@ export function translationBoxes(page: GoldPage): DetectedBox[] {
 			w: (x1 - x0) / page.width,
 			h: (y1 - y0) / page.height,
 			lineType: LINE_TYPES[line.kind],
-			source: line.ja,
+			source: line.source,
 			literal: '',
 			translation: '',
 			reasoning: '',
@@ -378,17 +427,17 @@ export function translationBoxes(page: GoldPage): DetectedBox[] {
 	});
 }
 
-async function defaultTranslate(row: ModelRow, boxes: DetectedBox[], page: GoldPage, abort: AbortSignal) {
-	const index = GOLD_PAGES.findIndex((item) => item.id === page.id);
+async function defaultTranslate(row: ModelRow, boxes: DetectedBox[], page: GoldPage, abort: AbortSignal, dataset: BenchmarkDataset) {
+	const index = dataset.pages.findIndex((item) => item.id === page.id);
 	return runTranslationTask({
 		engine: row.id,
 		model: row.slug,
 		boxes,
-		seriesNotes: GOLD_SERIES_NOTES,
-		seriesGlossary: GOLD_GLOSSARY,
+		seriesNotes: dataset.seriesNotes,
+		seriesGlossary: dataset.glossary,
 		prior: '',
-		pageLabel: `Volume 1 · page ${index + 1}/${GOLD_PAGES.length}`,
-		lang: GOLD_LANG,
+		pageLabel: `${dataset.series} · page ${index + 1}/${dataset.pages.length}`,
+		lang: dataset.lang,
 		abort,
 	}, { cli: translateScriptWithCli, local: translateScript });
 }
@@ -398,7 +447,9 @@ function pageJpeg(raw: Buffer) {
 }
 
 function assertIdle() {
-	if (state.active) throw httpError(`A ${state.active.kind === 'ocr' ? 'OCR' : 'translation'} benchmark is already running`, 409);
+	if (!state.active) return;
+	const label = state.active.kind === 'ocr' ? 'OCR benchmark' : state.active.kind === 'review' ? 'meaning review' : 'translation benchmark';
+	throw httpError(`A ${label} is already running`, 409);
 }
 
 function pick(catalog: ModelRow[], ids: string[] | undefined, what: string) {
@@ -428,7 +479,8 @@ function settle(run: OcrRun | TranslationRun, abort: AbortController, error?: un
 
 export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 	assertIdle();
-	const pages = opts.pages || GOLD_PAGES;
+	const dataset = benchmarkDataset(opts.dataset);
+	const pages = opts.pages || dataset.pages;
 	const setups = listDetectorSetups();
 	const setupIds = [...new Set(opts.detectors || [])];
 	for (const id of setupIds) {
@@ -436,7 +488,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 		if (!setup) throw httpError(`Unknown text detector ${id}`, 400);
 		if (!setup.available && !opts.detectPart) throw httpError(`${setup.label}: ${setup.reason}`, 400);
 	}
-	const models = pick(opts.rows || ocrBenchmarkRows(), opts.models, 'OCR');
+	const models = pick(opts.rows ? opts.rows.filter(row => !row.disabled && supportsLanguage(row, dataset.lang)) : ocrBenchmarkRows(undefined, dataset.lang), opts.models, 'OCR');
 	const cropModels = models.filter(usesCrops);
 	const pageModels = models.filter(usesFullPage);
 	const sources = [...new Set((opts.sources?.length ? opts.sources : [GOLD_SOURCE]).map(String))];
@@ -447,7 +499,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 		if (!setup.available && !opts.detectPart) throw httpError(`${setup.label}: ${setup.reason}`, 400);
 	}
 	if (!setupIds.length && !models.length) throw httpError('Choose at least one text detector or OCR model', 400);
-	if (!fixturesAvailable(pages) && !opts.image) throw httpError('fixtures/test-pages is incomplete', 500);
+	if (!fixturesAvailable(pages) && !opts.image) throw httpError(`${dataset.fixtureDir} is incomplete`, 500);
 
 	const cropSources = cropModels.length ? sources : [];
 	const detectorSetups = [...new Set([...setupIds, ...cropSources.filter((id) => id !== GOLD_SOURCE)])]
@@ -458,6 +510,8 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 	const started = Date.now();
 	const run: OcrRun = {
 		kind: 'ocr',
+		dataset: dataset.id,
+		datasetVersion: dataset.version,
 		id: randomUUID(),
 		at: started,
 		state: 'running',
@@ -490,7 +544,8 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 			...modelFlags(row),
 		})),
 	};
-	state.ocr = run;
+	liveState(dataset).ocr = run;
+	state.lastDataset = dataset.id;
 	const abort = new AbortController();
 	const step = (text: string) => { run.progress.step = text; };
 	const tick = () => { run.progress.done = Math.min(run.progress.total, run.progress.done + 1); };
@@ -522,7 +577,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 					step(`Page ${page.id} · detecting with ${part}`);
 					const started = Date.now();
 					try {
-						const out = await detectPart(part, page, path, signal);
+						const out = await detectPart(part, page, path, signal, dataset.lang);
 						outputs.set(part, { ...out, ms: Date.now() - started });
 						if (part === 'koharu' && out.mask) koharuMasks.set(page.id, out.mask);
 					} catch (error) {
@@ -565,7 +620,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 					step(`Page ${page.id} · cropping ${labelOf(source)}`);
 					const raw = raws.get(page.id)!;
 					const found = source === GOLD_SOURCE ? undefined : detected.get(page.id)?.get(source);
-					const bubbles = found ? found.regions.map((region) => region.ocr) : goldBubbles(page);
+					const bubbles = found ? scoredOcrBubbles(page, found.regions.map((region) => region.ocr)) : goldBubbles(page);
 					const setup = DETECTOR_SETUPS.find((item) => item.id === source);
 					const mask = bubbles.length
 						? (setup?.parts.includes('koharu') && koharuMasks.get(page.id)) || await makeMask(raw, bubbles, signal)
@@ -619,7 +674,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 									for (const jpeg of images) {
 										s.throwIfAborted();
 										try {
-											parts.push((await readCrop(row, jpeg, s)).trim());
+											parts.push((await readCrop(row, jpeg, s, dataset.lang)).trim());
 										} catch (e) {
 											if (s.aborted) throw e;
 											failedCrops++;
@@ -628,8 +683,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 										}
 									}
 								};
-								if (images.length && needsLocalReview(row) && !opts.readCrop) await withLocalReview(readAll, signal);
-								else await readAll(signal);
+								await readAll(signal);
 								if (failedCrops && failedCrops === images.length) error = `All ${failedCrops} crops failed: ${cropError}`;
 							} catch (e) {
 								if (signal.aborted) throw e;
@@ -684,7 +738,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 						let output = '';
 						let error: string | undefined;
 						try {
-							output = await readPage(row, await pageJpeg(raws.get(page.id)!), signal);
+							output = await readPage(row, await pageJpeg(raws.get(page.id)!), signal, dataset.lang);
 						} catch (e) {
 							if (signal.aborted) throw e;
 							error = messageOf(e);
@@ -705,18 +759,21 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 			if (state.active?.abort === abort) state.active = undefined;
 		}
 	})();
-	state.active = { kind: 'ocr', abort, promise };
+	state.active = { kind: 'ocr', dataset: dataset.id, abort, promise };
 	return run;
 }
 
 export function startTranslationBenchmark(opts: StartTranslationOpts): TranslationRun {
 	assertIdle();
-	const pages = (opts.pages || GOLD_PAGES).filter((page) => goldTranslationLines(page).length);
-	const models = pick(opts.rows || translationBenchmarkRows(), opts.models, 'translation');
+	const dataset = benchmarkDataset(opts.dataset);
+	const pages = (opts.pages || dataset.pages).filter((page) => goldTranslationLines(page).length);
+	const models = pick(opts.rows ? opts.rows.filter(row => !row.disabled && supportsLanguage(row, dataset.lang) && (!translationModel(row.slug) || translationModel(row.slug)!.languages.includes(dataset.lang))) : translationBenchmarkRows(undefined, undefined, dataset.lang), opts.models, 'translation');
 	if (!models.length) throw httpError('Choose at least one translation model', 400);
 	const started = Date.now();
 	const run: TranslationRun = {
 		kind: 'translation',
+		dataset: dataset.id,
+		datasetVersion: dataset.version,
 		id: randomUUID(),
 		at: started,
 		state: 'running',
@@ -732,7 +789,8 @@ export function startTranslationBenchmark(opts: StartTranslationOpts): Translati
 			...modelFlags(row),
 		})),
 	};
-	state.translation = run;
+	liveState(dataset).translation = run;
+	state.lastDataset = dataset.id;
 	const abort = new AbortController();
 	const translate = opts.translate || defaultTranslate;
 	const promise = (async () => {
@@ -759,7 +817,7 @@ export function startTranslationBenchmark(opts: StartTranslationOpts): Translati
 						let out: DetectedBox[] = [];
 						let error: string | undefined;
 						try {
-							out = await translate(row, boxes.map((box) => ({ ...box })), page, signal);
+							out = await translate(row, boxes.map((box) => ({ ...box })), page, signal, dataset);
 						} catch (e) {
 							if (signal.aborted) throw e;
 							error = messageOf(e);
@@ -786,8 +844,131 @@ export function startTranslationBenchmark(opts: StartTranslationOpts): Translati
 			if (state.active?.abort === abort) state.active = undefined;
 		}
 	})();
-	state.active = { kind: 'translation', abort, promise };
+	state.active = { kind: 'translation', dataset: dataset.id, abort, promise };
 	return run;
+}
+
+function reviewPrompt(dataset: BenchmarkDataset, pages: { page: string; lines: TranslationLineScore[] }[]) {
+	return reviewUserPrompt({
+		language: dataset.lang === 'korean' ? 'Korean' : 'Japanese',
+		referenceKind: dataset.referenceLabel === 'official' ? 'official English edition' : 'checked English reference',
+		lines: pages.flatMap((page) => page.lines.map((line) => ({
+			id: line.id,
+			page: page.page,
+			source: line.source,
+			reference: line.official,
+			literal: line.goldLiteral,
+			response: line.translation,
+			...(line.literal ? { responseLiteral: line.literal } : {}),
+		}))),
+	});
+}
+
+async function defaultReview(row: ModelRow, prompt: string, abort: AbortSignal): Promise<unknown> {
+	const { executeModelTask } = await import('./modelTaskRunner');
+	// Enquire also requires a translation check. This grade only needs Conversation,
+	// which the caller already required, so the task gate is not the eligibility check.
+	return executeModelTask(row, 'advisory', {
+		system: REVIEW_SYSTEM,
+		prompt,
+		images: [],
+		schema: REVIEW_SCHEMA,
+		model: row.slug,
+	}, { abort, diagnostic: true });
+}
+
+export type StartReviewOpts = BenchmarkDeps & { reviewer: string; models?: string[] };
+
+/** Grade saved translation responses. Does not call the models that produced them. */
+export function startTranslationReview(opts: StartReviewOpts): ReviewProgress {
+	assertIdle();
+	const dataset = benchmarkDataset(opts.dataset);
+	const run = liveState(dataset).translation || readSaved<TranslationRun>('translation', dataset);
+	if (!run) throw httpError('No saved translations to review. Run the translation benchmark first.', 400);
+	const ready = run.models.filter((item) => item.pages.some((page) => page.lines.length));
+	const wanted = [...new Set((opts.models || []).map((id) => String(id || '').trim()).filter(Boolean))];
+	const results = wanted.length ? wanted.map((id) => {
+		const item = ready.find((row) => row.id === id);
+		if (!item) throw httpError(`${id} has no saved translation to review`, 400);
+		return item;
+	}) : ready;
+	if (!results.length) throw httpError('No saved translations to review. Run the translation benchmark first.', 400);
+	const reviewer = reviewBenchmarkRows(opts.rows).find((row) => row.id === opts.reviewer);
+	if (!reviewer) throw httpError('Choose a model that has passed the Conversation check', 400);
+	const jobs = results.map((result) => ({ result, pages: result.pages.filter((page) => page.lines.length) }));
+	const progress: ReviewProgress = {
+		state: 'running',
+		reviewerId: reviewer.id,
+		reviewerName: reviewer.name,
+		at: Date.now(),
+		progress: { done: 0, total: jobs.length, step: 'Starting' },
+	};
+	const slot = liveState(dataset);
+	slot.translation = run;
+	slot.review = progress;
+	state.lastDataset = dataset.id;
+	const abort = new AbortController();
+	const review = opts.review || defaultReview;
+	let release = () => {};
+	const promise = (async () => {
+		try {
+			const signal = abort.signal;
+			try {
+				release = await holdManagedModel(reviewer.id, Boolean(reviewer.managedLaunch), signal);
+			} catch (error) {
+				progress.state = 'error';
+				progress.error = messageOf(error);
+				progress.progress.step = 'Failed';
+				return;
+			}
+			for (const job of jobs) {
+				signal.throwIfAborted();
+				const expected = job.pages.reduce((sum, page) => sum + page.lines.length, 0);
+				progress.progress.step = `${reviewer.name} grading ${job.result.name} · ${job.pages.length} pages`;
+				let graded: LineReview[] = [];
+				let assessment = '';
+				let failure = '';
+				try {
+					const parsed = parseReviewGrades(
+						await review(reviewer, reviewPrompt(dataset, job.pages), signal),
+						job.pages.flatMap((page) => page.lines.map((line) => line.id)),
+					);
+					graded = parsed.lines;
+					assessment = parsed.assessment;
+				} catch (error) {
+					if (signal.aborted) throw error;
+					failure = messageOf(error);
+				}
+				job.result.review = {
+					reviewerId: reviewer.id,
+					reviewerName: reviewer.name,
+					at: Date.now(),
+					resultAt: job.result.at || run.at,
+					lines: graded,
+					totals: totalReview(graded, expected),
+					...(assessment ? { assessment } : {}),
+					...(failure ? { error: failure } : {}),
+				};
+				progress.progress.done += 1;
+				writeSaved(run);
+			}
+		} catch (error) {
+			progress.state = abort.signal.aborted ? 'cancelled' : 'error';
+			if (!abort.signal.aborted) progress.error = messageOf(error);
+			progress.progress.step = progress.state === 'cancelled' ? 'Cancelled' : 'Failed';
+		} finally {
+			if (progress.state === 'running') {
+				progress.state = 'done';
+				progress.progress.step = 'Finished';
+			}
+			progress.finishedAt = Date.now();
+			writeSaved(run);
+			release();
+			if (state.active?.abort === abort) state.active = undefined;
+		}
+	})();
+	state.active = { kind: 'review', dataset: dataset.id, abort, promise };
+	return progress;
 }
 
 export function cancelBenchmark() {
@@ -798,10 +979,12 @@ export function cancelBenchmark() {
 
 export async function waitBenchmark() {
 	await state.active?.promise;
-	return { ocr: state.ocr, translation: state.translation };
+	return liveState(benchmarkDataset(state.lastDataset));
 }
 
-export function listBenchmarkStatus() {
+export function listBenchmarkStatus(datasetId = 'manga-ja') {
+	const dataset = benchmarkDataset(datasetId);
+	const live = liveState(dataset);
 	const setups = listDetectorSetups();
 	const row = (item: ModelRow) => ({
 		id: item.id,
@@ -812,17 +995,22 @@ export function listBenchmarkStatus() {
 	});
 	return {
 		ok: true,
-		available: fixturesAvailable(),
-		pages: GOLD_PAGES.map((page) => ({ id: page.id, note: page.note })),
+		dataset,
+		datasets: BENCHMARK_DATASETS.map(({ id, label }) => ({ id, label })),
+		runningDataset: state.active?.dataset || null,
+		available: fixturesAvailable(dataset.pages),
+		pages: dataset.pages.map((page) => ({ id: page.id, note: page.note })),
 		detectors: setups,
 		chapterSetup: chapterSetupId(),
-		ocrModels: ocrBenchmarkRows().map(row),
-		translationModels: translationBenchmarkRows().map(row),
-		baseline: officialBaseline(),
+		ocrModels: ocrBenchmarkRows(undefined, dataset.lang).map(row),
+		translationModels: translationBenchmarkRows(undefined, undefined, dataset.lang).map(row),
+		reviewModels: reviewBenchmarkRows().map(row),
+		review: live.review || null,
+		baseline: officialBaseline(dataset.pages),
 		running: state.active?.kind || null,
 		runs: {
-			ocr: shownRun(state.ocr, 'ocr'),
-			translation: shownRun(state.translation, 'translation'),
+			ocr: shownRun(live.ocr, 'ocr', dataset),
+			translation: shownRun(live.translation, 'translation', dataset),
 		},
 	};
 }

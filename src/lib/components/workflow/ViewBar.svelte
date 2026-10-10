@@ -71,9 +71,9 @@
     gap: 2px;
     padding: 4px;
     border-radius: 999px;
-    background: rgba(20, 25, 34, 0.94);
-    border: 1px solid rgba(244, 247, 251, 0.18);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+    background: var(--hud-bg-2);
+    border: 1px solid var(--hud-line);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
     backdrop-filter: blur(6px);
     white-space: nowrap;
     max-width: calc(100% - 24px);
@@ -93,9 +93,9 @@
     color: var(--hud-muted);
     cursor: pointer;
   }
-  .vb:hover:not(:disabled) { color: var(--hud-text); background: rgba(255, 255, 255, 0.06); border: 0; }
+  .vb:hover:not(:disabled) { color: var(--hud-text); background: var(--hud-hover); border: 0; }
   .vb:disabled { opacity: 0.35; cursor: default; }
-  .vb.on { color: var(--hud-teal); background: var(--hud-teal-dim); }
+  .vb.on { color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
   .vb-txt { color: var(--hud-text); font-size: 12px; padding: 0 4px; }
   button.vb-txt { padding: 5px 8px; }
   .vsep { width: 1px; align-self: stretch; background: var(--hud-line); margin: 2px 4px; }

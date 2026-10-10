@@ -222,6 +222,8 @@ export type RegionData = {
   detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubbleBounds?: { x: number; y: number; w: number; h: number };
   detectionKind?: "bubble" | "free" | "unknown";
+  /** Detection found a black rectangular border around this region. */
+  boxed?: boolean;
   polygon?: Point[];
   /** Signature of a polygon in an old page frame; changing the shape invalidates it. */
   resliceStalePolygon?: string;

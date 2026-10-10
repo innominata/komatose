@@ -11,6 +11,11 @@ and used in the README and docs.
 **Attribution:** See the README License section and `fixtures/test-pages/ATTRIBUTION.txt`
 (four lines, unchanged).
 
+The eight AI-generated Korean images in `fixtures/manhwa-pages` were supplied
+by the project owner and explicitly approved for bundling. Their gold annotations,
+manifest, and app screenshots showing only these pages may also be committed and
+used in documentation. See `fixtures/manhwa-pages/README.md` for provenance.
+
 Any other source pages, evaluation crops, or scratch screenshots (see the
 private paths in `.gitignore`) are still private working material and must not
 be committed or published.

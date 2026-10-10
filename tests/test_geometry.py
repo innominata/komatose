@@ -68,6 +68,52 @@ class Geometry(unittest.TestCase):
         self.assertEqual(result['polygon'], [])
         self.assertEqual(result['confidence'], 0)
 
+    def test_caption_box_inside_or_around_the_region(self):
+        img = np.full((400, 500, 3), 255, np.uint8)
+        cv2.rectangle(img, (40, 30), (260, 190), (0, 0, 0), 3)
+        # Text sitting inside the frame: the stroke is in the expanded margin.
+        tight = workflow.geometry(img, {'box': [80 / 500, 60 / 400, 140 / 500, 90 / 400], 'kind': 'free'})
+        self.assertTrue(tight.get('boxed'))
+        self.assertEqual(len(tight['polygon']), 4)
+        self.assertGreater(tight['confidence'], 0)
+        # Detector box already contains the frame.
+        loose = workflow.geometry(img, {'box': [20 / 500, 10 / 400, 270 / 500, 210 / 400], 'kind': 'free'})
+        self.assertTrue(loose.get('boxed'))
+        self.assertEqual(len(loose['polygon']), 4)
+
+    def test_oval_and_filled_black_are_not_caption_boxes(self):
+        oval = np.full((300, 300, 3), 255, np.uint8)
+        cv2.ellipse(oval, (150, 150), (90, 55), 0, 0, 360, (0, 0, 0), 3)
+        result = workflow.geometry(oval, {'box': [80 / 300, 110 / 300, 140 / 300, 80 / 300], 'kind': 'free'})
+        self.assertEqual(result['polygon'], [])
+        filled = np.full((200, 200, 3), 255, np.uint8)
+        cv2.rectangle(filled, (30, 30), (160, 140), (0, 0, 0), -1)
+        result = workflow.geometry(filled, {'box': [50 / 200, 50 / 200, 80 / 200, 50 / 200], 'kind': 'bubble'})
+        self.assertFalse(result.get('boxed', False))
+
+    def test_manhwa_caption_boxes(self):
+        pages = json.loads((ROOT / 'fixtures/manhwa-pages/gold.json').read_text())
+        expect = {
+            '003-mood': True, '003-worry': True, '007-stairs': True,
+            '003-rumour': False, '004-listen': False, '007-message': False, '008-silence': False,
+        }
+        by_id = {}
+        for page in pages:
+            img = cv2.imread(str(ROOT / page['file']))
+            self.assertIsNotNone(img, page['file'])
+            height, width = img.shape[:2]
+            for line in page['lines']:
+                if line['id'] not in expect:
+                    continue
+                x0, y0, x1, y1 = line['boxes'][0]
+                result = workflow.geometry(img, {'box': [
+                    x0 / width, y0 / height, (x1 - x0) / width, (y1 - y0) / height,
+                ], 'kind': 'free'})
+                by_id[line['id']] = bool(result.get('boxed'))
+                if expect[line['id']]:
+                    self.assertGreaterEqual(len(result['polygon']), 4, line['id'])
+        self.assertEqual(by_id, expect)
+
     def test_free_text_rectangle_is_not_split_by_overlapping_regions(self):
         points = [{'x': .1, 'y': .1}, {'x': .9, 'y': .1}, {'x': .9, 'y': .9}, {'x': .1, 'y': .9}]
         result = workflow.geometry(np.full((100, 100, 3), 255, np.uint8), {

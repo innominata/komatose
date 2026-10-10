@@ -69,6 +69,12 @@ function runningProofread(episodeId: string, imageId: string) {
     ['running', 'queued', 'cancelling'].includes(j.state));
 }
 
+async function pageProofreadApiPrompt(seriesId: string, episodeId: string, imageId: string, pageLabel: string) {
+  const pack = await loadChapterPack({ seriesId, episodeId });
+  const pageScript = formatChapterScript(pack.items.filter((_, i) => pack.targets[i].imageId === imageId));
+  return `${pageLabel}. Image 1: RAW source. Image 2: WORKING TYPESET English. Critique this captured version.\n\nCanonical series names and terms:\n${pack.seriesGlossary}\n\nSaved page script with human-assigned speakers (speaker is not necessarily the person addressed):\n${pageScript}`;
+}
+
 async function jpegBuffers(hashes: string[]) {
   return Promise.all(hashes.map(async hash =>
     sharp(await readAsset(hash)).jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer()));
@@ -136,18 +142,16 @@ export function startPageProofread(opts: { series: Series; episode: Episode; ima
           ? `Sending updated typeset as a ${proofreaderLabel(site)} follow-up…`
           : `Waiting on ${proofreaderLabel(site)}…`
         : 'Proofreader is comparing both images…' });
-      const pack = await loadChapterPack({ seriesId: opts.series.id, episodeId: opts.episode.id });
-      const pageScript = formatChapterScript(pack.items.filter((_, i) => pack.targets[i].imageId === opts.imageId));
-      const apiPrompt = `${snapshot.pageLabel}. ${followUp ? 'The attached image is the updated WORKING TYPESET English; compare with the earlier RAW source in this conversation.' : 'Image 1: RAW source. Image 2: WORKING TYPESET English.'} Critique this captured version.\n\nCanonical series names and terms:\n${pack.seriesGlossary}\n\nSaved page script with human-assigned speakers (speaker is not necessarily the person addressed):\n${pageScript}`;
+      // The proofreading service decides how a proofreader works. The first
+      // turn is the page images only; a later turn is the editor's own text.
       const result = (site
         ? await runServiceProofread({
             proofreader: site,
             images: followUp ? [images[1]] : images,
             followUp,
-            prompt: `${PAGE_PROOFREAD_SYSTEM}\n\n${apiPrompt}`,
             signal,
           })
-        : await advisoryModel(model, PAGE_PROOFREAD_SYSTEM, apiPrompt, images, signal, PAGE_PROOFREAD_SCHEMA)
+        : await advisoryModel(model, PAGE_PROOFREAD_SYSTEM, await pageProofreadApiPrompt(opts.series.id, opts.episode.id, opts.imageId, snapshot.pageLabel), images, signal, PAGE_PROOFREAD_SCHEMA)
       ) as { critique?: unknown };
       signal.throwIfAborted();
       const critique = unwrapProofreadCritique(String(result?.critique || ''));

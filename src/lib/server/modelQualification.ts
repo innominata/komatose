@@ -5,6 +5,7 @@ import { ModelTaskError, taskLabel, type ModelTaskId } from '../modelTasks';
 import { findRegistryRow, saveCapabilityResults, saveProbeResult } from './modelRegistryStore';
 import { probeModelRow, type ProbeDeps } from './modelProbe';
 import { executeModelTask } from './modelTaskRunner';
+import { KOREAN_VISION_PROBE_PNG } from './fixtures/koreanVisionProbe';
 import { VISION_PROBE_JPEG } from './fixtures/visionProbe';
 
 export async function runQualification(row: ModelRow, check: QualificationId, deps: ProbeDeps = {}) {
@@ -22,34 +23,63 @@ export async function runQualification(row: ModelRow, check: QualificationId, de
     return { samples: [{ ...sample(check, result.ok, result.outcome, result.reason), outputPreview: result.outputPreview }], sample: undefined };
   }
   try {
-    let input: Record<string, any>;
+    const abort = deps.abort ? AbortSignal.any([deps.abort, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
     if (imagePair) {
       const second = await sharp(Buffer.from('<svg width="320" height="240"><rect width="320" height="240" fill="white"/><circle cx="160" cy="120" r="65" fill="blue"/></svg>')).jpeg().toBuffer();
-      input = {
-        images: [Buffer.from(VISION_PROBE_JPEG), second],
-        system: 'Inspect the supplied images in order. Return only the requested JSON. Do not use tools.',
-        prompt: 'Transcribe the original lettering in image 1 as source. Compare the two images: return firstHasText and secondHasText as booleans, and identify the colored shape in image 2 as secondShape and secondColor (English lowercase).',
-        schema: { type: 'object', additionalProperties: false, required: ['source', 'firstHasText', 'secondHasText', 'secondShape', 'secondColor'], properties: {
-          source: { type: 'string' }, firstHasText: { type: 'boolean' }, secondHasText: { type: 'boolean' },
-          secondShape: { type: 'string' }, secondColor: { type: 'string' },
-        } },
-      };
-    } else {
-      input = {
-        images: [], system: 'Follow the latest request using the supplied conversation. Return only JSON with remembered, total, and corrected. Do not use tools.',
-        prompt: 'Conversation so far:\nUser: Remember the codeword lantern and the count 7.\nAssistant: I will remember them.\nUser: Add 5 to that count.\nAssistant: The count is now 12.\n\nCurrent request: What codeword did I give you? Subtract 2 from the latest count. Correct the spelling in "Ths is a tset." Return remembered (the codeword), total (the final number), and corrected (the sentence).',
-        schema: { type: 'object', additionalProperties: false, required: ['remembered', 'total', 'corrected'], properties: {
-          remembered: { type: 'string' }, total: { type: 'number' }, corrected: { type: 'string' },
-        } },
-      };
+      const pages = [
+        { label: 'Japanese', bytes: Buffer.from(VISION_PROBE_JPEG), needle: '待って' },
+        { label: 'Korean', bytes: await sharp(Buffer.from(KOREAN_VISION_PROBE_PNG)).jpeg().toBuffer(), needle: '기다려' },
+      ];
+      const attempts: { value?: any; transcription: boolean; image: boolean; error?: Error }[] = [];
+      for (const page of pages) {
+        const input = {
+          images: [page.bytes, second],
+          system: 'Inspect the supplied images in order. Return only the requested JSON. Do not use tools.',
+          prompt: 'Transcribe the original lettering in image 1 as source. Compare the two images: return firstHasText and secondHasText as booleans, and identify the colored shape in image 2 as secondShape and secondColor (English lowercase).',
+          schema: { type: 'object', additionalProperties: false, required: ['source', 'firstHasText', 'secondHasText', 'secondShape', 'secondColor'], properties: {
+            source: { type: 'string' }, firstHasText: { type: 'boolean' }, secondHasText: { type: 'boolean' },
+            secondShape: { type: 'string' }, secondColor: { type: 'string' },
+          } },
+        };
+        try {
+          const value = await executeModelTask(row, 'advisory', input, { diagnostic: true, abort, independentDiagnosticFields: true,
+            invoke: deps.invoke ? () => deps.invoke!(row, 'advisory', input) : undefined });
+          const transcription = String(value?.source || '').replace(/\s/g, '').includes(page.needle);
+          const image = value?.firstHasText === true && value?.secondHasText === false && String(value?.secondShape).toLowerCase() === 'circle' && String(value?.secondColor).toLowerCase() === 'blue';
+          attempts.push({ value, transcription, image });
+          // Either language's lettering is enough; the shape check is not language-specific.
+          if (transcription) break;
+        } catch (error) {
+          attempts.push({ transcription: false, image: false, error: error as Error });
+          if (deps.abort?.aborted || (error as Error).name === 'AbortError') break;
+        }
+      }
+      const transcribed = attempts.find((item) => item.transcription);
+      const understood = attempts.find((item) => item.image);
+      const pictured = transcribed?.value || understood?.value || attempts.at(-1)?.value;
+      const failed = attempts.at(-1)?.error;
+      const outcome = failed && attempts.every((item) => item.error)
+        ? (deps.abort?.aborted || failed.name === 'AbortError' ? 'cancelled' : failed instanceof ModelTaskError ? failed.outcome : 'error')
+        : 'failed_validation';
+      return { sample: undefined, samples: ids.map(id => {
+        const passed = id === 'transcription' ? !!transcribed : !!understood;
+        const reason = passed ? undefined : outcome === 'failed_validation'
+          ? `The ${id} result did not match the Japanese or Korean fixture`
+          : failed?.message;
+        return sample(id, passed, passed ? 'passed' : outcome, reason, pictured);
+      }) };
     }
-    const abort = deps.abort ? AbortSignal.any([deps.abort, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
-    const value = await executeModelTask(row, 'advisory', input, { diagnostic: true, abort, independentDiagnosticFields: imagePair,
+    const input = {
+      images: [], system: 'Follow the latest request using the supplied conversation. Return only JSON with remembered, total, and corrected. Do not use tools.',
+      prompt: 'Conversation so far:\nUser: Remember the codeword lantern and the count 7.\nAssistant: I will remember them.\nUser: Add 5 to that count.\nAssistant: The count is now 12.\n\nCurrent request: What codeword did I give you? Subtract 2 from the latest count. Correct the spelling in "Ths is a tset." Return remembered (the codeword), total (the final number), and corrected (the sentence).',
+      schema: { type: 'object', additionalProperties: false, required: ['remembered', 'total', 'corrected'], properties: {
+        remembered: { type: 'string' }, total: { type: 'number' }, corrected: { type: 'string' },
+      } },
+    };
+    const value = await executeModelTask(row, 'advisory', input, { diagnostic: true, abort,
       invoke: deps.invoke ? () => deps.invoke!(row, 'advisory', input) : undefined });
     return { sample: undefined, samples: ids.map(id => {
-      const passed = id === 'conversation' ? value.remembered === 'lantern' && value.total === 10 && /^this is a test[.!]?$/i.test(String(value.corrected).trim())
-        : id === 'transcription' ? String(value.source || '').replace(/\s/g, '').includes('待って')
-        : value.firstHasText === true && value.secondHasText === false && String(value.secondShape).toLowerCase() === 'circle' && String(value.secondColor).toLowerCase() === 'blue';
+      const passed = value.remembered === 'lantern' && value.total === 10 && /^this is a test[.!]?$/i.test(String(value.corrected).trim());
       return sample(id, passed, passed ? 'passed' : 'failed_validation', passed ? undefined : `The ${id} result did not match the fixture`, value);
     }) };
   } catch (error) {

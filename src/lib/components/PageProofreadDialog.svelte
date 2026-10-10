@@ -284,5 +284,5 @@
   .paste-thumbs img { display: block; width: 88px; height: 88px; object-fit: cover; }
   .paste-thumbs figcaption { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; padding: 2px 4px; font-size: 10px; background: #000a; }
   .paste-thumbs button { position: absolute; right: 2px; top: 2px; padding: 2px 6px; font-size: 11px; }
-  button.primary { border-color: var(--hud-teal); color: var(--hud-teal); }
+  button.primary { border-color: var(--hud-teal-ink); color: var(--hud-teal-ink); }
 </style>

@@ -447,7 +447,7 @@
     flex-shrink: 0;
   }
   .exception-next:not(:disabled) {
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
   }
   .save-studioState {
     color: var(--ed-muted, var(--hud-muted));
@@ -493,14 +493,14 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--hud-teal);
+    color: var(--hud-teal-ink);
     font-size: 12px;
   }
   .spin {
     width: 12px;
     height: 12px;
     border: 2px solid var(--hud-line);
-    border-top-color: var(--hud-teal);
+    border-top-color: var(--hud-teal-ink);
     border-radius: 50%;
     animation: jobspin 0.8s linear infinite;
   }

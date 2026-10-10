@@ -2,7 +2,7 @@
   import type { ImageRow, LineRow } from "$lib/types";
   import { missingRegionCopy, missingRegionCopyLabel } from "$lib/exceptions";
   import { builtinRegionKinds, regionColor, regionKindLabel } from "$lib/regionCatalog";
-  import { regionPaintOrder } from "$lib/regionGeometry";
+  import { regionPaintOrder, translatePolygon } from "$lib/regionGeometry";
   import { polygonEdgeHandle } from "$lib/textTransform";
   import { interpolateBrushPixels } from "$lib/cloneStamp";
   import { blurSigma } from "$lib/blurBrush";
@@ -28,6 +28,7 @@
     regionRevision?: number;
     rotation?: { initial: number; angle: number; center: Point; style: TextStyle };
     skew?: { axis: "x" | "y"; initial: number; angle: number; center: Point; style: TextStyle };
+    polygonDrag?: boolean;
   };
 
   type ScrollAction = (node: HTMLElement) => { destroy(): void };
@@ -95,6 +96,7 @@
     onreorderclick,
     onstylebrush,
     onassigncharacter,
+    startPolygonDrag,
     startRotation,
     rotationKey,
     startSkew,
@@ -174,6 +176,7 @@
     reorderFromId?: string;
     onreorderclick?: (id: string) => void;
     onstylebrush: (id: string) => void;
+    startPolygonDrag: (e: PointerEvent) => void;
     startRotation: (e: PointerEvent) => void;
     rotationKey: (e: KeyboardEvent) => void;
     startSkew: (axis: "x" | "y", e: PointerEvent) => void;
@@ -199,6 +202,11 @@
   let featherStamp: HTMLCanvasElement | null = null;
   let featherRadius = -1;
   let ovalHover = $state<Point | null>(null);
+  function livePolygon(points: Point[]): Point[] {
+    const drag = drawing;
+    if (!drag?.polygonDrag) return points;
+    return translatePolygon(points, drag.end.x - drag.start.x, drag.end.y - drag.start.y);
+  }
   const ovalGuides = $derived.by(() => {
     if (step !== "Typeset" || tool !== "oval" || !page) return [];
     const box = drawing;
@@ -900,7 +908,7 @@
                   e.stopPropagation();
                   return;
                 }
-                dragRegion(e, l);
+                if (step === "Translate" || step === "Review") dragRegion(e, l);
               }}
               onclick={(e) => {
                 e.stopPropagation();
@@ -994,24 +1002,6 @@
             />
           {/each}
         {/if}
-        {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && ["Translate", "Review", "Typeset"].includes(step)}
-          {@const rotating = drawing?.rotation && drawing.regionId === selected.id ? drawing : null}
-          {@const center = rotationCenter(selected)}
-          <g transform={rotating ? `rotate(${rotationAngle(rotating) - rotating.rotation!.initial} ${center.x * page.width} ${center.y * page.height})` : undefined}>
-            <circle
-              cx={((selected.x ?? 0) + (selected.w ?? 0.2) / 2) * page.width}
-              cy={(selected.y ?? 0) * page.height}
-              r="8" fill="#62e5ce" stroke="#123e38" stroke-width="2"
-              vector-effect="non-scaling-stroke" style="cursor: grab"
-              role="button" tabindex="0" aria-label="Rotate placed text"
-              onpointerdown={startRotation} onkeydown={rotationKey}
-              onclick={(e) => e.stopPropagation()}>
-              <title>Drag to rotate text. Arrow keys rotate 1°; Shift rotates 15°.</title>
-            </circle>
-          </g>
-          {#if rotating}<text x={center.x * page.width} y={(selected.y ?? 0) * page.height - 15}
-            fill="#62e5ce" text-anchor="middle" pointer-events="none">{rotationAngle(rotating)}°</text>{/if}
-        {/if}
         {#if showRegions && drawing?.bounds}{@const bounds =
             adjustedBounds(drawing)}<rect
             x={bounds.x * page.width}
@@ -1024,7 +1014,7 @@
             vector-effect="non-scaling-stroke"
             pointer-events="none"
           />{/if}
-        {#if showRegions && selected && step === "Typeset"}{@const pts = tool === "polygon" ? polygonDraft : selectedPolygon}{#if pts.length}<polygon
+        {#if showRegions && selected && step === "Typeset"}{@const pts = tool === "polygon" ? polygonDraft : livePolygon(selectedPolygon)}{#if pts.length}<polygon
             points={pts
               .map(
                 (p) => `${p.x * page!.width},${p.y * page!.height}`,
@@ -1034,7 +1024,16 @@
             stroke="#57b9ff"
             stroke-width="2"
             vector-effect="non-scaling-stroke"
-            pointer-events="none"
+            pointer-events={tool === "select" ? "all" : "none"}
+            role="button"
+            tabindex="0"
+            aria-label="Move polygon"
+            style={tool === "select" ? "cursor: grab" : undefined}
+            onpointerdown={startPolygonDrag}
+            oncontextmenu={(e) => {
+              e.stopPropagation();
+              if (page && selected) openActions(e, page.id, selected.id);
+            }}
           />{/if}{#each pts as p, i}<circle
               cx={(drawing?.vertex === i ? drawing.end.x : p.x) *
                 page.width}
@@ -1075,10 +1074,29 @@
                 };
               }}
             />{/each}{/if}
+        {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && ["Translate", "Review", "Typeset"].includes(step)}
+          {@const rotating = drawing?.rotation && drawing.regionId === selected.id ? drawing : null}
+          {@const center = rotationCenter(selected)}
+          <g transform={rotating ? `rotate(${rotationAngle(rotating) - rotating.rotation!.initial} ${center.x * page.width} ${center.y * page.height})` : undefined}>
+            <circle
+              cx={((selected.x ?? 0) + (selected.w ?? 0.2) / 2) * page.width}
+              cy={(selected.y ?? 0) * page.height}
+              r="8" fill="#62e5ce" stroke="#123e38" stroke-width="2"
+              vector-effect="non-scaling-stroke" style="cursor: grab"
+              role="button" tabindex="0" aria-label="Rotate placed text"
+              onpointerdown={startRotation} onkeydown={rotationKey}
+              onclick={(e) => e.stopPropagation()}>
+              <title>Drag to rotate text. Arrow keys rotate 1°; Shift rotates 15°.</title>
+            </circle>
+          </g>
+          {#if rotating}<text x={center.x * page.width} y={(selected.y ?? 0) * page.height - 15}
+            fill="#62e5ce" text-anchor="middle" pointer-events="none">{rotationAngle(rotating)}°</text>{/if}
+        {/if}
         {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && step === "Typeset"}
           {@const skewing = drawing?.skew && drawing.regionId === selected.id ? drawing : null}
-          {@const right = polygonEdgeHandle(selectedPolygon, "right")}
-          {@const bottom = polygonEdgeHandle(selectedPolygon, "bottom")}
+          {@const shape = livePolygon(selectedPolygon)}
+          {@const right = polygonEdgeHandle(shape, "right")}
+          {@const bottom = polygonEdgeHandle(shape, "bottom")}
           <polygon
             points={`${right.x * page.width},${right.y * page.height - 8} ${right.x * page.width + 8},${right.y * page.height} ${right.x * page.width},${right.y * page.height + 8} ${right.x * page.width - 8},${right.y * page.height}`}
             fill="#62e5ce" stroke="#123e38" stroke-width="2"

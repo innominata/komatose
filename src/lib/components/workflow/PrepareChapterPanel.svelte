@@ -292,7 +292,7 @@
 <style>
   .upload {
     padding: 24px;
-    border: 1px dashed var(--hud-teal);
+    border: 1px dashed var(--hud-teal-ink);
     background: var(--hud-teal-dim);
     max-width: 700px;
   }

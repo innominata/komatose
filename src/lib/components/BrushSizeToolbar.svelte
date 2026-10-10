@@ -117,7 +117,7 @@
   .brush-size-label {
     color: var(--ed-muted, var(--hud-muted));
     font:
-      600 10px "Rajdhani",
+      600 10px "Manrope",
       sans-serif;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -138,7 +138,7 @@
   }
   .brush-preset:hover {
     background: var(--ed-hover, var(--hud-bg-3));
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   .brush-preset[aria-pressed="true"] {
     background: var(--ed-active-dim, #1a3a40);

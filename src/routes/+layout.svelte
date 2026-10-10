@@ -4,8 +4,13 @@
 	import '../styles/hud.scss';
 	import favicon from '$lib/assets/favicon.svg';
 	import { APP_NAME } from '$lib/brand';
+	import { onMount } from 'svelte';
 	import AppBrand from '$lib/components/AppBrand.svelte';
 	import RebuildButton from '$lib/components/RebuildButton.svelte';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import { initTheme } from '$lib/theme.svelte';
+
+	onMount(() => initTheme());
 
 	let { data, children } = $props();
 
@@ -36,6 +41,7 @@
 				<RebuildButton />
 			{/if}
 			<div class="ms-auto d-flex align-items-center gap-3">
+				<ThemeToggle />
 				<span class="hud-kicker mb-0">{data.user.username} · {data.user.role}</span>
 				<a class="btn-hud-ghost text-decoration-none" href="/account">Password</a>
 				<form method="POST" action="/logout">

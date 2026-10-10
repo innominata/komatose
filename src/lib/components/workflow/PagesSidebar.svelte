@@ -138,7 +138,7 @@
     color: var(--hud-muted);
   }
   .strip-filter button + button { border-left: 1px solid var(--hud-line); }
-  .strip-filter button.on { background: var(--hud-teal-dim); color: var(--hud-teal); }
+  .strip-filter button.on { background: var(--hud-teal-dim); color: var(--hud-teal-ink); }
   .strip-legend { font-size: 10px; color: var(--hud-muted); margin: 0 0 6px; }
   .mark {
     display: inline-block;
@@ -219,8 +219,10 @@
     width: auto;
     margin: 0;
     padding: 0 5px;
-    border-radius: 3px;
-    background: rgba(0, 0, 0, 0.75);
+    border-radius: 999px;
+    background: var(--hud-bg-2);
+    color: var(--hud-text);
+    border: 1px solid var(--hud-line);
     font-size: 11px;
     font-weight: 600;
   }

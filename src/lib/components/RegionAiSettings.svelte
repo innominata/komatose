@@ -792,8 +792,8 @@
     padding: 0.85rem 0.95rem;
   }
   .tabs button[aria-selected="true"] {
-    color: var(--hud-teal);
-    border-bottom-color: var(--hud-teal);
+    color: var(--hud-teal-ink);
+    border-bottom-color: var(--hud-teal-ink);
     background: transparent;
   }
   .panel {
@@ -833,8 +833,8 @@
     left: 0;
     width: min(440px, 72vw);
     padding: 0.75rem 0.9rem;
-    background: #1b2330;
-    border: 1px solid var(--hud-teal);
+    background: var(--hud-bg-2);
+    border: 1px solid var(--hud-teal-ink);
     color: var(--hud-text);
     font-size: 0.85rem;
     line-height: 1.45;
@@ -911,9 +911,9 @@
     font-size: 0.9rem;
   }
   button.save {
-    background: var(--hud-teal);
-    color: #0b1214;
-    border-color: var(--hud-teal);
+    background: var(--hud-primary);
+    color: var(--hud-on-primary);
+    border-color: var(--hud-primary);
   }
   button.save:hover:not(:disabled) {
     background: #6ff3dc;

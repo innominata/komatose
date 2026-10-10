@@ -144,24 +144,30 @@ buttons and the per-job default.
 ![Jobs and defaults](docs/images/12-models-jobs.png)
 
 **Benchmark** — scores models against a hand-checked gold standard on the
-bundled test pages. The Translation view runs one request per page per model
+bundled test pages. Choose **Japanese · Manga** or **Korean · Manhwa** in the
+dataset selector. The Korean set contains eight AI-generated pages from
+*ManhwaFixture*, with visually checked Korean, natural English and literal text
+references ([annotation notes](fixtures/manhwa-pages/README.md)). Dataset results
+are saved separately. The Translation view runs one request per page per model
 and reports chrF against the official and literal references, the share of key
 terms carried over, missing lines, and time per page. A Detection & OCR view
-covers detectors and readers. It is reached from **Jobs & defaults**.
+covers detectors and readers. It has its own **Benchmark** tab.
 
 ![Benchmark](docs/images/15-benchmark.png)
 
 Below the scores, **Lines** puts one model's output next to the raw page and the
-typeset page, line by line, against the Japanese, the official English, and a
+typeset page, line by line, against the source, the English reference, and a
 literal reference, each with its chrF score. The official edition is a
-localisation, so good translations rarely pass 60 against it.
+localisation, so good translations rarely pass 60 against it. Korean references
+are agent-prepared text; the Korean view shows the source artwork without an
+English page image. chrF measures wording overlap, not translation quality alone.
 
 ![Benchmark lines](docs/images/16-benchmark-lines.png)
 
 The **Detection & OCR** view scores boxes and readings separately. Pick which
 detector supplies the boxes and which reader supplies the text, and the page
 shows gold boxes, detections and false boxes over the artwork, with a per-line
-table of the gold Japanese against what was read. The summary line reports how
+table of the gold Japanese or Korean against what was read. The summary line reports how
 many required boxes were found, how many false boxes appeared, and the time.
 
 ![Benchmark detection and OCR](docs/images/17-benchmark-detection-ocr.png)

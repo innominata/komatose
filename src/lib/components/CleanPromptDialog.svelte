@@ -151,7 +151,7 @@
   dialog.clean-prompt {
     width: min(640px, calc(100vw - 2rem));
     padding: 0;
-    border-color: var(--hud-teal);
+    border-color: var(--hud-teal-ink);
   }
   .clean-prompt-body {
     display: grid;

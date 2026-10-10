@@ -1,5 +1,6 @@
 /**
- * Score detector setups against the gold boxes for fixtures/test-pages.
+ * Score detector setups against a bundled gold dataset.
+ * Add --dataset manhwa-ko for the Korean fixture (default: manga-ja).
  *
  *   npx tsx scripts/eval-detection.ts collect          run every backend once, cache the raw output
  *   npx tsx scripts/eval-detection.ts [setup ...]      score cached output (all setups when none are named)
@@ -12,24 +13,45 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { GOLD_PAGES, GOLD_LANG } from '../src/lib/benchmarkGold';
+import { benchmarkDataset } from '../src/lib/benchmarkDatasets';
 import { DETECTOR_SETUPS, scoreDetection, totalDetection, type DetectorPart } from '../src/lib/modelBenchmark';
 import { composeSetup } from '../src/lib/server/modelBenchmark';
 import { parseKoharuRegions, parseSfxRegions } from '../src/lib/server/detect';
 import { detectRegionsPy, type WorkerRegion } from '../src/lib/server/ocr';
 import { localOperation } from '../src/lib/server/localWorker';
 
-const CACHE = process.env.DETECT_EVAL_CACHE || join(tmpdir(), 'komatose-detect-eval.json');
+const args = process.argv.slice(2);
+const datasetFlag = args.findIndex(arg => arg === '--dataset' || arg.startsWith('--dataset='));
+let datasetId: string | undefined;
+if (datasetFlag >= 0) {
+  const flag = args.splice(datasetFlag, 1)[0];
+  datasetId = flag.includes('=') ? flag.slice('--dataset='.length) : args.splice(datasetFlag, 1)[0];
+  if (!datasetId || datasetId.startsWith('--')) throw new Error('--dataset requires manga-ja or manhwa-ko');
+}
+const dataset = benchmarkDataset(datasetId);
+const GOLD_PAGES = dataset.pages;
+const GOLD_LANG = dataset.lang;
+const CACHE = process.env.DETECT_EVAL_CACHE || join(tmpdir(), `komatose-detect-eval-${dataset.id}-v${dataset.version}.json`);
 type Raw = { regions: WorkerRegion[]; width: number; height: number };
 type Cache = Record<string, Partial<Record<DetectorPart, Raw>>>;
+function loadCache(): Cache {
+  if (!existsSync(CACHE)) return {};
+  const saved = JSON.parse(readFileSync(CACHE, 'utf8'));
+  if (saved.dataset !== dataset.id || saved.datasetVersion !== dataset.version)
+    throw new Error(`Cache does not match ${dataset.id} v${dataset.version}; use a separate DETECT_EVAL_CACHE file`);
+  return saved.pages;
+}
+function saveCache(pages: Cache) {
+  writeFileSync(CACHE, JSON.stringify({ dataset: dataset.id, datasetVersion: dataset.version, pages }));
+}
 const PARTS: DetectorPart[] = ['rtdetr', 'ctd', 'paddle', 'coo', 'koharu'];
 /** Private pages (not committed): `EXTRA_PAGES=/tmp/a.jpg,/tmp/b.jpg`. They are listed, not scored. */
 const EXTRA = (process.env.EXTRA_PAGES || '').split(',').filter(Boolean);
 const extraId = (file: string) => `extra:${file}`;
 
 async function collect() {
-	const cache: Cache = existsSync(CACHE) ? JSON.parse(readFileSync(CACHE, 'utf8')) : {};
-	const only = process.argv.slice(3);
+	const cache = loadCache();
+	const only = args.slice(1);
 	const pages = [
 		...GOLD_PAGES.map((page) => ({ id: page.id, path: join(process.cwd(), page.file) })),
 		...EXTRA.map((file) => ({ id: extraId(file), path: file })),
@@ -57,7 +79,7 @@ async function collect() {
 			} catch (error) {
 				console.log(`${page.id} ${part} FAILED ${error instanceof Error ? error.message : error}`);
 			}
-			writeFileSync(CACHE, JSON.stringify(cache));
+			saveCache(cache);
 		}
 	}
 }
@@ -74,7 +96,7 @@ function setupBoxes(setupId: string, pageId: string, cache: Cache, width: number
 }
 
 async function listExtra(setupId: string) {
-	const cache: Cache = JSON.parse(readFileSync(CACHE, 'utf8'));
+	const cache = loadCache();
 	for (const file of EXTRA) {
 		const meta = await sharp(file).metadata();
 		const found = setupBoxes(setupId, extraId(file), cache, meta.width!, meta.height!);
@@ -86,8 +108,8 @@ async function listExtra(setupId: string) {
 }
 
 async function score() {
-	const cache: Cache = JSON.parse(readFileSync(CACHE, 'utf8'));
-	const argv = process.argv.slice(2);
+	const cache = loadCache();
+	const argv = args;
 	const misses = argv.includes('--misses');
 	const names = argv.filter((a) => !a.startsWith('--'));
 	const ids = names.length ? names : DETECTOR_SETUPS.map((s) => s.id);
@@ -117,7 +139,7 @@ async function score() {
 	}
 }
 
-if (process.argv[2] === 'collect') await collect();
-else if (process.argv[2] === 'extra') await listExtra(process.argv[3] || 'ctd+coo+koharu');
+if (args[0] === 'collect') await collect();
+else if (args[0] === 'extra') await listExtra(args[1] || 'ctd+coo+koharu');
 else await score();
 process.exit(0);

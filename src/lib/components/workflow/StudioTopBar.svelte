@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import AppBrand from "../AppBrand.svelte";
+  import ThemeToggle from "../ThemeToggle.svelte";
   import RebuildButton from "../RebuildButton.svelte";
   import type { Episode, ImageRow, Series } from "$lib/types";
   import { STUDIO_STAGE_ORDER } from "$lib/studioActions";
@@ -107,7 +108,7 @@ function meterWidth(count: string | undefined) {
       onclick={() => onissues?.()}
     ><i class="bi bi-flag" aria-hidden="true"></i> <b>{exceptionCount}</b> to check</button>
     <button
-      class="ed-btn exception-next"
+      class="ed-btn exception-next forward"
       type="button"
       data-find="next-issue"
       disabled={!exceptionCount}
@@ -115,6 +116,7 @@ function meterWidth(count: string | undefined) {
       onclick={() => onnextexception?.()}
     >Next <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
   </div>
+  <ThemeToggle />
   <span class="save-studioState" data-find="save-status">{#if unsaved}<i class="bi bi-exclamation-triangle" aria-hidden="true"></i> {unsaved} unsaved{:else}<i class="bi bi-cloud-check" aria-hidden="true"></i> All text saved{/if}</span>
   <button class="ed-btn" type="button" data-find="settings" aria-label="Settings" onclick={onsettings}><i class="bi bi-sliders" aria-hidden="true"></i><span class="txt">Settings</span></button>
   <div class="ed-menu bar-menu">
@@ -200,7 +202,7 @@ function meterWidth(count: string | undefined) {
     letter-spacing: 0;
     text-transform: none;
   }
-  .step:hover { background: rgba(255, 255, 255, 0.04); }
+  .step:hover { background: var(--hud-hover); }
   .step .num {
     grid-row: span 2;
     width: 20px;
@@ -226,13 +228,17 @@ function meterWidth(count: string | undefined) {
   }
   .step .meter i { display: block; height: 100%; background: #5ee39a; }
   .step .meter + small { grid-row: 2; margin-left: 50px; }
-  .step.active { background: var(--hud-teal-dim); border-color: rgba(45, 226, 197, 0.35); }
-  .step.active .num { background: var(--hud-teal); color: #04201b; border-color: var(--hud-teal); font-weight: 700; }
-  .step.active .lbl { color: var(--hud-teal); }
+  .step.active { background: var(--hud-teal-dim); border-color: var(--hud-teal-ink); }
+  .step.active .num { background: var(--hud-teal); color: var(--hud-on-teal); border-color: var(--hud-teal-ink); font-weight: 700; }
+  .step.active .lbl { color: var(--hud-teal-ink); }
   .top-right { display: flex; align-items: center; gap: 6px; flex: none; }
-  .issue-pair { display: inline-flex; border: 1px solid rgba(244, 247, 251, 0.18); border-radius: 5px; overflow: hidden; }
+  .issue-pair { display: inline-flex; border: 1px solid var(--hud-line); border-radius: 999px; overflow: hidden; }
   .issue-pair :global(.ed-btn) { border: 0; border-radius: 0; }
-  .issue-pair :global(.exception-next) { color: var(--hud-teal); box-shadow: inset 1px 0 rgba(45, 226, 197, 0.45); }
+  .issue-pair :global(.exception-next) {
+    background: var(--hud-primary);
+    color: var(--hud-on-primary);
+    box-shadow: inset 1px 0 var(--hud-line);
+  }
   .issue-pair b { color: #f5b85c; font-weight: 600; }
   .save-studioState { color: var(--hud-muted); font-size: 11.5px; white-space: nowrap; padding: 0 4px; }
   .ed-menu { position: relative; }
@@ -280,7 +286,7 @@ function meterWidth(count: string | undefined) {
     border-radius: 3px;
     color: var(--hud-muted);
   }
-  .studio-top :global(.ed-btn:hover:not(:disabled)) { background: rgba(255, 255, 255, 0.05); border-color: rgba(244, 247, 251, 0.18); }
+  .studio-top :global(.ed-btn:hover:not(:disabled)) { background: var(--hud-hover); border-color: var(--hud-line); }
   .studio-top :global(.ed-btn:disabled) { opacity: 0.4; }
   .studio-top :global(.ed-btn[data-find="palette"]) { color: var(--hud-muted); }
   @media (max-width: 1500px) {

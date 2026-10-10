@@ -17,7 +17,7 @@ const { getSeries, getEpisode, listLines } = await import('../src/lib/server/que
 const { getDoc, putDoc, storeAsset, readAsset } = await import('../src/lib/server/workflowStore');
 const { readOcrConsensus, saveOcrConsensus } = await import('../src/lib/server/ocrConsensus');
 const { capturePageImages } = await import('../src/lib/server/pageImages');
-const { startPageProofread, cancelPageProofread, rememberProofread, resetProofreadCursor, proofreadCursor } = await import('../src/lib/server/pageProofread');
+const { startPageProofread, startPageProofreadFollowUp, cancelPageProofread, rememberProofread, resetProofreadCursor, proofreadCursor } = await import('../src/lib/server/pageProofread');
 const { listJobs } = await import('../src/lib/server/jobs');
 const { removeBlankRegions } = await import('../src/lib/server/workflowService');
 const { saveImageFile } = await import('../src/lib/server/storage');
@@ -412,6 +412,64 @@ test('proofreader follow-up creates a new critique from the parent job', async (
     assert.equal(job.progress.snapshot.followUpImages.length, 1);
     assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('proofreading service gets page images first and only the typed follow-up afterwards', async () => {
+  const raw = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'white' } }).png().toBuffer();
+  const cleaned = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'green' } }).png().toBuffer();
+  const file = await saveImageFile({ seriesSlug: 's', episodeSlug: 'e', sortOrder: 3, originalName: 'service-page.png', bytes: raw, mime: 'image/png' });
+  await db.insert(images).values({ id: 'svc-p', episodeId: 'e', ...file, originalName: 'service-page.png', sortOrder: 3, createdAt: 1, updatedAt: 1 });
+  putDoc('e', 'page:svc-p', { prepared: await storeAsset(raw), cleaned: await storeAsset(cleaned), preparedAt: 1 }, 0);
+  resetProofreadCursor();
+  const previousUrl = process.env.SCAN_PROOFREAD_SERVICE_URL;
+  process.env.SCAN_PROOFREAD_SERVICE_URL = 'http://proofread.fixture';
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (url, init) => {
+    const href = String(url);
+    if (href.endsWith('/v1/proofreaders')) {
+      return Response.json({ proofreaders: [{ id: 'proofreader-a', ready: true, context: 'chat-a', reason: '' }] });
+    }
+    if (href.endsWith('/v1/proofread')) {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ critique: `Critique ${bodies.length}.`, context: 'chat-a' });
+    }
+    return originalFetch(url, init);
+  };
+  try {
+    const first = startPageProofread({ series, episode, imageId: 'svc-p', model: { engine: 'proofreader-a', model: '' } });
+    const opened = await finished(first.jobId);
+    assert.equal(opened.state, 'completed', opened.error || '');
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].proofreader, 'proofreader-a');
+    assert.equal(bodies[0].followUp, false);
+    assert.equal((bodies[0].images as unknown[]).length, 2);
+    assert.equal('prompt' in bodies[0], false);
+    assert.doesNotMatch(JSON.stringify(bodies[0]), /scanlation proofreader|Canonical series names|Image 1: RAW/);
+
+    const again = startPageProofread({ series, episode, imageId: 'svc-p', model: { engine: 'proofreader-a', model: '' } });
+    const updated = await finished(again.jobId);
+    assert.equal(updated.state, 'completed', updated.error || '');
+    assert.equal(bodies[1].followUp, true);
+    assert.equal((bodies[1].images as unknown[]).length, 1);
+    assert.equal('prompt' in bodies[1], false);
+
+    const parent = listJobs('e').find((job) => job.id === first.jobId)!;
+    const { jobId } = startPageProofreadFollowUp({
+      series, episode, parentJobId: parent.id, prompt: 'Is the name spelled right?',
+    });
+    const reply = await finished(jobId);
+    assert.equal(reply.state, 'completed', reply.error || '');
+    assert.equal(bodies[2].followUp, true);
+    assert.deepEqual(bodies[2].images, []);
+    assert.equal(bodies[2].prompt, 'Is the name spelled right?');
+    assert.doesNotMatch(String(bodies[2].prompt), /scanlation proofreader|Previous critique|Editor follow-up/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl == null) delete process.env.SCAN_PROOFREAD_SERVICE_URL;
+    else process.env.SCAN_PROOFREAD_SERVICE_URL = previousUrl;
+    resetProofreadCursor();
+  }
 });
 
 test('drawn-region OCR runs Hayai then Paddle, saves consensus, and translates', async () => {

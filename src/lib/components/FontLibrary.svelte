@@ -430,7 +430,7 @@
     background: transparent; color: var(--hud-muted); border: 1px solid var(--hud-line);
     border-radius: 4px; padding: 3px 9px; font-size: 12px; cursor: pointer;
   }
-  .fl-tabs button.active { color: var(--hud-text); border-color: var(--hud-teal); background: var(--hud-teal-dim); }
+  .fl-tabs button.active { color: var(--hud-text); border-color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
   .fl-tabs small, .fl-group-title small { color: var(--hud-muted); margin-left: 2px; }
   .fl-preview-input { flex: 1 1 220px; }
   .fl-bulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--hud-line); border-radius: 5px; background: var(--hud-bg-2); }
@@ -464,8 +464,8 @@
     aspect-ratio: 1; display: grid; place-items: center; font-size: 24px; line-height: 1; padding: 0;
     color: var(--hud-text); background: var(--hud-bg-2); border: 1px solid var(--hud-line); border-radius: 4px; cursor: pointer;
   }
-  .fl-glyph:hover { border-color: var(--hud-teal); }
-  .fl-glyph.active { border-color: var(--hud-teal); background: var(--hud-teal-dim); }
+  .fl-glyph:hover { border-color: var(--hud-teal-ink); }
+  .fl-glyph.active { border-color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
   .fl-glyph.blank small { font-size: 9px; color: var(--hud-muted); font-family: monospace; }
   .fl-more { grid-column: 1 / -1; }
   .fl-glyph-detail { position: sticky; top: 0; display: grid; gap: 6px; justify-items: center; text-align: center; border: 1px solid var(--hud-line); border-radius: 5px; padding: 10px; }
