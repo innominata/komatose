@@ -702,7 +702,7 @@
           ovalHover = null;
         }}
       >
-        {#if step === "Clean" && showMask && !compare}
+        {#if step === "Clean" && showMask}
           <defs>
             <mask id="removal-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={page.width} height={page.height} style="mask-type: luminance">
               <rect width={page.width} height={page.height} fill="black" />

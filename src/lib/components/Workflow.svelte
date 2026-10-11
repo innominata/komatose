@@ -4346,6 +4346,7 @@
               showRegionsToggle={step !== "Prepare"}
               showMaskToggle={step === "Clean" || step === "Typeset"}
               showCompareToggle={step !== "Prepare"}
+              maskStaysWithCompare={step === "Clean"}
               onpage={shiftPage}
               onregions={() => (showRegions = !showRegions)}
               onmask={() => setMaskVisibility(!(showMask && !compare))}

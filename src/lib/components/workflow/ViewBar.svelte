@@ -16,6 +16,7 @@
     showRegionsToggle = true,
     showMaskToggle = false,
     showCompareToggle = false,
+    maskStaysWithCompare = false,
   }: {
     pageIndex: number;
     pageCount: number;
@@ -33,8 +34,10 @@
     showRegionsToggle?: boolean;
     showMaskToggle?: boolean;
     showCompareToggle?: boolean;
+    maskStaysWithCompare?: boolean;
   } = $props();
   const toggles = $derived(showRegionsToggle || showMaskToggle || showCompareToggle);
+  const maskOn = $derived(showMask && (maskStaysWithCompare || !compare));
 </script>
 
 <div class="viewbar" data-find="viewbar" role="toolbar" aria-label="Page view">
@@ -48,7 +51,7 @@
     </button>
   {/if}
   {#if showMaskToggle}
-    <button type="button" class="vb" class:on={showMask && !compare} data-find="view-mask" aria-pressed={showMask && !compare} aria-label={maskLabel} onclick={onmask}><i class="bi bi-transparency" aria-hidden="true"></i> {maskLabel.replace(/^Display /, "").replace(/^./, (c) => c.toUpperCase())}</button>
+    <button type="button" class="vb" class:on={maskOn} data-find="view-mask" aria-pressed={maskOn} aria-label={maskLabel} onclick={onmask}><i class="bi bi-transparency" aria-hidden="true"></i> {maskLabel.replace(/^Display /, "").replace(/^./, (c) => c.toUpperCase())}</button>
   {/if}
   {#if showCompareToggle}
     <button type="button" class="vb" class:on={compare} data-find="view-compare" aria-pressed={compare} aria-label={compareLabel} title="Hold-to-compare also works with the \ key" onclick={oncompare}><i class="bi bi-layers-half" aria-hidden="true"></i> {compareLabel}</button>
