@@ -99,8 +99,11 @@ export async function startProofreader(id: ProofreaderId): Promise<ProofreaderSt
 	return toStatus(id, payload.proofreader || {});
 }
 
+export type ProofreadServiceMode = 'critique' | 'raw';
+
 export async function proofreadWithService(opts: {
 	proofreader: ProofreaderId;
+	mode: ProofreadServiceMode;
 	images: Buffer[];
 	prompt?: string;
 	followUp?: boolean;
@@ -112,6 +115,7 @@ export async function proofreadWithService(opts: {
 			method: 'POST',
 			body: JSON.stringify({
 				proofreader: opts.proofreader,
+				mode: opts.mode,
 				prompt: opts.prompt,
 				followUp: opts.followUp === true,
 				images: opts.images.map((bytes) => bytes.toString('base64')),

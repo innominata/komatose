@@ -31,7 +31,7 @@ const { createLocalHttpRow } = await import('../src/lib/server/modelRegistryStor
 const { fixturePasses } = await import('./local-ocr-fixture');
 for (const slug of ['review-mask-fixture', 'proofreader-fixture', 'fixture']) {
   const row = createLocalHttpRow({ name: slug, slug });
-  await fixturePasses(row.id, ['sourceReview', 'pageImageProofread', 'translate', 'vision']);
+  await fixturePasses(row.id, ['sourceReview', 'pageImageProofread', 'proofreadEnglish', 'translate', 'vision']);
 }
 const fixtureSettings = getDoc('series:s', {});
 putDoc(null, fixtureSettings.id, { regionAi: { translate: { engine: 'fixture', model: '' } } }, fixtureSettings.revision);
@@ -382,6 +382,45 @@ test('proofreader receives both images in order, persists critique and snapshots
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('Proofread Raw sends only the raw image to a vision proofreading model and saves its reply', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSeriesSettings = getDoc<any>('series:s', {});
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [] });
+    if (!String(url).endsWith('/chat/completions')) return Response.json({}, { status: 503 });
+    calls++;
+    const payload = JSON.parse(String(init?.body));
+    assert.match(payload.messages[0].content, /Read the raw page image/);
+    assert.match(payload.messages[0].content, calls === 1 ? /Japanese scanlation proofreader/ : /Korean scanlation proofreader/);
+    assert.doesNotMatch(payload.messages[0].content, calls === 1 ? /Korean/ : /Japanese/);
+    const parts = payload.messages[1].content;
+    assert.match(parts[0].text, /Image 1: RAW source/);
+    assert.doesNotMatch(parts[0].text, /Image 2:/);
+    assert.doesNotMatch(parts[0].text, /Saved page script|Canonical series names/);
+    assert.equal(parts.filter((part: any) => part.type === 'image_url').length, 1);
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ critique: 'The first bubble is uncertain.' }) } }] });
+  };
+  try {
+    const { jobId } = startPageProofread({ series, episode, imageId: 'p', model: { engine: 'qwen', model: 'proofreader-fixture' }, mode: 'raw' });
+    const job = await finished(jobId);
+    assert.equal(job.state, 'completed', job.error || '');
+    assert.equal(job.payload.mode, 'raw');
+    assert.equal(job.progress.snapshot.typeset, undefined);
+    assert.match(job.progress.critique, /first bubble/);
+    const settings = getDoc<any>('series:s', {});
+    putDoc(null, settings.id, { ...settings.data, lang: 'korean' }, settings.revision);
+    const korean = startPageProofread({ series, episode, imageId: 'p', model: { engine: 'qwen', model: 'proofreader-fixture' }, mode: 'raw' });
+    assert.equal((await finished(korean.jobId)).state, 'completed');
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    const currentSettings = getDoc<any>('series:s', {});
+    if (currentSettings.revision !== originalSeriesSettings.revision)
+      putDoc(null, currentSettings.id, originalSeriesSettings.data, currentSettings.revision);
+  }
+});
+
 test('proofreader follow-up creates a new critique from the parent job', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -398,7 +437,7 @@ test('proofreader follow-up creates a new critique from the parent job', async (
   };
   try {
     const { startPageProofreadFollowUp } = await import('../src/lib/server/pageProofread');
-    const parent = listJobs('e').find(j => j.kind === 'page-proofread' && j.state === 'completed');
+    const parent = listJobs('e').find(j => j.kind === 'page-proofread' && j.state === 'completed' && j.payload.mode !== 'raw');
     assert.ok(parent, 'needs the completed proofread job from the previous test');
     const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: 'red' } }).png().toBuffer();
     const { jobId } = startPageProofreadFollowUp({
@@ -442,6 +481,7 @@ test('proofreading service gets page images first and only the typed follow-up a
     assert.equal(opened.state, 'completed', opened.error || '');
     assert.equal(bodies.length, 1);
     assert.equal(bodies[0].proofreader, 'proofreader-a');
+    assert.equal(bodies[0].mode, 'critique');
     assert.equal(bodies[0].followUp, false);
     assert.equal((bodies[0].images as unknown[]).length, 2);
     assert.equal('prompt' in bodies[0], false);
@@ -450,6 +490,7 @@ test('proofreading service gets page images first and only the typed follow-up a
     const again = startPageProofread({ series, episode, imageId: 'svc-p', model: { engine: 'proofreader-a', model: '' } });
     const updated = await finished(again.jobId);
     assert.equal(updated.state, 'completed', updated.error || '');
+    assert.equal(bodies[1].mode, 'critique');
     assert.equal(bodies[1].followUp, true);
     assert.equal((bodies[1].images as unknown[]).length, 1);
     assert.equal('prompt' in bodies[1], false);
@@ -460,10 +501,20 @@ test('proofreading service gets page images first and only the typed follow-up a
     });
     const reply = await finished(jobId);
     assert.equal(reply.state, 'completed', reply.error || '');
+    assert.equal(bodies[2].mode, 'critique');
     assert.equal(bodies[2].followUp, true);
     assert.deepEqual(bodies[2].images, []);
     assert.equal(bodies[2].prompt, 'Is the name spelled right?');
     assert.doesNotMatch(String(bodies[2].prompt), /scanlation proofreader|Previous critique|Editor follow-up/);
+
+    const rawJob = startPageProofread({ series, episode, imageId: 'svc-p', model: { engine: 'proofreader-a', model: '' }, mode: 'raw' });
+    const rawReply = await finished(rawJob.jobId);
+    assert.equal(rawReply.state, 'completed', rawReply.error || '');
+    assert.equal(rawReply.payload.mode, 'raw');
+    assert.equal(rawReply.progress.snapshot.typeset, undefined);
+    assert.equal(bodies[3].mode, 'raw');
+    assert.equal(bodies[3].followUp, false);
+    assert.equal((bodies[3].images as unknown[]).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     if (previousUrl == null) delete process.env.SCAN_PROOFREAD_SERVICE_URL;

@@ -42,8 +42,12 @@ export type TextStyle = {
   padding: number;
   align: "left" | "center" | "right";
   fill: string;
+  /** Fill opacity, 0–100. */
+  fillOpacity: number;
   autoContrast?: boolean;
   outline: string;
+  /** Outline opacity, 0–100. */
+  outlineOpacity: number;
   outlineWidth: number;
   rotation: number;
   /** Horizontal skew in degrees (Photoshop Free Transform "H"), applied to the whole layer. */
@@ -82,8 +86,10 @@ export const DEFAULT_STYLE: TextStyle = {
   padding: 4,
   align: "center",
   fill: "#000000",
+  fillOpacity: 100,
   autoContrast: true,
   outline: "#ffffff",
+  outlineOpacity: 100,
   outlineWidth: 0,
   rotation: 0,
   skewX: 0,
@@ -133,8 +139,10 @@ export const STYLE_KEYS = [
   "padding",
   "align",
   "fill",
+  "fillOpacity",
   "autoContrast",
   "outline",
+  "outlineOpacity",
   "outlineWidth",
   "rotation",
   "skewX",
@@ -195,6 +203,25 @@ export function styleDiff(
     }
   }
   return out;
+}
+
+/** A region owns its style once every field is stored on it, not filled in from the series default. */
+export function styleIsOwned(style: Partial<TextStyle> | undefined): boolean {
+  return !!style && STYLE_KEYS.every((key) => style[key] !== undefined);
+}
+
+/**
+ * What the style panel shows. An owned style stays put when the series default
+ * changes. The default is copied onto a region when it is created, when Reset
+ * to Default is clicked, or when that type is refit in the chapter.
+ */
+export function regionPanelStyle(
+  inherited: TextStyle,
+  data: { style?: Partial<TextStyle>; layout?: { style?: Partial<TextStyle> } } | undefined,
+): TextStyle {
+  if (data?.style && styleIsOwned(data.style)) return { ...DEFAULT_STYLE, ...data.style };
+  if (data?.layout?.style) return { ...DEFAULT_STYLE, ...data.layout.style };
+  return { ...inherited, ...data?.style };
 }
 export type FittedRow = {
   text: string;

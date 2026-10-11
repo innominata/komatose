@@ -20,6 +20,7 @@
     canEdit,
     canClean,
     canUpload,
+    canAddRegionType = false,
     busy,
     regionStyle = $bindable(),
     fonts,
@@ -28,6 +29,7 @@
     onedit,
     onsettype,
     onapplystyle,
+    onsavestyleas,
     onresetstyle,
     onrefitcategory,
     categoryLabel = 'category',
@@ -47,6 +49,7 @@
     canEdit: boolean;
     canClean: boolean;
     canUpload: boolean;
+    canAddRegionType?: boolean;
     busy: boolean;
     regionStyle: TextStyle;
     fonts: FontAsset[];
@@ -55,6 +58,7 @@
     onedit: (line: LineRow, patch: Record<string, unknown>) => void;
     onsettype: (line: LineRow, lineType: string) => void;
     onapplystyle: (scope?: string) => void;
+    onsavestyleas?: () => void;
     onresetstyle: () => void;
     onrefitcategory: () => void;
     categoryLabel?: string;
@@ -80,6 +84,16 @@
       : (current + direction + fontChoices.length) % fontChoices.length;
     if (fontChoices[next].id === regionStyle.fontId) return;
     regionStyle.fontId = fontChoices[next].id;
+    void onapplystyle();
+  }
+
+  function swapFillAndBorder() {
+    const fill = regionStyle.fill;
+    const fillOpacity = regionStyle.fillOpacity;
+    regionStyle.fill = regionStyle.outline;
+    regionStyle.fillOpacity = regionStyle.outlineOpacity;
+    regionStyle.outline = fill;
+    regionStyle.outlineOpacity = fillOpacity;
     void onapplystyle();
   }
 </script>
@@ -123,9 +137,12 @@
     </div>
     {/if}
     {#if tab === "style"}
-    <p class="panel-hint" data-find="style">Category defaults come from the series across all chapters. Changes here override this region; Use series style removes those overrides.</p>
+    <p class="panel-hint" data-find="style">This region keeps its own style. The series default is copied on when the region is created, when you Reset to Default, or when you refit this type in the chapter.</p>
+    <div class="control-row">
+      <button type="button" disabled={!canClean || busy || regionDoc.data.locked} onclick={onresetstyle}>Reset to Default</button>
+    </div>
     <details open>
-      <summary>Character · override series style</summary>
+      <summary>Style</summary>
       <fieldset
         disabled={!canClean || busy || regionDoc.data.locked}
         onchange={() => void onapplystyle()}
@@ -193,29 +210,63 @@
           ><label
             ><input type="checkbox" bind:checked={regionStyle.autoContrast} /> Automatic
             black / white contrast</label
-          ><label
-            >Fill<input
-              type="color"
-              disabled={regionStyle.autoContrast !== false}
-              bind:value={regionStyle.fill}
-            /></label
-          ><label
-            >Outline color<input type="color" bind:value={regionStyle.outline} /></label
+          ><div class="color-field"
+            ><span>Fill</span><span class="color-row"
+              ><input
+                type="color"
+                aria-label="Fill color"
+                disabled={regionStyle.autoContrast !== false}
+                bind:value={regionStyle.fill}
+              /></span
+            ><label class="opacity"
+              >Opacity<input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                aria-label="Fill opacity"
+                bind:value={regionStyle.fillOpacity}
+              /><span>{regionStyle.fillOpacity}%</span></label
+            ></div
+          ><div class="color-field"
+            ><span>Outline color</span><span class="color-row"
+              ><input type="color" aria-label="Outline color" bind:value={regionStyle.outline} /><button
+                type="button"
+                aria-label="Swap fill and border"
+                title="Swap fill and border"
+                disabled={regionStyle.autoContrast !== false}
+                onclick={swapFillAndBorder}
+                ><i class="bi bi-arrow-left-right" aria-hidden="true"></i></button
+              ></span
+            ><label class="opacity"
+              >Opacity<input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                aria-label="Outline opacity"
+                bind:value={regionStyle.outlineOpacity}
+              /><span>{regionStyle.outlineOpacity}%</span></label
+            ></div
           >
         </div>
       </fieldset>
       <small>Changes save and update placed text automatically.</small>
       <div class="control-row">
         <button type="button" disabled={!canClean || busy || regionDoc?.data.locked} onclick={() => onfit?.()}>Auto-fit</button>
-        <button type="button" disabled={!canClean || busy || regionDoc.data.locked}
-          onclick={onresetstyle}>Use series style</button
-        >{#if canUpload}<button type="button" disabled={!canClean || busy || regionDoc.data.locked} onclick={() => onapplystyle("series")}
-            >Save as series {categoryLabel} style…</button
+        {#if canUpload}<button type="button" disabled={!canClean || busy || regionDoc.data.locked} title="Use this region’s style as the default for new regions of this type" onclick={() => onapplystyle("series")}
+            >Save as Default</button
+          >{/if}{#if canAddRegionType}<button
+            type="button"
+            disabled={!canClean || busy || regionDoc.data.locked}
+            title="Create a region type from this style"
+            onclick={() => onsavestyleas?.()}
+            >Save style as…</button
           >{/if}
         <button type="button" data-find="refit-category" disabled={!canClean || busy || fitting}
           onclick={onrefitcategory}>Refit {categoryLabel} in chapter…</button>
       </div>
-      <small>Category refit uses the saved series style and existing geometry. Locked layouts are skipped; individual placement transforms and text masks stay.</small>
+      <small>Refit copies the series default onto every unlocked {categoryLabel} region in this chapter. Saved bubble geometry, text masks and placement transforms stay.</small>
     </details>
     {/if}
     {#if tab === "shape"}
@@ -285,6 +336,49 @@
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 8px;
+  }
+  .color-field {
+    display: grid;
+    gap: 4px;
+    color: var(--hud-muted);
+    font-size: 12px;
+  }
+  .color-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .color-row input[type="color"] {
+    flex: 1;
+    min-width: 0;
+    margin-top: 0;
+  }
+  .color-row button {
+    flex: none;
+    height: 34px;
+    padding: 0 8px;
+  }
+  .opacity {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+  }
+  .opacity input {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .opacity span {
+    min-width: 3.2ch;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
   .sec { display: grid; gap: 8px; }
   .sec h3 {

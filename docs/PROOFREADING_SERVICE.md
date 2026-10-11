@@ -26,15 +26,20 @@ offers the ones it reports ready.
 
 The service is addressed over loopback with a bearer token
 (`SCAN_PROOFREAD_SERVICE_TOKEN`). Everything is deliberately neutral: Komatose
-sends images and text and receives critique text plus an opaque conversation
-token. It never learns how the reply is produced.
+sends a `mode`, images, and text, and receives critique text plus an opaque
+conversation token. It never learns how the reply is produced. Page proofread,
+including a follow-up on the same page, sends `mode: "critique"`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/health` | Liveness only. |
 | `GET` | `/v1/proofreaders` | Readiness for every proofreader. |
 | `POST` | `/v1/proofreaders/start` | Bring one proofreader up. |
-| `POST` | `/v1/proofread` | Send images + prompt, return `{ critique, context }`. |
+| `POST` | `/v1/proofread` | Send `mode`, images, and an optional prompt. Return `{ critique, context }`. |
+
+The Review **Proofread Raw** action sends one raw page image with `mode: raw`.
+The existing raw and typeset comparison sends `mode: critique`; its follow-ups
+also use `mode: critique`.
 
 Proofreaders are named `proofreader-a` and `proofreader-b` in the API and in the
 UI. Those ids are the stable contract; what implements them is the service's

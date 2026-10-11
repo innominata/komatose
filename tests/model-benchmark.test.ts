@@ -30,6 +30,7 @@ import { compareSortValues, nextSort, sortedBy } from '../src/lib/benchmarkSort'
 import { QWEN3_VL_ID } from '../src/lib/qwenModels';
 import { localReviewModel } from '../src/lib/localReviewModels';
 import { DEFAULT_TRANSCRIPTION_MODEL_IDS, SEED_ROWS } from '../src/lib/modelRegistry';
+import type { BenchmarkDeps } from '../src/lib/server/modelBenchmark';
 
 const root = await mkdtemp(join(tmpdir(), 'scan-benchmark-'));
 process.env.SCAN_ROOT = root;
@@ -445,7 +446,7 @@ test('meaning review grades saved translations without rewarding a copied refere
 	};
 	const failed = { ...reviewer, id: 'failed-chat', capabilities: { conversation: { ...reviewer.capabilities!.conversation!, ok: false } } };
 	const pages = [page('007'), page('009')];
-	const translate = async (_row: typeof hy, boxes: { id?: string }[], p: ReturnType<typeof page>) => boxes.map((box) => {
+	const translate: NonNullable<BenchmarkDeps['translate']> = async (_row, boxes, p) => boxes.map((box) => {
 		const line = p.lines.find((item) => item.id === box.id)!;
 		const translation = box.id === '007-i-win' ? 'I take this round.' : (line.en || '');
 		return { ...box, translation, literal: line.literal || '' };

@@ -41,7 +41,7 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
   if (adapter === 'browser-proofreader') {
     if (task !== 'pageImageProofread') return unsupported(task);
     const { proofreadWithService } = await import('./proofreadService');
-    return proofreadWithService({ proofreader: row.id as any, images: input.images, prompt: input.prompt, followUp: input.followUp, abort } as any);
+    return proofreadWithService({ proofreader: row.id as any, mode: 'critique', images: input.images, prompt: input.prompt, followUp: input.followUp, abort } as any);
   }
   if (adapter === 'cli') {
     const cli = await import('./cliTranslate');

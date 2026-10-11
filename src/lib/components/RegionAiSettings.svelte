@@ -291,19 +291,24 @@
   }
   const show = (key: keyof RegionAiSettings) => !tasks?.length || tasks.includes(key);
   const tabs = $derived.by(() => {
-    const items: { id: string; label: string }[] = [];
-    if (showProfiles) items.push({ id: "profiles", label: "Profiles" });
-    if (show("translate")) items.push({ id: "translate", label: "Translation" });
-    if (show("describe")) items.push({ id: "describe", label: "Description" });
-    if (show("vision")) items.push({ id: "vision", label: "Read Text / OCR" });
-    if (show("proofread")) items.push({ id: "proofread", label: "Proofreading" });
-    if (show("enquire")) items.push({ id: "enquire", label: "Enquire" });
-    if (show("reviewers")) items.push({ id: "reviewers", label: "Review Transcription" });
-    if (show("reviseModels")) items.push({ id: "revise", label: "Review Translation" });
-    if (show("transcriptionModels")) items.push({ id: "transcription", label: "Transcription" });
+    const items: { id: string; label: string; detail: string }[] = [];
+    if (showProfiles) items.push({ id: "profiles", label: "Profiles", detail: "Save and apply a model set" });
+    if (show("translate")) items.push({ id: "translate", label: "Translation", detail: "Chapter text translation" });
+    if (show("describe")) items.push({ id: "describe", label: "Description", detail: "Page scene notes" });
+    if (show("vision")) items.push({ id: "vision", label: "Read Text / OCR", detail: "Manual image reading" });
+    if (show("proofread")) items.push({ id: "proofread", label: "Proofreading", detail: "English and page images" });
+    if (show("enquire")) items.push({ id: "enquire", label: "Enquire", detail: "Default chat assistant" });
+    if (show("reviewers")) items.push({ id: "reviewers", label: "Review Transcription", detail: "Independent source readers" });
+    if (show("reviseModels")) items.push({ id: "revise", label: "Review Translation", detail: "Translation council" });
+    if (show("transcriptionModels")) items.push({ id: "transcription", label: "Transcription", detail: "Automatic OCR and decider" });
     return items;
   });
-  const activeTab = $derived(tabs.find((tab) => tab.id === chosenTab)?.id ?? tabs[0]?.id ?? "");
+  const activeTab = $derived(
+    tabs.find((tab) => tab.id === chosenTab)?.id
+      ?? (embedded ? tabs.find((tab) => tab.id === "translate")?.id : undefined)
+      ?? tabs[0]?.id
+      ?? "",
+  );
   function addLocalReviewers() {
     const added = localReviewModels.filter(model => !draft.reviewers.some(
       reviewer => reviewer.engine === model.id || reviewer.model === model.id));
@@ -382,25 +387,31 @@
         "Saved on this series. Every chapter uses these models, including the Review Translation council.",
       )}
     </div>
-    {@render actions()}
   </header>
   {#if error}<p class="banner" role="alert">{error}</p>{/if}
-  <div class="tabs" role="tablist" aria-label="Model setting sections">
-    {#each tabs as tab}
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeTab === tab.id}
-        aria-controls={`settings-panel-${tab.id}`}
-        id={`settings-tab-${tab.id}`}
-        onclick={() => {
-          chosenTab = tab.id;
-          openHint = "";
-        }}
-      >{tab.label}</button>
-    {/each}
-  </div>
-  <div class="panel" role="tabpanel" id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>
+  <div class="settings-main">
+    <label class="mobile-task-picker">Model task
+      <select aria-label="Model task" value={activeTab} onchange={(event) => { chosenTab = event.currentTarget.value; openHint = ""; }}>
+        {#each tabs as tab}<option value={tab.id}>{tab.label}</option>{/each}
+      </select>
+    </label>
+    <div class="tabs" role="tablist" aria-label="Model setting sections" aria-orientation="vertical">
+      {#each tabs as tab}
+        <button
+          type="button"
+          role="tab"
+          aria-label={tab.label}
+          aria-selected={activeTab === tab.id}
+          aria-controls={`settings-panel-${tab.id}`}
+          id={`settings-tab-${tab.id}`}
+          onclick={() => {
+            chosenTab = tab.id;
+            openHint = "";
+          }}
+        ><span>{tab.label}</span><small aria-hidden="true">{tab.detail}</small></button>
+      {/each}
+    </div>
+    <div class="panel" role="tabpanel" id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>
     {#if activeTab === "profiles"}
       <div class="panel-body">
         <div class="section-head">
@@ -677,6 +688,7 @@
         </div>
       </div>
     {/if}
+    </div>
   </div>
   <footer>{@render actions()}</footer>
 </svelte:element>
@@ -719,15 +731,15 @@
     margin: 0;
     padding: 0;
   }
-  dialog.settings-modal[open],
+  :global(dialog.settings-modal[open]),
   .studio-embedded-settings {
     display: flex;
     flex-direction: column;
   }
   .studio-embedded-settings {
-    width: auto;
-    height: auto;
-    max-height: none;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
     background: transparent;
   }
   dialog::backdrop {
@@ -745,6 +757,13 @@
   .settings-bar {
     border-bottom: 1px solid var(--hud-line);
   }
+  .settings-main {
+    display: grid;
+    grid-template-columns: minmax(185px, 230px) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+  }
+  .mobile-task-picker { display: none; }
   footer {
     justify-content: flex-end;
     border-top: 1px solid var(--hud-line);
@@ -777,39 +796,55 @@
   }
   .tabs {
     display: flex;
-    gap: 0.15rem;
-    padding: 0 0.85rem;
-    border-bottom: 1px solid var(--hud-line);
-    overflow-x: auto;
-    flex-shrink: 0;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 1rem 0.65rem;
+    border-right: 1px solid var(--hud-line);
+    overflow: auto;
+    min-height: 0;
   }
   .tabs button {
     border: 0;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
+    border-left: 3px solid transparent;
+    border-radius: 4px;
     background: transparent;
     color: var(--hud-muted);
-    padding: 0.85rem 0.95rem;
+    padding: 0.65rem 0.8rem;
+    text-align: left;
+    display: grid;
+    gap: 0.15rem;
+    white-space: normal;
+    cursor: pointer;
+  }
+  .tabs button:hover {
+    background: var(--hud-bg-2);
+    color: var(--hud-text);
+  }
+  .tabs small {
+    font-size: 0.74rem;
+    font-weight: 400;
+    line-height: 1.25;
+    color: var(--hud-muted);
   }
   .tabs button[aria-selected="true"] {
     color: var(--hud-teal-ink);
-    border-bottom-color: var(--hud-teal-ink);
-    background: transparent;
+    border-left-color: var(--hud-teal-ink);
+    background: var(--hud-teal-dim);
   }
   .panel {
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: 1.75rem 2rem 2rem;
+    padding: clamp(1rem, 2.4vw, 2rem);
   }
   .panel-body {
-    width: min(880px, 100%);
+    width: min(1120px, 100%);
     display: grid;
     gap: 1.1rem;
     align-content: start;
   }
   .panel-body.wide {
-    width: min(1080px, 100%);
+    width: min(1200px, 100%);
   }
   .help {
     position: relative;
@@ -926,6 +961,11 @@
     opacity: 0.5;
   }
   @media (max-width: 720px) {
+    .settings-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .settings-bar { padding: 0.75rem 1rem; }
+    .mobile-task-picker { display: grid; gap: 4px; padding: 10px 16px; border-bottom: 1px solid var(--hud-line); color: var(--hud-muted); font-size: 12px; }
+    .mobile-task-picker select { width: 100%; padding: 8px; color: var(--hud-text); background: var(--hud-input-bg); border: 1px solid var(--hud-line); border-radius: 6px; }
+    .tabs { display: none; }
     .profile-grid,
     .reviewer {
       grid-template-columns: 1fr;

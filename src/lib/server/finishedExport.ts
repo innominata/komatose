@@ -117,32 +117,24 @@ export async function renderPage(page: ExportPage, options: { includeOverflow?: 
         shear +
         warpPad(l.style, regionW, regionH),
     );
-    const left = Math.max(
-      0,
-      Math.floor(Math.min(...points.map((p) => p.x)) * page.image.width) -
-        margin,
-    );
-    const top = Math.max(
-      0,
-      Math.floor(Math.min(...points.map((p) => p.y)) * page.image.height) -
-        margin,
-    );
-    const width = Math.max(
-      1,
-      Math.min(
-        page.image.width,
-        Math.ceil(Math.max(...points.map((p) => p.x)) * page.image.width) +
-          margin,
-      ) - left,
-    );
-    const height = Math.max(
-      1,
-      Math.min(
-        page.image.height,
-        Math.ceil(Math.max(...points.map((p) => p.y)) * page.image.height) +
-          margin,
-      ) - top,
-    );
+    const left = Math.max(0, Math.min(page.image.width,
+      Math.floor(Math.min(...points.map((p) => p.x)) * page.image.width) - margin));
+    const top = Math.max(0, Math.min(page.image.height,
+      Math.floor(Math.min(...points.map((p) => p.y)) * page.image.height) - margin));
+    const right = Math.max(0, Math.min(page.image.width,
+      Math.ceil(Math.max(...points.map((p) => p.x)) * page.image.width) + margin));
+    const bottom = Math.max(0, Math.min(page.image.height,
+      Math.ceil(Math.max(...points.map((p) => p.y)) * page.image.height) + margin));
+    if (right <= left || bottom <= top) {
+      layers.push({
+        bytes: await sharp({ create: { width: 1, height: 1, channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer(),
+        left: 0, top: 0, width: 1, height: 1,
+      });
+      continue;
+    }
+    const width = right - left;
+    const height = bottom - top;
     const cropped = l.svg.replace(
       `width="${page.image.width}" height="${page.image.height}" viewBox="0 0 ${page.image.width} ${page.image.height}"`,
       `width="${width}" height="${height}" viewBox="${left} ${top} ${width} ${height}"`,
@@ -305,6 +297,8 @@ export async function finishedPsd(
       rows.length > 1
         ? (rows[1].baseline - rows[0].baseline) * units
         : layout.size * s.leading;
+    const fillOpacity = (s.fillOpacity ?? 100) / 100;
+    const outlineOpacity = (s.outlineOpacity ?? 100) / 100;
     const textStyle = {
       font: { name: layout.font.postscriptName },
       fontSize: layout.size,
@@ -332,6 +326,7 @@ export async function finishedPsd(
       right: layerLeft + layerWidth,
       bottom: layerTop + layerHeight,
       imageData: await pixels(r.layers[i].bytes),
+      fillOpacity: fillOpacity < 1 ? fillOpacity : undefined,
       mask: region.data.textMask
         ? {
             defaultColor: 255,
@@ -404,7 +399,7 @@ export async function finishedPsd(
                     units: "Pixels",
                     value: (s.outlineWidth * page.dpi) / 72,
                   },
-                  opacity: 1,
+                  opacity: outlineOpacity,
                   blendMode: "normal",
                 },
               ],

@@ -26,6 +26,7 @@ import {
   isIgnoredLine,
   DEFAULT_STYLE,
   pickStyle,
+  STYLE_KEYS,
   styleKeys,
   PAGE_STEPS,
   pageStepLabel,
@@ -37,7 +38,7 @@ import {
   type TextStyle,
 } from "../workflow";
 import { glossaryMismatches } from "../glossary";
-import { activeRegionKinds, isBuiltinRegionKind, normalizeRegionKinds, type RegionKind } from "../regionCatalog";
+import { activeRegionKinds, isBuiltinRegionKind, normalizeRegionKinds, regionKindFromLabel, type RegionKind } from "../regionCatalog";
 import { LINE_TYPES } from "../types";
 import { isCreditsPage } from "../credits";
 import type { Episode, Series, ImageRow, LineRow } from "../types";
@@ -243,6 +244,129 @@ export function saveSeriesRegionKinds(
   return putDoc(null, current.id, data, expectedRevision);
 }
 
+/** Add one region type and store this region's style as that type's series default. */
+export function saveStyleAsRegionType(
+  seriesId: string,
+  expectedRevision: number,
+  label: string,
+  style: Partial<TextStyle>,
+) {
+  const current = getDoc<Partial<Preferences>>(`series:${seriesId}`, {});
+  const kind = regionKindFromLabel(label, activeRegionKinds(current.data.regionKinds));
+  const kinds = normalizeRegionKinds([
+    ...activeRegionKinds(current.data.regionKinds),
+    kind,
+  ]);
+  const fonts = new Set(listFonts(seriesId).map((font) => font.id));
+  const base = validateStyle({ ...current.data.style });
+  const merged = validateStyle({ ...base, ...pickStyle(style) });
+  if (merged.fontId && !fonts.has(merged.fontId))
+    throw new WorkflowError("Choose a font available to this series");
+  const doc = putDoc(
+    null,
+    current.id,
+    {
+      ...current.data,
+      regionKinds: kinds,
+      styles: { ...current.data.styles, [kind.id]: merged },
+    },
+    expectedRevision,
+  );
+  return { doc, kind };
+}
+
+function sameStyle(a: Partial<TextStyle>, b: Partial<TextStyle>) {
+  return STYLE_KEYS.every((key) => a[key] === b[key]);
+}
+
+/** Keep the look already on each region of this type. A series-style save must not rewrite their panels. */
+function pinExistingTypeStyle(
+  seriesId: string,
+  lineType: string,
+  previous: TextStyle,
+  next: TextStyle,
+) {
+  const rows = sqlite
+    .prepare(
+      `SELECT l.id AS id, l.episode_id AS episodeId
+       FROM lines l JOIN episodes e ON e.id = l.episode_id
+       WHERE e.series_id = ? AND l.line_type = ?`,
+    )
+    .all(seriesId, lineType) as { id: string; episodeId: string }[];
+  for (const row of rows) {
+    const doc = getDoc<RegionData>(`region:${row.id}`, {});
+    const frozen = doc.data.layout?.style
+      ? validateStyle({ ...DEFAULT_STYLE, ...doc.data.layout.style })
+      : validateStyle({ ...previous, ...pickStyle(doc.data.style) });
+    if (sameStyle(frozen, next)) continue;
+    if (sameStyle(pickStyle(doc.data.style), pickStyle(frozen))) continue;
+    putDoc(row.episodeId, doc.id, { ...doc.data, style: pickStyle(frozen) }, doc.revision);
+  }
+}
+
+function seriesTypeStyle(seriesId: string, lineType: string): TextStyle {
+  const saved = getDoc<Partial<Preferences>>(`series:${seriesId}`, {}).data;
+  return validateStyle({
+    ...DEFAULT_STYLE,
+    ...saved.style,
+    ...saved.styles?.[lineType],
+  });
+}
+
+function styleIsOwned(style: Partial<TextStyle> | undefined) {
+  return !!style && STYLE_KEYS.every((key) => style[key] !== undefined);
+}
+
+/** Copy the series default onto regions that do not yet have their own saved style. */
+export function ensureOwnRegionStyles(
+  seriesId: string,
+  episodeId: string,
+  rows: { id: string; lineType: string }[],
+) {
+  return withDeferredBroadcasts(() => {
+    let stamped = 0;
+    for (const row of rows) {
+      const doc = getDoc<RegionData>(`region:${row.id}`, {});
+      if (styleIsOwned(doc.data.style)) continue;
+      const style = pickStyle(validateStyle({
+        ...seriesTypeStyle(seriesId, row.lineType),
+        ...pickStyle(doc.data.style),
+        ...pickStyle(doc.data.layout?.style),
+      }));
+      try {
+        putDoc(episodeId, doc.id, { ...doc.data, style }, doc.revision);
+        stamped++;
+      } catch (e) {
+        if (!(e instanceof WorkflowError) || e.status !== 409) throw e;
+      }
+    }
+    return stamped;
+  });
+}
+
+/** Replace unfitted regions of this type with the series default. Fitted text is refit separately. Locked layouts stay. */
+export function applyDefaultToUnfitted(
+  seriesId: string,
+  episodeId: string,
+  lineType: string,
+  fittedIds: string[],
+) {
+  const keep = new Set(fittedIds);
+  const style = pickStyle(seriesTypeStyle(seriesId, lineType));
+  const rows = sqlite
+    .prepare("SELECT id FROM lines WHERE episode_id=? AND line_type=?")
+    .all(episodeId, lineType) as { id: string }[];
+  let applied = 0;
+  for (const row of rows) {
+    if (keep.has(row.id)) continue;
+    const doc = getDoc<RegionData>(`region:${row.id}`, {});
+    if (doc.data.locked || sameStyle(pickStyle(doc.data.style), style)) continue;
+    putDoc(episodeId, doc.id, { ...doc.data, style }, doc.revision);
+    applied++;
+  }
+  return applied;
+}
+
 export function saveSeriesTypeSettings(
   seriesId: string,
   expectedRevision: number,
@@ -271,6 +395,13 @@ export function saveSeriesTypeSettings(
     });
     if (merged.fontId && !fonts.has(merged.fontId))
       throw new WorkflowError("Choose a font available to this series");
+    const previousType = validateStyle({
+      ...DEFAULT_STYLE,
+      ...current.data.style,
+      ...current.data.styles?.[type],
+    });
+    if (!sameStyle(previousType, merged))
+      pinExistingTypeStyle(seriesId, type, previousType, merged);
     styles[type] = merged;
   }
   // Keep every built-in type materialized, as before.
@@ -651,6 +782,7 @@ export function readiness(
 export async function workflowState(series: Series, episode: Episode) {
   const imgs = await listImages(episode.id);
   const lns = await listLines(episode.id);
+  ensureOwnRegionStyles(series.id, episode.id, lns);
   return {
     images: imgs,
     comments: await listComments(episode.id),
@@ -714,8 +846,8 @@ export async function fitRegion(
     const polygon = regionPolygon(line, data, img).map(p => ({ x: p.x / img.width, y: p.y / img.height }));
     style.fill = await contrastingText(bytes, polygon);
     style.outline = style.fill === "#000000" ? "#ffffff" : "#000000";
-    data = { ...data, style: { ...data.style, fill: style.fill, outline: style.outline } };
   }
+  data = { ...data, style: pickStyle(style) };
   if (!listFonts(series.id).some((f) => f.id === style.fontId))
     throw new WorkflowError("Font does not belong to this series");
   const layout = await fitText(

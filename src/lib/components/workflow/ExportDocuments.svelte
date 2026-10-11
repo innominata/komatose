@@ -8,6 +8,8 @@
   let selected = $state<string[]>([]);
   let file = $state<ExportDocumentId>('bilingual.txt');
   let includeSceneNotes = $state(true);
+  let includeEmptyPages = $state(true);
+  let includeIds = $state(true);
   let document = $state<ExportDocument | null>(null);
   let loading = $state(false);
   let error = $state('');
@@ -37,7 +39,7 @@
     try {
       const data = await responseJson(await fetch(endpoint, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ episodeIds: selected, file, includeSceneNotes }), signal: controller.signal,
+        body: JSON.stringify({ episodeIds: selected, file, includeSceneNotes, includeEmptyPages, includeIds }), signal: controller.signal,
       }));
       if (current === generation) document = data.document;
     } catch (e) {
@@ -100,6 +102,8 @@
       {#each files as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
     </select></label>
     <label class="check"><input type="checkbox" checked={includeSceneNotes} onchange={e => { includeSceneNotes = e.currentTarget.checked; void load(); }} disabled={!isScript || !chapters.length} /> Include scene notes</label>
+    <label class="check"><input type="checkbox" checked={includeEmptyPages} onchange={e => { includeEmptyPages = e.currentTarget.checked; void load(); }} disabled={!isScript || !chapters.length} /> Include empty pages</label>
+    <label class="check"><input type="checkbox" checked={includeIds} onchange={e => { includeIds = e.currentTarget.checked; void load(); }} disabled={!isScript || !chapters.length} /> Include IDs</label>
     <button type="button" disabled={!document || loading} onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
     <button type="button" disabled={!document || loading} onclick={download}>Download file</button>
   </div>
@@ -124,7 +128,7 @@
 </section>
 
 <style>
-  .documents { grid-column: 1 / -1; display: grid; gap: 12px; border: 1px solid var(--hud-line); border-radius: 8px; padding: 16px; background: var(--hud-bg-2); }
+  .documents { display: grid; gap: 12px; border: 1px solid var(--hud-line); border-radius: 8px; padding: 16px; background: var(--hud-bg-2); min-height: 0; }
   header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
   h3 { margin: 0 0 6px; font: 700 16px Manrope, sans-serif; }
   p { margin: 0; color: var(--hud-muted); }
@@ -137,6 +141,6 @@
   .chapter-actions { margin-top: 8px; }
   .chapter-list { max-height: 200px; overflow: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; margin-top: 8px; }
   .file-status { color: var(--hud-muted); font-size: 12px; }
-  textarea { width: 100%; min-height: 420px; height: 55vh; resize: vertical; box-sizing: border-box; padding: 14px; background: var(--hud-bg); color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 4px; font: 13px/1.6 ui-monospace, monospace; }
+  textarea { width: 100%; min-height: 320px; height: calc(100vh - 280px); resize: vertical; box-sizing: border-box; padding: 14px; background: var(--hud-bg); color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 4px; font: 13px/1.6 ui-monospace, monospace; }
   .error { color: #ff5d73; }
 </style>

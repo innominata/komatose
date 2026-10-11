@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import type { Episode, Series } from '../types';
+import type { Episode, OcrLang, Series } from '../types';
 import type { TaskEngine } from '../aiTasks';
 import { isProofreaderId, proofreaderLabel, type ProofreaderId } from '../proofreaders';
 import {
@@ -9,6 +9,8 @@ import {
   type PageProofreadSnapshot,
 } from '../pageProofread';
 import { regionAiSettings } from '../regionAi';
+import { rowHasOperation } from '../modelRegistry';
+import { resolveLiveAssistant } from './assistantRoute';
 import { preferences } from './workflowService';
 import { advisoryModel, validateModel } from './regionAi';
 import { proofreaderStatus } from './proofreadService';
@@ -24,6 +26,10 @@ export const PAGE_PROOFREAD_SCHEMA = {
   properties: { critique: { type: 'string' } },
 };
 export const PAGE_PROOFREAD_FOLLOWUP_SYSTEM = `You are a Japanese/Korean scanlation proofreader and lettering editor continuing a conversation about the same page. The editor is asking a follow-up. Answer the follow-up directly. Quote the relevant lettering when you refer to it. Do not edit files or use tools. Return JSON with one critique string, using readable paragraphs and bullets.`;
+export function rawProofreadSystem(lang: OcrLang): string {
+  const language = lang === 'korean' ? 'Korean' : 'Japanese';
+  return `You are a ${language} scanlation proofreader. Read the raw page image and identify the original ${language} lettering in reading order. Note uncertain readings, speakers when clear, sound effects, and translation or interpretation suggestions that would help an editor. Refer to panel and bubble positions. Do not claim unreadable details as facts. The editor will use your reply manually. Return JSON with one critique string, using readable paragraphs and bullets.`;
+}
 
 const runtime = globalThis as typeof globalThis & {
   __scanPageProofreads?: Map<string, AbortController>;
@@ -69,7 +75,8 @@ function runningProofread(episodeId: string, imageId: string) {
     ['running', 'queued', 'cancelling'].includes(j.state));
 }
 
-async function pageProofreadApiPrompt(seriesId: string, episodeId: string, imageId: string, pageLabel: string) {
+async function pageProofreadApiPrompt(seriesId: string, episodeId: string, imageId: string, pageLabel: string, mode: 'raw' | 'critique' = 'critique') {
+  if (mode === 'raw') return `${pageLabel}. Image 1: RAW source. Proofread only the submitted image.`;
   const pack = await loadChapterPack({ seriesId, episodeId });
   const pageScript = formatChapterScript(pack.items.filter((_, i) => pack.targets[i].imageId === imageId));
   return `${pageLabel}. Image 1: RAW source. Image 2: WORKING TYPESET English. Critique this captured version.\n\nCanonical series names and terms:\n${pack.seriesGlossary}\n\nSaved page script with human-assigned speakers (speaker is not necessarily the person addressed):\n${pageScript}`;
@@ -99,9 +106,11 @@ async function runServiceProofread(opts: {
   prompt?: string;
   followUp?: boolean;
   signal: AbortSignal;
+  mode?: 'raw' | 'critique';
 }) {
   return proofreadWithService({
     proofreader: opts.proofreader,
+    mode: opts.mode ?? 'critique',
     images: opts.images,
     prompt: opts.prompt,
     followUp: opts.followUp,
@@ -110,38 +119,44 @@ async function runServiceProofread(opts: {
 }
 
 export function startPageProofread(opts: { series: Series; episode: Episode; imageId: string;
-  model?: TaskEngine; snapshot?: PageProofreadSnapshot }) {
+  model?: TaskEngine; snapshot?: PageProofreadSnapshot; mode?: 'raw' | 'critique' }) {
   const model = validateModel(opts.model ?? regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi).proofread);
+  const mode = opts.mode === 'raw' ? 'raw' : 'critique';
+  if (mode === 'raw' && !isProofreaderId(model.engine)) {
+    const row = resolveLiveAssistant(model.engine, model.model).row;
+    if (!rowHasOperation(row, 'vision') || !rowHasOperation(row, 'proofreadEnglish'))
+      throw new WorkflowError('Proofread Raw needs a vision model that can proofread English.');
+  }
   if (!opts.imageId) throw new WorkflowError('Select a page');
   if (runningProofread(opts.episode.id, opts.imageId))
     throw new WorkflowError('This page is already being proofread. Open its job to view progress.', 409);
-  const { id, abort, signal } = beginJob(opts.episode.id, { imageId: opts.imageId, ...model });
-  updateJob(id, 'running', { message: 'Capturing raw and typeset images…' });
+  const { id, abort, signal } = beginJob(opts.episode.id, { imageId: opts.imageId, ...model, mode });
+  updateJob(id, 'running', { message: mode === 'raw' ? 'Capturing raw image…' : 'Capturing raw and typeset images…' });
   void runWithJob({ jobId: id, imageId: opts.imageId, step: 'page-proofread', ...model }, async () => {
     try {
       let snapshot = opts.snapshot;
       if (!snapshot) {
-        const capture = await capturePageImages(opts.series, opts.episode, opts.imageId);
+        const capture = await capturePageImages(opts.series, opts.episode, opts.imageId, mode !== 'raw');
         signal.throwIfAborted();
-        const [raw, typeset] = await Promise.all([storeAsset(capture.raw), storeAsset(capture.typeset!)]);
+        const [raw, typeset] = await Promise.all([storeAsset(capture.raw), capture.typeset ? storeAsset(capture.typeset) : undefined]);
         snapshot = { raw, typeset, capturedAt: capture.capturedAt, imageId: opts.imageId,
           pageLabel: `Page ${capture.page.image.pageNumber ?? capture.page.image.sortOrder + 1}` };
       }
-      const images = await jpegBuffers([snapshot.raw, snapshot.typeset]);
+      const images = await jpegBuffers(mode === 'raw' ? [snapshot.raw] : [snapshot.raw, snapshot.typeset!]);
       signal.throwIfAborted();
       const site = isProofreaderId(model.engine) ? model.engine : null;
       const conversation = site
         ? (await proofreaderStatus(site)).context
         : '';
-      const attach = site
+      const attach = site && mode === 'critique'
         ? proofreadAttach(opts.imageId, conversation, proofreaderCursor(site))
         : 'both';
-      const followUp = attach === 'typeset';
+      const followUp = mode === 'critique' && attach === 'typeset';
       updateJob(id, 'running', { snapshot, followUp, message: site
         ? followUp
           ? `Sending updated typeset as a ${proofreaderLabel(site)} follow-up…`
           : `Waiting on ${proofreaderLabel(site)}…`
-        : 'Proofreader is comparing both images…' });
+        : mode === 'raw' ? 'Proofreader is reading the raw image…' : 'Proofreader is comparing both images…' });
       // The proofreading service decides how a proofreader works. The first
       // turn is the page images only; a later turn is the editor's own text.
       const result = (site
@@ -149,14 +164,18 @@ export function startPageProofread(opts: { series: Series; episode: Episode; ima
             proofreader: site,
             images: followUp ? [images[1]] : images,
             followUp,
+            mode,
             signal,
           })
-        : await advisoryModel(model, PAGE_PROOFREAD_SYSTEM, await pageProofreadApiPrompt(opts.series.id, opts.episode.id, opts.imageId, snapshot.pageLabel), images, signal, PAGE_PROOFREAD_SCHEMA)
+        : await advisoryModel(model, mode === 'raw'
+            ? rawProofreadSystem(preferences(opts.episode.id, opts.series.id).lang)
+            : PAGE_PROOFREAD_SYSTEM,
+            await pageProofreadApiPrompt(opts.series.id, opts.episode.id, opts.imageId, snapshot.pageLabel, mode), images, signal, PAGE_PROOFREAD_SCHEMA)
       ) as { critique?: unknown };
       signal.throwIfAborted();
       const critique = unwrapProofreadCritique(String(result?.critique || ''));
       if (!critique) throw new WorkflowError('The proofreader returned no critique. Retry from Jobs.');
-      if (site) rememberProofread(site, opts.imageId, conversation);
+      if (site && mode === 'critique') rememberProofread(site, opts.imageId, conversation);
       updateJob(id, 'completed', { critique, message: 'Critique saved · open it again from Jobs' });
     } catch (error) {
       updateJob(id, abort.signal.aborted ? 'cancelled' : 'failed', { message: abort.signal.aborted ? 'Cancelled' : 'Proofreading failed' },
@@ -225,7 +244,7 @@ export function startPageProofreadFollowUp(opts: {
               `Editor follow-up:\n${prompt || '(see attached images)'}`,
             ].filter(Boolean).join('\n\n'),
             [
-              ...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw, parentSnapshot.typeset]) : []),
+              ...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw, ...(parentSnapshot.typeset ? [parentSnapshot.typeset] : [])]) : []),
               ...pastedJpeg,
             ],
             signal,

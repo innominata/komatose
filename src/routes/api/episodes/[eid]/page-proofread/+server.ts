@@ -48,6 +48,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       }), { status: 202 });
     }
     if (!(await listImages(episode.id)).some(image => image.id === body.imageId)) return fail(404, 'Page not found');
-    return json(startPageProofread({ series, episode, imageId: body.imageId, model: body.model }), { status: 202 });
+    if (body?.mode != null && !['raw', 'critique'].includes(body.mode)) return fail(400, 'Unknown proofread mode');
+    return json(startPageProofread({ series, episode, imageId: body.imageId, model: body.model, mode: body.mode }), { status: 202 });
   } catch (error) { return fail(statusOf(error), messageOf(error)); }
 };

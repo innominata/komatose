@@ -98,7 +98,7 @@
   <div class="tool-rail" role="toolbar" aria-label="Tools">
     {#each groups as group (group.name + group.tools[0].id)}
       <div class="rail-group" role="group" aria-label={group.name || "Canvas tools"}>
-        {#if group.name}<span class="rail-label">{group.name}</span>{/if}
+        {#if group.name}<span class="rail-label" aria-hidden="true">{group.name}</span>{/if}
         {#each group.tools as item (item.id + item.title)}
           <button
             type="button"
@@ -123,7 +123,7 @@
 <style>
   .tool-rail {
     position: absolute;
-    left: 12px;
+    left: 0;
     top: 12px;
     z-index: 6;
     display: flex;
@@ -132,18 +132,45 @@
     align-items: center;
     max-height: calc(100% - 24px);
     overflow: auto;
+    /* 4px from the frame edge, then the 22px label and its 6px gap. */
+    padding-left: 32px;
     pointer-events: none;
     background: transparent;
     border: 0;
   }
-  .rail-group { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+  .rail-group {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+  }
+  /* The name used to sit in the stack and separate this cluster from the one above. */
+  .rail-group:has(.rail-label) {
+    margin-top: 28px;
+  }
   .rail-label {
-    font-size: 9px;
-    letter-spacing: 0.04em;
+    position: absolute;
+    top: 50%;
+    right: calc(100% + 6px);
+    z-index: 1;
+    box-sizing: border-box;
+    height: 22px;
+    padding: 0 8px;
+    display: grid;
+    place-items: center;
+    white-space: nowrap;
+    /* Half the fixed height keeps the rotated pill's edge against the buttons. */
+    translate: calc(50% - 11px) -50%;
+    rotate: -90deg;
+    border: 1px solid var(--hud-line);
+    border-radius: 999px;
+    background: var(--hud-bg-2);
+    color: var(--hud-text);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    font: 400 11px/1 "Inter", system-ui, sans-serif;
     text-transform: uppercase;
-    color: var(--hud-muted);
-    text-align: center;
-    line-height: 1.1;
   }
   .ed-rail-btn {
     width: 40px;

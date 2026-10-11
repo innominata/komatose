@@ -142,7 +142,7 @@
   }
 </script>
 
-<div class="wf-ui">
+<div class="wf-ui" class:models-workspace={section === "models"}>
   {#if section === "full"}
   <h1>{step === "Review" ? "Review translations" : "Translate the chapter"}</h1>
   {/if}
@@ -166,16 +166,7 @@
   </div>
   {/if}
   {#if section === "full" || section === "models"}
-  <div data-find="translate-model">
-  {#if section === "models"}
-  <TranslationModelPicker
-    value={translationModel}
-    {engines}
-    disabled={!canEdit || busy || !translationModel}
-    onchange={onsavetranslationmodel}
-  />
-  {#if !translateGate.ok}<p role="status">{translateGate.reason}</p>{/if}
-  {/if}
+  <div data-find="translate-model" class:model-settings-content={section === "models"}>
   <RegionAiSettings
     settings={preferences.regionAi}
     fallback={{ engine, model } as TaskEngine}
@@ -405,6 +396,7 @@
 </div>
 
 <style>
+  .models-workspace, .model-settings-content { height: 100%; min-height: 0; }
   .mine-card {
     display: grid;
     gap: 0.35rem;

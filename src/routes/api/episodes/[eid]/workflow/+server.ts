@@ -65,6 +65,8 @@ import {
   saveSeriesRegionAi,
   saveSeriesRegionKinds,
   saveSeriesTypeSettings,
+  saveStyleAsRegionType,
+  applyDefaultToUnfitted,
 } from "$lib/server/workflowService";
 import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
 import { cleaningDeviceLabel, localOperation, probeBackend } from "$lib/server/localWorker";
@@ -219,7 +221,7 @@ function saveCleanPixels(
     doc.revision,
   );
 }
-function points(value: unknown): Point[] {
+function points(value: unknown, allowOutsidePage = false): Point[] {
   if (
     !Array.isArray(value) ||
     value.length > 10000 ||
@@ -228,10 +230,7 @@ function points(value: unknown): Point[] {
         !p ||
         !Number.isFinite(p.x) ||
         !Number.isFinite(p.y) ||
-        p.x < 0 ||
-        p.x > 1 ||
-        p.y < 0 ||
-        p.y > 1,
+        (!allowOutsidePage && (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)),
     )
   )
     throw new WorkflowError("Invalid points");
@@ -493,6 +492,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
             model: job.payload.model || '',
           },
           snapshot: job.progress.snapshot,
+          mode: job.payload.mode === 'raw' ? 'raw' : 'critique',
         }), { status: 202 });
       }
       if (["translate", "proofread", "review", "selection", "reread", "suggest", "glossary-mine"].includes(job.kind))
@@ -745,6 +745,25 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       assertEpisodeIdle(episode.id);
       return json({ doc: assignCharacter(episode.id, series.id, String(b.id || ''), b.characterId, b.expectedRevision) });
     }
+    if (action === "save-style-as") {
+      if (!isAdmin(user) && series.createdBy !== user.id)
+        throw new WorkflowError("Only the series owner can add region types", 403);
+      if (!canUpload(user) && !canClean(user))
+        throw new WorkflowError("Forbidden", 403);
+      try {
+        return json(
+          saveStyleAsRegionType(
+            series.id,
+            Number(b.expectedRevision),
+            String(b.label ?? ""),
+            pickStyle(b.style),
+          ),
+        );
+      } catch (e) {
+        if (e instanceof WorkflowError) throw e;
+        throw new WorkflowError(e instanceof Error ? e.message : "Could not save the region type");
+      }
+    }
     if (action === "preferences") {
       if (b.scope === "series" && b.data && "regionKinds" in b.data) {
         if (!isAdmin(user) && series.createdBy !== user.id)
@@ -902,7 +921,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       const doc = getDoc<RegionData>(`region:${line.id}`, {});
       if (action === "region") {
         let data: RegionData = { ...doc.data };
-        if ("polygon" in b.data) data.polygon = points(b.data.polygon);
+        if ("polygon" in b.data) data.polygon = points(b.data.polygon, true);
         if (data.polygon?.length && data.polygon.length < 3)
           throw new WorkflowError("A polygon needs at least three points");
         if ("style" in b.data) {
@@ -1056,6 +1075,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           l.body.trim(),
       );
       const selectedTargets = savedStyle ? targets.filter(l => l.lineType === b.lineType) : targets;
+      if (savedStyle) applyDefaultToUnfitted(series.id, episode.id, b.lineType, selectedTargets.map(l => l.id));
       const jobId = createJob(episode.id, "typeset-all", { request: b });
       const abort = new AbortController();
       aborts.set(jobId, abort);

@@ -66,6 +66,13 @@
     return regionKindLabel(id, regionKinds);
   }
 
+  function cssColor(hex: string, opacity: number) {
+    const alpha = Math.round(Math.min(100, Math.max(0, Number(opacity))) * 2.55)
+      .toString(16)
+      .padStart(2, "0");
+    return `${hex}${alpha}`;
+  }
+
   onMount(() => {
     mounted = true;
   });
@@ -112,7 +119,7 @@
     const saved = allTypeStyles(prefs);
     const changed = kindIds.filter(type => Object.keys(draft[type]).some(key =>
       draft[type][key as keyof TextStyle] !== saved[type]?.[key as keyof TextStyle]));
-    if (changed.length && !window.confirm(`Replace the saved series styles for ${changed.map(kindLabel).join(', ')}? These category defaults apply across every chapter. Existing placed text needs a refit to pick up the changes; locked layouts stay unchanged.`)) return false;
+    if (changed.length && !window.confirm(`Replace the saved defaults for ${changed.map(kindLabel).join(', ')}? New regions use these styles. Regions that already have a style keep it until you Reset to Default or refit that type. Locked layouts stay unchanged.`)) return false;
     saving = true;
     error = "";
     try {
@@ -456,6 +463,34 @@
                 oninput={(e) => edit("outline", e.currentTarget.value)}
               /></label
             >
+            <label class="hud-task-field"
+              >Fill opacity
+              <span class="type-opacity"
+                ><input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  aria-label="Fill opacity"
+                  value={current.fillOpacity}
+                  oninput={(e) => edit("fillOpacity", Number(e.currentTarget.value))}
+                /><span>{current.fillOpacity}%</span></span
+              ></label
+            >
+            <label class="hud-task-field"
+              >Outline opacity
+              <span class="type-opacity"
+                ><input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  aria-label="Outline opacity"
+                  value={current.outlineOpacity}
+                  oninput={(e) => edit("outlineOpacity", Number(e.currentTarget.value))}
+                /><span>{current.outlineOpacity}%</span></span
+              ></label
+            >
           </div>
         </fieldset>
         <div
@@ -465,7 +500,7 @@
           style:line-height={String(current.leading)}
           style:font-style={current.emphasis === "italic" ? "italic" : "normal"}
           style:font-weight={current.emphasis === "bold" ? "700" : "400"}
-          style:color={current.fill}
+          style:color={cssColor(current.fill, current.fillOpacity)}
           style:text-align={current.align}
         >
           {preview || " "}

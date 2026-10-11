@@ -9,9 +9,11 @@
   import { DEFAULT_CHAT_MODEL_ID } from "$lib/modelDefaults";
   import { formatDuration, transcribeSetPageMs } from "$lib/modelEstimate";
   import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
+  import { isProofreaderId } from '$lib/proofreaders';
   import { copyPngToClipboard } from '$lib/clipboardImage';
-  import { lastProofreadPageId } from '$lib/pageProofread';
+  import { lastProofreadPageId, pageProofreadCall } from '$lib/pageProofread';
   import PageProofreadDialog from './PageProofreadDialog.svelte';
+  import SavedProofreadWindow from './SavedProofreadWindow.svelte';
   import ScriptProofreadDialog from './ScriptProofreadDialog.svelte';
   import CleanPromptDialog from "./CleanPromptDialog.svelte";
   import RegionCompareDialog from "./workflow/RegionCompareDialog.svelte";
@@ -98,7 +100,9 @@
     pageRawArtwork,
     DEFAULT_STYLE,
     MASK_GROW_DEFAULT,
-    styleDiff,
+    pickStyle,
+    regionPanelStyle,
+    STYLE_KEYS,
     type Preferences,
     type RegionData,
     type PageData,
@@ -247,6 +251,7 @@
   let applyingStyleBrush = false;
   let styleFor = "";
   let styleRevision = 0;
+  let exportView = $state<"export" | "script">("export");
   let engineOptions =
     $state<(TranslateEngineInfo & { reason?: string })[]>(engines);
   let engine = $state(engines.find((e) => e.available && !isPageImageOnlyEngine(e.id))?.id ?? DEFAULT_CHAT_MODEL_ID);
@@ -278,8 +283,13 @@
   let prevTranslateLive = 0;
   let reviewImageBusy = $state(false);
   let proofreadJobId = $state<string | null>(null);
+  let savedProofreadJobId = $state<string | null>(null);
   let scriptProofreadDialog: ScriptProofreadDialog;
   const proofreadJob = $derived(studioState?.jobs.find(job => job.id === proofreadJobId));
+  const savedProofreadJob = $derived(studioState?.jobs.find(job => job.id === savedProofreadJobId));
+  const pageProofreadReplies = $derived((studioState?.jobs ?? []).filter(job =>
+    job.kind === 'page-proofread' && job.state === 'completed' && !!job.progress?.critique &&
+    job.payload?.imageId === page?.id));
   let resliceSizing = $state<ResliceSizing>("pages");
   let resliceMaxHeight = $state<number | undefined>(2048);
   const resliceSizeValid = $derived(resliceSizing !== "custom" || validSliceHeight(resliceMaxHeight));
@@ -367,6 +377,13 @@
   const enquireGate = $derived(providerRunGate(aiModels.enquire.engine, "advisory", engineOptions));
   const proofreadOperation = $derived(proofreadingOperation(aiModels.proofread.engine, engineOptions));
   const proofreadGate = $derived(providerRunGate(aiModels.proofread.engine, proofreadOperation, engineOptions));
+  const rawProofreadGate = $derived.by(() => {
+    if (isProofreaderId(aiModels.proofread.engine)) return proofreadGate;
+    const english = providerRunGate(aiModels.proofread.engine, 'proofreadEnglish', engineOptions);
+    if (!english.ok) return english;
+    const vision = providerRunGate(aiModels.proofread.engine, 'vision', engineOptions);
+    return vision.ok ? vision : { ok: false, reason: 'Proofread Raw needs a vision-capable proofreading model.' };
+  });
   const proofreadTitle = $derived(proofreadGate.reason || (proofreadOperation === "pageImageProofread"
     ? "Review this page's raw source and typeset English with the selected proofreader."
     : "Suggest corrections to existing English with the selected proofreading model."));
@@ -766,8 +783,9 @@
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
-  async function proofreadPageImages() {
+  async function proofreadPageImages(mode: 'raw' | 'critique' = 'critique') {
     if (!page || reviewImageBusy || !canEdit) return;
+    if (mode === 'raw' && !rawProofreadGate.ok) { error = rawProofreadGate.reason; return; }
     const imageId = page.id;
     reviewImageBusy = true;
     error = '';
@@ -777,11 +795,11 @@
         ['running', 'queued', 'cancelling'].includes(job.state));
       if (existing) proofreadJobId = existing.id;
       else {
-        const result = await request(`${apiBase}/page-proofread`, { imageId, model: aiModels.proofread });
+        const result = await request(`${apiBase}/page-proofread`, { imageId, model: aiModels.proofread, mode });
         proofreadJobId = result.jobId;
       }
       await refresh();
-      notify('The proofreader response will be saved in Jobs. You can close the modal and keep editing.');
+      notify('The proofreader reply will be saved in this page’s Review replies and Jobs. You can close the modal and keep editing.');
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
@@ -1319,7 +1337,7 @@
         applyRegionDoc(data.doc);
         if (selected?.id === id) {
           styleRevision = data.doc.revision;
-          regionStyle = { ...inheritedStyle(data.line.lineType), ...data.doc.data.style };
+          regionStyle = shownStyle(data.line.lineType, data.doc.data);
         }
       }
       return { revision: data.line.revision };
@@ -1622,15 +1640,12 @@
       });
       if (result?.doc && selected?.id === line.id) {
         styleRevision = result.doc.revision;
-        regionStyle = { ...inheritedStyle(lineType), ...result.doc.data.style };
+        regionStyle = shownStyle(lineType, result.doc.data);
       }
       return;
     }
     if (selected?.id === line.id) {
-      regionStyle = {
-        ...inheritedStyle(lineType),
-        ...region?.data.style,
-      };
+      regionStyle = shownStyle(lineType, region?.data);
     }
   }
   function selectLine(id: string, origin: "page" | "list" | "nav" = "nav") {
@@ -1731,15 +1746,21 @@
     maskBaseRevision = revision;
     persistMaskDraft(page?.id, revision);
   });
+  function styleFingerprint(style: Partial<TextStyle> | undefined) {
+    const picked = pickStyle(style);
+    return STYLE_KEYS.map((key) => String(picked[key] ?? "")).join("\u001f");
+  }
   $effect(() => {
-    if (selected && selected.id !== styleFor) {
-      styleFor = selected.id;
-      styleRevision = regionDoc?.revision ?? 0;
-      regionStyle = {
-        ...inheritedStyle(selected.lineType),
-        ...regionDoc?.data.style,
-      };
-    }
+    if (!selected) return;
+    const data = regionDoc?.data;
+    // Series defaults are not part of this token. Saving a default must not
+    // rewrite this panel. Reset to Default and a chapter refit replace the
+    // region's saved style, which does.
+    const token = `${selected.id}:${data?.layout?.key ?? ""}:${styleFingerprint(data?.layout?.style)}:${styleFingerprint(data?.style)}`;
+    if (token === styleFor) return;
+    styleFor = token;
+    styleRevision = regionDoc?.revision ?? 0;
+    regionStyle = shownStyle(selected.lineType, data);
   });
   function nextIssue() {
     void goToNextException();
@@ -1752,6 +1773,7 @@
     step = next;
     if (next === 'Prepare') void refreshPageUndo().catch(() => {});
     inspectorTab = "";
+    if (next === "Export") exportView = "export";
     moreOpen = false;
     await saves.flushAll();
     choosePalette(defaultTool(next), { showBrushSize: false });
@@ -1770,11 +1792,13 @@
       recheckBackendWhenUnavailable();
     }
   }
-  function coords(e: PointerEvent): Point {
+  function coords(e: PointerEvent, allowOutsidePage = false): Point {
     const r = svgEl!.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
     return {
-      x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
-      y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
+      x: allowOutsidePage ? x : Math.max(0, Math.min(1, x)),
+      y: allowOutsidePage ? y : Math.max(0, Math.min(1, y)),
     };
   }
   function hitDraftIndex(p: Point) {
@@ -1809,7 +1833,7 @@
     if (!result?.doc) return;
     if (result.doc.data.layout && selected?.id === id) {
       styleRevision = result.doc.revision;
-      regionStyle = { ...inheritedStyle(selected.lineType), ...result.doc.data.style };
+      regionStyle = shownStyle(selected.lineType, result.doc.data);
     }
     cancelPolygon();
   }
@@ -1835,7 +1859,7 @@
     if (!result?.doc) return;
     if (result.doc.data.layout && selected?.id === id) {
       styleRevision = result.doc.revision;
-      regionStyle = { ...inheritedStyle(selected.lineType), ...result.doc.data.style };
+      regionStyle = shownStyle(selected.lineType, result.doc.data);
     }
     tool = "select";
   }
@@ -1855,7 +1879,7 @@
     if (!result?.doc) return;
     if (result.doc.data.layout && selected?.id === id) {
       styleRevision = result.doc.revision;
-      regionStyle = { ...inheritedStyle(selected.lineType), ...result.doc.data.style };
+      regionStyle = shownStyle(selected.lineType, result.doc.data);
     }
     polygonDraft = [];
     tool = "select";
@@ -1944,7 +1968,7 @@
         : "Select a region to draw its text shape.");
       return;
     }
-    const p = coords(e);
+    const p = coords(e, step === "Typeset" && ["polygon", "rectangle", "oval"].includes(tool));
     if (tool === "polygon") {
       if (!polygonDraft.length) polygonRevision = regionDoc?.revision ?? 0;
       if (e.shiftKey) {
@@ -2038,7 +2062,7 @@
     if (!selected || !regionDoc || regionDoc.data.locked || selectedPolygon.length < 3) return;
     e.preventDefault();
     svgEl!.setPointerCapture(e.pointerId);
-    const p = coords(e);
+    const p = coords(e, true);
     drawing = {
       start: p,
       end: p,
@@ -2054,7 +2078,7 @@
     e.preventDefault();
     svgEl!.setPointerCapture(e.pointerId);
     const p = coords(e);
-    const style = { ...inheritedStyle(selected.lineType), ...regionDoc.data.style };
+    const style = shownStyle(selected.lineType, regionDoc.data);
     drawing = { start: p, end: p, points: [], regionId: selected.id, revision: regionDoc.revision,
       rotation: { initial: style.rotation, angle: style.rotation, center: rotationCenter(selected), style } };
   }
@@ -2064,7 +2088,7 @@
     e.preventDefault();
     svgEl!.setPointerCapture(e.pointerId);
     const p = coords(e);
-    const style = { ...inheritedStyle(selected.lineType), ...regionDoc.data.style };
+    const style = shownStyle(selected.lineType, regionDoc.data);
     const initial = axis === "x" ? style.skewX : style.skewY;
     drawing = { start: p, end: p, points: [], regionId: selected.id, revision: regionDoc.revision,
       skew: { axis, initial, angle: initial, center: rotationCenter(selected), style } };
@@ -2080,7 +2104,7 @@
     const result = await act({ action: "transform-text", id, expectedRevision: line.revision,
       expectedRegionRevision: revision, ...patch });
     if (result?.doc) {
-      regionStyle = { ...style, ...patch };
+      regionStyle = shownStyle(line.lineType, result.doc.data);
       styleRevision = result.doc.revision;
     }
   }
@@ -2093,7 +2117,7 @@
     if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
-    const style = { ...inheritedStyle(selected.lineType), ...regionDoc.data.style };
+    const style = shownStyle(selected.lineType, regionDoc.data);
     const angle = normalizeRotation(style.rotation + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 15 : 1));
     void saveRotation(selected.id, regionDoc.revision, style, angle);
   }
@@ -2103,7 +2127,7 @@
     if (!keys.includes(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
-    const style = { ...inheritedStyle(selected.lineType), ...regionDoc.data.style };
+    const style = shownStyle(selected.lineType, regionDoc.data);
     const stepDeg = e.shiftKey ? 15 : 1;
     const delta = (axis === "x" ? e.key === "ArrowRight" : e.key === "ArrowDown") ? stepDeg : -stepDeg;
     const next = clampSkew((axis === "x" ? style.skewX : style.skewY) + delta);
@@ -2111,7 +2135,7 @@
   }
   function move(e: PointerEvent) {
     if (!drawing) return;
-    const p = coords(e);
+    const p = coords(e, step === "Typeset" && (drawing.vertex != null || drawing.polygonDrag || tool === "rectangle" || tool === "oval"));
     if (tool === "rectangle" || tool === "oval") {
       drawing = { ...drawing, end: p };
       return;
@@ -2734,6 +2758,9 @@
       ...studioState?.seriesDefaults.data.styles?.[lineType],
     };
   }
+  function shownStyle(lineType: string, data: RegionData | undefined) {
+    return regionPanelStyle(inheritedStyle(lineType), data);
+  }
   async function refitAfterText(id: string) {
     if (!["Clean", "Translate", "Review", "Typeset"].includes(step)) return;
     if (!canClean && !canEdit) return;
@@ -2753,7 +2780,7 @@
         applyRegionDoc(result.doc);
         if (selected?.id === id) {
           styleRevision = result.doc.revision;
-          regionStyle = { ...inheritedStyle(line.lineType), ...result.doc.data.style };
+          regionStyle = shownStyle(line.lineType, result.doc.data);
         }
       }
     } catch {
@@ -2763,21 +2790,31 @@
   async function resetRegionStyle(line: LineRow) {
     if (!canClean || busy || studioState?.regions[line.id]?.data.locked) return;
     const expectedRevision = studioState?.regions[line.id]?.revision ?? 0;
-    const result = await act(inheritedStyle(line.lineType).fontId ? {
+    const style = pickStyle(inheritedStyle(line.lineType));
+    const canFit = !!style.fontId && !!line.imageId && !!line.body.trim();
+    const result = await act(canFit ? {
       action: "fit", id: line.id, expectedRevision, resetStyle: true,
     } : {
-      action: "region", id: line.id, expectedRevision, data: { style: {} },
+      action: "region", id: line.id, expectedRevision, data: { style },
     });
     if (result?.doc && selected?.id === line.id) {
       styleRevision = result.doc.revision;
-      regionStyle = { ...inheritedStyle(line.lineType), ...result.doc.data.style };
+      regionStyle = shownStyle(line.lineType, result.doc.data);
     }
   }
   async function applyStyle(scope = "region") {
     if (!selected || !regionDoc || !canClean || busy || regionDoc.data.locked) return;
     const id = selected.id;
     if (scope === "region") {
-      const style = styleDiff(inheritedStyle(selected.lineType), regionStyle);
+      const current = shownStyle(selected.lineType, regionDoc.data);
+      const rotationOnly = !!regionDoc.data.layout && Number.isFinite(regionStyle.rotation)
+        && regionStyle.rotation !== current.rotation
+        && STYLE_KEYS.every((key) => key === "rotation" || regionStyle[key] === current[key]);
+      if (rotationOnly) {
+        await savePlacedTransform(id, styleRevision, current, { rotation: regionStyle.rotation });
+        return;
+      }
+      const style = pickStyle(regionStyle);
       const result = await act(regionStyle.fontId ? {
         action: "fit", id, expectedRevision: styleRevision, style,
       } : {
@@ -2785,13 +2822,13 @@
       });
       if (result?.doc && selected?.id === id) {
         styleRevision = result.doc.revision;
-        regionStyle = { ...inheritedStyle(selected.lineType), ...result.doc.data.style };
+        regionStyle = shownStyle(selected.lineType, result.doc.data);
       }
     } else if (scope === 'series') {
       if (!canUpload) return;
       const type = selected.lineType;
       const label = labelFor(type);
-      if (!window.confirm(`Replace the saved series “${label}” category style with this region’s style? All chapters will use this default. Existing placed text needs a refit; locked layouts stay unchanged.`)) return;
+      if (!window.confirm(`Save this region’s style as the default for new “${label}” regions? Regions that already have a style keep it until you Reset to Default or refit ${label} in a chapter.`)) return;
       const doc = studioState!.seriesDefaults;
       const result = await act({
         action: "preferences",
@@ -2801,8 +2838,21 @@
           styles: { [type]: { ...regionStyle } },
         },
       });
-      if (result) notify(`Saved the series “${label}” style. Use Refit ${label} in chapter to update existing text.`);
+      if (result) notify(`Saved the “${label}” default. Reset to Default or Refit ${label} in chapter applies it to existing regions.`);
     }
+  }
+  async function saveStyleAs() {
+    if (!selected || !regionDoc || !canClean || !canEditSeriesKinds || busy || regionDoc.data.locked) return;
+    const name = window.prompt("Name the new region type. It is added to this series and uses this region’s style.");
+    if (name == null || !name.trim()) return;
+    const result = await act({
+      action: "save-style-as",
+      expectedRevision: studioState?.seriesDefaults.revision ?? 0,
+      label: name,
+      style: { ...regionStyle },
+    });
+    if (result?.kind)
+      notify(`Saved “${result.kind.label}” as a region type. Choose it from the type menu to use this style.`);
   }
   async function refitCategory() {
     if (!selected || !canClean || busy || typesetRunning()) return;
@@ -2810,9 +2860,9 @@
     const targets = studioState!.lines.filter(line => line.lineType === type && line.placed && line.body.trim() && line.sourceState !== 'ignored');
     const unlocked = targets.filter(line => !studioState!.regions[line.id]?.data.locked).length;
     if (!unlocked) { notify('No unlocked, placed text of this type to refit in this chapter.'); return; }
-    if (!window.confirm(`Refit ${unlocked} “${labelFor(type)}” region${unlocked === 1 ? '' : 's'} in this chapter using the saved series style? This replaces their font and appearance overrides. Saved bubble geometry, text masks and placement transforms stay. Locked layouts are skipped.`)) return;
+    if (!window.confirm(`Refit ${unlocked} “${labelFor(type)}” region${unlocked === 1 ? '' : 's'} in this chapter from the series default? This replaces their saved styles. Saved bubble geometry, text masks and placement transforms stay. Locked layouts are skipped.`)) return;
     const result = await act({ action: 'typeset-all', scope: 'chapter', lineType: type, savedStyle: true });
-    if (result) notify(`Refitting “${labelFor(type)}” text across the chapter from the series style.`);
+    if (result) notify(`Refitting “${labelFor(type)}” text across the chapter from the series default.`);
   }
   async function paintStyle(id: string) {
     if (step !== "Typeset" || tool !== "style-brush" || !canClean || !styleBrush ||
@@ -2855,7 +2905,7 @@
             await refresh();
             if (selected?.id === target.id && regionDoc) {
               styleRevision = regionDoc.revision;
-              regionStyle = { ...inheritedStyle(selected.lineType), ...regionDoc.data.style };
+              regionStyle = shownStyle(selected.lineType, regionDoc.data);
             }
           }
         } catch (e) {
@@ -3623,6 +3673,7 @@
     if (go.prepView) prepView = go.prepView;
     if (go.scope) scope = go.scope;
     if (go.tab) inspectorTab = go.tab;
+    if (go.exportView) exportView = go.exportView;
     if (go.subtab) detailTab = go.subtab;
     if (go.tool) choosePalette(go.tool as PaletteId);
     if (go.settings) {
@@ -3966,6 +4017,7 @@
               <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
             {:else}
               <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
+              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}
             <button type="button" class="ed-btn" data-find="accept-all" disabled={!canEdit || busy} onclick={async () => { const result = await act({ action: "approve-all-translations" }); if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`); }}><i class="bi bi-check2-all" aria-hidden="true"></i> Accept all translations</button>
           {:else if step === "Clean"}
@@ -4120,6 +4172,7 @@
         {:else if step === "Export"}
           <section class="prepare">
               <ExportPanel
+                bind:exportView
                 seriesId={series.id}
                 episodeId={episode.id}
                 images={studioState.images}
@@ -4356,6 +4409,7 @@
               <button type="button" role="tab" aria-selected={activeTab === "queue"} data-find="tab-review-queue" onclick={() => (inspectorTab = "queue")}>To review <span class="badge">{reviewLines.length}</span></button>
               <button type="button" role="tab" aria-selected={activeTab === "page"} onclick={() => (inspectorTab = "page")}>Page &amp; script</button>
               <button type="button" role="tab" aria-selected={activeTab === "glossary"} data-find="tab-glossary" onclick={() => (inspectorTab = "glossary")}>Glossary</button>
+              <button type="button" role="tab" aria-selected={activeTab === "replies"} data-find="tab-proofread-replies" onclick={() => (inspectorTab = "replies")}>Replies <span class="badge">{pageProofreadReplies.length}</span></button>
             {:else if step === "Clean"}
               <button type="button" role="tab" aria-selected={activeTab === "clean"} onclick={() => (inspectorTab = "clean")}>Clean page {pageNo}</button>
             {:else if step === "Typeset"}
@@ -4415,6 +4469,23 @@
           {/if}
         {:else if step === "Review" && activeTab === "glossary"}
           {@render translationSettings("glossary")}
+        {:else if step === "Review" && activeTab === "replies"}
+          <div class="proofread-replies">
+            <h3>Proofreader replies {#if page}· Page {pageNo}{/if}</h3>
+            {#if !page}
+              <p>Select a page to see its saved replies.</p>
+            {:else if !pageProofreadReplies.length}
+              <p>No saved replies for this page yet.</p>
+            {:else}
+              {#each pageProofreadReplies as reply (reply.id)}
+                <button type="button" class="proofread-reply" onclick={() => (savedProofreadJobId = reply.id)}>
+                  <strong>{pageProofreadCall(reply)}</strong>
+                  <time datetime={new Date(reply.created_at).toISOString()}>{new Date(reply.created_at).toLocaleString()}</time>
+                  <span>{reply.progress.critique}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
         {:else if step === "Translate" || step === "Review"}
           <TranslateInspector
             {colorFor}
@@ -4575,6 +4646,8 @@
             onedit={edit}
             onsettype={setLineType}
             onapplystyle={applyStyle}
+            onsavestyleas={() => void saveStyleAs()}
+            canAddRegionType={canEditSeriesKinds}
             onresetstyle={() => selected && resetRegionStyle(selected)}
             onrefitcategory={() => void refitCategory()}
             categoryLabel={selected ? labelFor(selected.lineType) : 'category'}
@@ -4820,6 +4893,13 @@
 </div>
 
 <style>
+  .proofread-replies { padding: 14px; overflow: auto; }
+  .proofread-replies h3 { margin: 0 0 12px; font-size: 14px; }
+  .proofread-replies p { color: var(--hud-muted); }
+  .proofread-reply { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; width: 100%; padding: 10px; margin-bottom: 8px; text-align: left; border: 1px solid var(--hud-line); background: var(--hud-bg-2); color: var(--hud-text); }
+  .proofread-reply:hover { border-color: var(--hud-teal); }
+  .proofread-reply time { font-size: 11px; color: var(--hud-muted); }
+  .proofread-reply span { grid-column: 1 / -1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--hud-muted); }
   .page-selection-actions {
     display: flex;
     flex-wrap: wrap;
@@ -6007,5 +6087,8 @@
     notify('Follow-up sent. The new critique is saved in Jobs.');
   }}
 />
+{#if savedProofreadJob}
+  <SavedProofreadWindow job={savedProofreadJob} onclose={() => (savedProofreadJobId = null)} />
+{/if}
 <CleanPromptDialog bind:this={cleanPromptDialog} />
 <RegionCompareDialog bind:this={regionCompareDialog} />

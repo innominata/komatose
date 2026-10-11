@@ -237,6 +237,8 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
     ["leading", 1, 3],
     ["padding", 0, 100],
     ["outlineWidth", 0, 20],
+    ["fillOpacity", 0, 100],
+    ["outlineOpacity", 0, 100],
     ["rotation", -180, 180],
     ["skewX", -MAX_SKEW, MAX_SKEW],
     ["skewY", -MAX_SKEW, MAX_SKEW],
@@ -247,6 +249,8 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
   }
   s.autoContrast = s.autoContrast !== false;
   if (s.minSize > s.size) s.minSize = s.size;
+  s.fillOpacity = Math.round(s.fillOpacity);
+  s.outlineOpacity = Math.round(s.outlineOpacity);
   if (!/^#[a-f\d]{6}$/i.test(s.fill)) s.fill = DEFAULT_STYLE.fill;
   if (!/^#[a-f\d]{6}$/i.test(s.outline)) s.outline = DEFAULT_STYLE.outline;
   if (!["left", "center", "right"].includes(s.align)) s.align = DEFAULT_STYLE.align;
@@ -575,7 +579,11 @@ export async function fitText(
   const outlineStroke = style.outlineWidth * px * 2 + bold;
   const stroke = warped ? outlineStroke : outlineStroke / scale;
   const fillStroke = warped ? bold : bold / scale;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${page.height}" viewBox="0 0 ${page.width} ${page.height}"><defs><g id="lettering">${glyphs}</g></defs><g transform="${textTransformSvg(style, cx, cy)}">${style.outlineWidth ? `<g fill="${style.outline}" stroke="${style.outline}" stroke-width="${stroke}" stroke-linejoin="round"><use href="#lettering"/></g>` : ""}<g fill="${style.fill}" stroke="${style.fill}" stroke-width="${fillStroke}" stroke-linejoin="round"><use href="#lettering"/></g></g></svg>`;
+  const paint = (opacity: number) => {
+    const value = Math.round(opacity) / 100;
+    return ` fill-opacity="${value}" stroke-opacity="${value}"`;
+  };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${page.height}" viewBox="0 0 ${page.width} ${page.height}"><defs><g id="lettering">${glyphs}</g></defs><g transform="${textTransformSvg(style, cx, cy)}">${style.outlineWidth ? `<g fill="${style.outline}" stroke="${style.outline}"${paint(style.outlineOpacity)} stroke-width="${stroke}" stroke-linejoin="round"><use href="#lettering"/></g>` : ""}<g fill="${style.fill}" stroke="${style.fill}"${paint(style.fillOpacity)} stroke-width="${fillStroke}" stroke-linejoin="round"><use href="#lettering"/></g></g></svg>`;
   return {
     key: layoutKey(line, region, page, style, dpi),
     rows,

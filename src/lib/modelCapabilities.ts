@@ -16,7 +16,7 @@ export const CAPABILITY_REQUIREMENTS: Partial<Record<ModelTaskId, readonly Capab
   compactNotes: ['conversation'], chapterReview: ['conversation'],
   alternatives: ['conversation', 'translation'], proofreadEnglish: ['conversation', 'translation'],
   advisory: ['conversation', 'translation'], describe: ['conversation', 'imageUnderstanding'],
-  pageImageProofread: ['conversation', 'translation', 'transcription', 'imageUnderstanding'],
+  pageImageProofread: ['conversation', 'translation', 'transcription'],
 };
 export const isCapability = (id: string): id is CapabilityId => CAPABILITIES.some(item => item.id === id);
 export const qualificationLabel = (id: QualificationId) => CAPABILITIES.find(item => item.id === id)?.label || taskLabel(id);

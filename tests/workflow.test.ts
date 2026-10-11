@@ -1,4 +1,4 @@
-import type { PageData } from "../src/lib/workflow";
+import type { PageData, Preferences, RegionData } from "../src/lib/workflow";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, mkdir, writeFile, rm } from "node:fs/promises";
@@ -339,7 +339,7 @@ await mkdir(exportFixtures, { recursive: true });
 const schema = await import("../src/lib/server/db/schema");
 const { getDoc, putDoc, suggest, storeAsset, rejectPendingSuggestions, previousSavedArtwork } =
   await import("../src/lib/server/workflowStore");
-const { uploadFont, fitText, availableSpan, dictionaryFragments, layoutKey } =
+const { uploadFont, fitText, availableSpan, dictionaryFragments, layoutKey, validateStyle } =
   await import("../src/lib/server/typesetting");
 const { renumberPages, acceptSuggestion, preparePage, readiness, fitRegion } =
   await import("../src/lib/server/workflowService");
@@ -1699,6 +1699,43 @@ test("TTF/OTF versioned fonts, duplicate detection and missing glyph reporting",
   assert.deepEqual(missing.missingGlyphs, ["\u{10ffff}"]);
 });
 
+test("text fill and outline opacity are fitted into the lettering and the PSD layer", async () => {
+  assert.equal(validateStyle({ fillOpacity: 140.4 }).fillOpacity, 100);
+  assert.equal(validateStyle({ outlineOpacity: -8 }).outlineOpacity, 0);
+  assert.equal(validateStyle({ fillOpacity: 40.6 }).fillOpacity, 41);
+  const line = (await listLines("e"))[0],
+    img = (await listImages("e"))[0];
+  const layout = await fitText(
+    line,
+    {},
+    img,
+    {
+      ...DEFAULT_STYLE,
+      fontId: ttf.font.id,
+      fillOpacity: 40,
+      outlineOpacity: 25,
+      outlineWidth: 2,
+    },
+    72,
+  );
+  assert.match(layout.svg, /fill="#ffffff" stroke="#ffffff" fill-opacity="0.25" stroke-opacity="0.25"/);
+  assert.match(layout.svg, /fill="#000000" stroke="#000000" fill-opacity="0.4" stroke-opacity="0.4"/);
+  const sourceDoc = await preparePage(series, episode, img);
+  const psd = readPsd(
+    await finishedPsd({
+      image: img,
+      source: sourceDoc.data,
+      sourceRevision: sourceDoc.revision,
+      dpi: 72,
+      regions: [{ line, data: { layout }, revision: 1 }],
+    }),
+    { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true },
+  );
+  const layer = psd.children!.find((child) => child.text)!;
+  assert.equal(layer.fillOpacity, 0.4);
+  assert.ok(Math.abs(layer.effects!.stroke![0].opacity! - 0.25) < 0.01);
+});
+
 test("irregular bubbles consider full line height and reject a neck crossing", () => {
   const poly = [
     { x: 0, y: 0 },
@@ -2802,6 +2839,78 @@ test("series text styles round trip for region types the series added", async ()
   }
 });
 
+test("saving a style as a new region type keeps the built-in types and stores that style", async () => {
+  const { saveStyleAsRegionType, resolveStyle } = await import("../src/lib/server/workflowService");
+  const seriesDoc = getDoc("series:s", {});
+  const previous = seriesDoc.data;
+  try {
+    const saved = saveStyleAsRegionType("s", seriesDoc.revision, "Whisper", {
+      fontId: ttf.font.id,
+      size: 22,
+      minSize: 8,
+      fill: "#112233",
+      fillOpacity: 40,
+      autoContrast: false,
+    });
+    assert.equal(saved.kind.id, "whisper");
+    assert.equal(saved.kind.label, "Whisper");
+    assert.ok(saved.doc.data.regionKinds?.some((kind) => kind.id === '""' && kind.label === "Dialogue"));
+    assert.equal(saved.doc.data.styles?.whisper?.size, 22);
+    assert.equal(saved.doc.data.styles?.whisper?.fillOpacity, 40);
+    assert.equal(saved.doc.data.styles?.whisper?.fill, "#112233");
+    const line = (await listLines("e"))[0];
+    assert.equal(
+      resolveStyle({ ...line, lineType: "whisper" as typeof line.lineType }, {}, "e", "s").size,
+      22,
+    );
+    assert.throws(
+      () => saveStyleAsRegionType("s", saved.doc.revision, "whisper", { size: 9 }),
+      /already a region type/,
+    );
+  } finally {
+    putDoc(null, "series:s", previous, getDoc("series:s", {}).revision);
+  }
+});
+
+test("saving a series style leaves other regions of that type on their current style", async () => {
+  const { saveSeriesTypeSettings, applyDefaultToUnfitted } = await import("../src/lib/server/workflowService");
+  const seriesDoc = getDoc<Partial<Preferences>>("series:s", {});
+  const previous = seriesDoc.data;
+  const ids = ["pin-inherit", "pin-own", "pin-layout"];
+  const region = (id: string) => getDoc<RegionData>(`region:${id}`, {}).data;
+  try {
+    putDoc(null, seriesDoc.id, {
+      ...previous,
+      styles: { ...previous.styles, "pin-test": { size: 12, autoContrast: false } },
+    }, seriesDoc.revision);
+    sqlite.prepare(
+      `INSERT INTO lines(id,episode_id,image_id,source,source_state,body,line_type,status,placed,x,y,w,h,sort_order,updated_at)
+       VALUES('pin-inherit','e','p','','read','','pin-test','none',0,.1,.1,.1,.1,40,1),
+              ('pin-own','e','p','','read','','pin-test','none',0,.2,.1,.1,.1,41,1),
+              ('pin-layout','e','p','','read','Hello','pin-test','approved',1,.3,.1,.2,.1,42,1)`,
+    ).run();
+    putDoc("e", "region:pin-own", { style: { size: 18 } }, 0);
+    putDoc("e", "region:pin-layout", { layout: { style: { size: 14, rotation: 20 } } }, 0);
+    const saved = saveSeriesTypeSettings("s", getDoc("series:s", {}).revision, {
+      styles: { "pin-test": { size: 30, autoContrast: false } },
+    });
+    assert.equal(saved.data.styles?.["pin-test"]?.size, 30);
+    assert.equal(region("pin-inherit").style?.size, 12);
+    assert.equal(region("pin-own").style?.size, 18);
+    assert.equal(region("pin-layout").style?.size, 14);
+    assert.equal(region("pin-layout").style?.rotation, 20);
+    const applied = applyDefaultToUnfitted("s", "e", "pin-test", ["pin-layout"]);
+    assert.equal(applied, 2);
+    assert.equal(region("pin-inherit").style?.size, 30);
+    assert.equal(region("pin-own").style?.size, 30);
+    assert.equal(region("pin-layout").style?.size, 14);
+  } finally {
+    sqlite.prepare(`DELETE FROM lines WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids);
+    for (const id of ids) sqlite.prepare("DELETE FROM workflow_docs WHERE id=?").run(`region:${id}`);
+    putDoc(null, "series:s", previous, getDoc("series:s", {}).revision);
+  }
+});
+
 test("fitting with resetStyle drops region overrides and uses the current type", async () => {
   const seriesDoc = getDoc("series:s", {});
   const previous = seriesDoc.data;
@@ -2845,7 +2954,7 @@ test("fitting with resetStyle drops region overrides and uses the current type",
     assert.equal(kept.data.layout?.style.size, 24);
     sqlite.prepare("UPDATE lines SET line_type=? WHERE id=?").run("::", "type-refit");
     const reset = await fitRegion(series, episode, "type-refit", kept.revision, { resetStyle: true });
-    assert.equal(reset.data.style?.size, undefined);
+    assert.equal(reset.data.style?.size, 8);
     assert.equal(reset.data.layout?.style.size, 8);
     const changed = await fitRegion(series, episode, "type-refit", reset.revision, {
       style: { size: 12, autoContrast: false },
@@ -3174,6 +3283,8 @@ test("moving and resetting placed text preserves glyph layout without refitting"
       svg: '<svg xmlns="http://www.w3.org/2000/svg"><g transform="rotate(30 120 120)"><path d="M0 0L1 1"/></g></svg>' } };
   region.layout.key = layoutKey(line, region, page, style, 96);
   const moved = transformPlacedText(line, region, page, 0.2, 0.3);
+  const dx = 0.2 - line.x!, dy = 0.3 - line.y!;
+  assert.deepEqual(moved.polygon, region.polygon!.map((p: { x: number; y: number }) => ({ x: p.x + dx, y: p.y + dy })));
   assert.equal(moved.layout!.size, 14);
   assert.equal(moved.layout!.rows[0].text, "Keep these words");
   assert.equal(moved.layout!.rows[0].x, 130);
@@ -3183,6 +3294,17 @@ test("moving and resetting placed text preserves glyph layout without refitting"
   const movedLine = { ...line, x: 0.2, y: 0.3 };
   assert.equal(moved.layout!.key, layoutKey(movedLine, moved, page, style, 96));
   const reset = transformPlacedText(movedLine, moved, page, 0.2, 0.3, 0);
+  assert.notDeepEqual(reset.polygon, moved.polygon);
+  const { rotateNormalizedPoints } = await import("../src/lib/textTransform");
+  const box = moved.polygon!;
+  const center = {
+    x: (Math.min(...box.map(p => p.x)) + Math.max(...box.map(p => p.x))) / 2,
+    y: (Math.min(...box.map(p => p.y)) + Math.max(...box.map(p => p.y))) / 2,
+  };
+  const turned = rotateNormalizedPoints(box, center, -30, page.width, page.height);
+  for (const [i, point] of reset.polygon!.entries()) {
+    assert.ok(Math.abs(point.x - turned[i].x) < 1e-9 && Math.abs(point.y - turned[i].y) < 1e-9);
+  }
   assert.equal(reset.style!.rotation, 0);
   assert.equal(reset.layout!.style.rotation, 0);
   assert.deepEqual(reset.layout!.rows, moved.layout!.rows);

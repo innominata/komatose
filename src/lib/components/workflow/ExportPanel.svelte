@@ -15,6 +15,7 @@
   } from "$lib/workflow";
 
   let {
+    exportView = $bindable("export"),
     seriesId,
     episodeId,
     issues,
@@ -43,6 +44,7 @@
     pageDocs = {},
     stepDone = () => false,
   }: {
+    exportView?: "export" | "script";
     seriesId: string;
     episodeId: string;
     issues: ReadinessIssue[];
@@ -103,8 +105,15 @@
   );
 </script>
 
-<div class="wf-ui export-layout">
-  <ExportDocuments {seriesId} {episodeId} />
+<div class="wf-ui export-screen" class:script={exportView === "script"}>
+  <div class="export-tabs" role="tablist" aria-label="Export">
+    <button type="button" role="tab" data-find="export-tab" aria-selected={exportView === "export"} onclick={() => (exportView = "export")}>Export</button>
+    <button type="button" role="tab" data-find="export-tab-script" aria-selected={exportView === "script"} onclick={() => (exportView = "script")}>Script</button>
+  </div>
+  {#if exportView === "script"}
+    <ExportDocuments {seriesId} {episodeId} />
+  {:else}
+  <div class="export-layout">
   <div class="export-main">
   <h2>Export the chapter</h2>
   <h4>Ready to publish?</h4>
@@ -304,17 +313,55 @@
     {/if}
   </div>
   </div>
+  </div>
+  {/if}
 </div>
 
 <style>
+  .export-screen {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+    padding: 0 22px 28px;
+    font: 12.5px Inter, system-ui, sans-serif;
+  }
+  .export-tabs {
+    display: flex;
+    gap: 2px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -22px;
+    padding: 0 14px;
+    background: var(--hud-bg);
+    border-bottom: 1px solid var(--hud-line);
+  }
+  .export-tabs button {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--hud-muted);
+    padding: 10px 12px;
+    border-bottom: 2px solid transparent;
+    font-size: 12.5px;
+  }
+  .export-tabs button:hover:not(:disabled) {
+    background: transparent;
+    color: var(--hud-text);
+  }
+  .export-tabs button[aria-selected="true"] {
+    color: var(--hud-text);
+    border-bottom-color: var(--hud-teal-ink);
+  }
   .export-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
     gap: 22px;
     align-items: start;
-    padding: 18px 22px 28px;
-    font: 12.5px Inter, system-ui, sans-serif;
   }
+  .script :global(.documents) { flex: 1; min-height: 0; }
   .export-main, .export-side { min-width: 0; display: grid; gap: 12px; align-content: start; }
   .export-main h2 { margin: 0; font: 700 20px Manrope, sans-serif; letter-spacing: 0.04em; text-transform: none; }
   .export-main h4 { margin: 4px 0 0; font: 700 12px Manrope, sans-serif; letter-spacing: 0.07em; text-transform: uppercase; color: var(--hud-muted); }
@@ -352,4 +399,7 @@
   .issue:hover { border-color: var(--hud-teal-ink); }
   .issue-regions { display: block; font-size: 11px; color: var(--hud-muted); }
   .export-need { color: #ff5d73; }
+  @media (max-width: 860px) {
+    .export-layout { grid-template-columns: 1fr; }
+  }
 </style>

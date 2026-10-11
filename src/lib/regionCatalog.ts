@@ -96,6 +96,45 @@ export function isBuiltinRegionKind(id: string): boolean {
   return (LINE_TYPES as readonly string[]).includes(id);
 }
 
+const EXTRA_KIND_COLORS = [
+  "#e8c36a",
+  "#8ea4c8",
+  "#d98b6a",
+  "#7dcea0",
+  "#c39bd3",
+  "#5dade2",
+  "#ec7063",
+  "#58d68d",
+];
+
+/** A new series region type named by the editor. The id is a unique slug of the name. */
+export function regionKindFromLabel(label: string, existing: RegionKind[]): RegionKind {
+  const name = label.trim().replace(/\s+/g, " ");
+  if (!name || name.length > 40)
+    throw new Error("Give the region type a name of up to 40 characters");
+  if (existing.some((kind) => kind.label.toLowerCase() === name.toLowerCase()))
+    throw new Error(`“${name}” is already a region type`);
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 20);
+  const stem = slug || "type";
+  const taken = new Set(existing.map((kind) => kind.id));
+  let id = stem;
+  let n = 2;
+  while (taken.has(id)) {
+    const suffix = `-${n++}`;
+    id = `${stem.slice(0, 24 - suffix.length)}${suffix}`;
+    if (n > 100) throw new Error("Could not choose an id for that region type");
+  }
+  const used = new Set(existing.map((kind) => kind.color.toLowerCase()));
+  const color =
+    EXTRA_KIND_COLORS.find((entry) => !used.has(entry)) ??
+    EXTRA_KIND_COLORS[existing.length % EXTRA_KIND_COLORS.length];
+  return { id, label: name, color };
+}
+
 /** Keep a removed type in menus so existing regions can still be labeled. */
 export function regionKindOptions(kinds: RegionKind[], currentId?: string): RegionKind[] {
   return regionKindUsage(kinds, currentId ? [currentId] : []);

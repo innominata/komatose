@@ -93,7 +93,7 @@ test("matching text lets redetection tighten a box, differing text never merges"
   assert.equal(sameDetectedTextBox(large,tightened,"待って",undefined),false);
 });
 
-test("translating a polygon keeps its shape on the page", () => {
+test("translating typeset geometry preserves points beyond the page", () => {
   const shape = [{ x: 0.25, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.375, y: 0.75 }];
   assert.deepEqual(translatePolygon(shape, 0.25, -0.25), [
     { x: 0.5, y: 0.25 },
@@ -101,9 +101,9 @@ test("translating a polygon keeps its shape on the page", () => {
     { x: 0.625, y: 0.5 },
   ]);
   assert.deepEqual(translatePolygon(shape, 5, -5), [
-    { x: 0.75, y: 0 },
-    { x: 1, y: 0 },
-    { x: 0.875, y: 0.25 },
+    { x: 5.25, y: -4.5 },
+    { x: 5.5, y: -4.5 },
+    { x: 5.375, y: -4.25 },
   ]);
 });
 

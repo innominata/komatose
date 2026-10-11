@@ -94,6 +94,11 @@ jobs to finish. Missing content and other readiness issues still block finished 
 Pages without reviewed regions show a warning, which does not block finished export.
 
 In **Review**, **Proofread English** follows the selected proofreading model.
+**Proofread Raw** sends only the selected page's raw image. It is available for
+the configured proofreading service or a model that passes both vision and
+English proofreading requirements. Vision-model instructions name the series'
+source language as Japanese or Korean. Service requests use `mode: raw`; English
+page comparisons continue to use `mode: critique`.
 Browser and image-only proofreaders review the current page's raw source and typeset
 English using the Page proofreader workflow. Text models suggest English corrections
 through the text proofreading job. A page-image proofreader does not need a separate
@@ -120,12 +125,13 @@ the current cleaning result, approves the final artwork, clears the saved mask,
 mask diagnostics and pending brush strokes, then advances. Completion is recorded
 after those changes. It waits for active mask/cleaning jobs to finish before marking done.
 
-In **Typeset → Style**, **Use series style** removes this region's style overrides.
-**Save as series [type] style** asks for confirmation before replacing a category
-across the series. Series type settings also confirm category replacements.
-Chapter category overrides are no longer used. **Refit [type] in chapter** applies
-the saved series style to every eligible region of that type in the chapter,
-replacing font/appearance overrides and skipping locked layouts. It preserves
+In **Typeset → Style**, each region keeps its own saved style. The series default
+is copied on when the region is created. **Reset to Default** copies it onto the
+selected region. **Save as Default** asks for confirmation before replacing that
+type's default for new regions. Series type settings also confirm default
+replacements. Chapter category overrides are no longer used. **Refit [type] in chapter**
+copies the saved default onto every eligible region of that type in the chapter,
+replacing their saved styles and skipping locked layouts. It preserves
 saved polygons, geometry approvals, text masks, and individual rotation/skew/warp
 transforms; it never detects or regenerates bubble geometry. Progress and any
 per-region failures appear in Jobs & downloads. Oval drawing guides use yellow
@@ -158,6 +164,10 @@ Closing the
 modal allows editing and does not cancel the job. **Jobs & downloads →
 Open critique** (also on the collapsed jobs header) restores its saved response and submitted image snapshots, including
 after reload/restart, without rerunning. See [details](LOCAL_OCR_REVIEW.md#page-clipboard-and-proofreader).
+The Review inspector's **Replies** tab lists completed Raw, English, and Followup
+replies for the selected page by timestamp. Open one in a movable, resizable
+window to copy text into Source or English while editing. Follow-ups are sent
+from the main proofreader dialog, not the saved reply window.
 
 ## Layout and PSD contract
 

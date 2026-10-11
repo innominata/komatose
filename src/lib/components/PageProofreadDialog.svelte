@@ -1,6 +1,6 @@
 <script lang="ts">
   import { renderSafeMarkdown } from '$lib/safeMarkdown';
-  import { unwrapProofreadCritique, type PageProofreadJob, type ProofreadFollowUpImage } from '$lib/pageProofread';
+  import { pageProofreadCall, unwrapProofreadCritique, type PageProofreadJob, type ProofreadFollowUpImage } from '$lib/pageProofread';
 
   let {
     job,
@@ -159,13 +159,13 @@
 <dialog class="hud-dialog-controls page-proofread" bind:this={dialog} aria-labelledby="page-proofread-title" onclose={onclose}>
   <header>
     <div>
-      <h2 id="page-proofread-title">{followUp ? 'Proofreader follow-up' : 'Page proofreader'}</h2>
+      <h2 id="page-proofread-title">{followUp ? 'Proofreader follow-up' : pageProofreadCall(job ?? { id: '', kind: '', state: '' }) === 'Raw' ? 'Proofread Raw' : 'Page proofreader'}</h2>
       <p>{job?.progress?.snapshot?.pageLabel ?? 'Page'} · {engineLabel} / {modelLabel}</p>
     </div>
     <button type="button" aria-label="Close proofreader" onclick={() => dialog.close()}>Close</button>
   </header>
   <div class="report-scroll">
-    <p class="hint">This critique is saved in Jobs. Close it to edit, then choose “Open critique” to return. Follow-ups reuse the same model conversation.</p>
+    <p class="hint">This reply is saved in this page’s Review replies and Jobs. Close it to edit; open it again from either place. Follow-ups reuse the same model conversation.</p>
     {#if followUp && job?.progress?.prompt}
       <section class="turn user-turn">
         <h3>You</h3>
@@ -190,7 +190,9 @@
         <summary>Images submitted · {new Date(job.progress.snapshot.capturedAt).toLocaleString()}</summary>
         <div class="submitted-images">
           <figure><figcaption>Raw source</figcaption><a href={asset(job.progress.snapshot.raw)} target="_blank" rel="noreferrer"><img src={asset(job.progress.snapshot.raw)} alt="Raw page submitted to the proofreader" /></a></figure>
-          <figure><figcaption>Working typeset version</figcaption><a href={asset(job.progress.snapshot.typeset)} target="_blank" rel="noreferrer"><img src={asset(job.progress.snapshot.typeset)} alt="Typeset page submitted to the proofreader" /></a></figure>
+          {#if job.progress.snapshot.typeset}
+            <figure><figcaption>Working typeset version</figcaption><a href={asset(job.progress.snapshot.typeset)} target="_blank" rel="noreferrer"><img src={asset(job.progress.snapshot.typeset)} alt="Typeset page submitted to the proofreader" /></a></figure>
+          {/if}
         </div>
       </details>
     {/if}

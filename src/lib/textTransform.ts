@@ -42,6 +42,25 @@ export function inverseTextMatrix(
     rotationMatrix(-style.rotation),
   );
 }
+/**
+ * Rotate normalized page points about a normalized center.
+ * Measured in image pixels, y down, positive clockwise — the same map as SVG `rotate()`.
+ */
+export function rotateNormalizedPoints(
+  points: Point[],
+  center: Point,
+  degrees: number,
+  width: number,
+  height: number,
+): Point[] {
+  if (!degrees || !points.length || !width || !height) return points.map((p) => ({ ...p }));
+  const m = rotationMatrix(degrees);
+  const c = { x: center.x * width, y: center.y * height };
+  return points.map((p) => {
+    const q = applyMatrixAbout(m, { x: p.x * width, y: p.y * height }, c);
+    return { x: q.x / width, y: q.y / height };
+  });
+}
 /** Apply a linear map about a pivot point. */
 export function applyMatrixAbout(m: Matrix2, p: Point, c: Point): Point {
   const dx = p.x - c.x,

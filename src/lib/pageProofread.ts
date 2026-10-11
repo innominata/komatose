@@ -1,6 +1,7 @@
 import { isProofreaderId, type ProofreaderId } from './proofreaders';
 
 export const PAGE_PROOFREAD_LABEL = "Proofread raw + typeset images";
+export const RAW_PROOFREAD_LABEL = "Proofread Raw";
 export const TYPESET_FOLLOWUP_LABEL = "Proofread updated typeset (follow-up)";
 
 export type ProofreadCursor = { imageId: string; conversation: string };
@@ -30,7 +31,7 @@ export function latestPageProofreadJob<T extends { kind?: string }>(jobs: T[]): 
 
 export type PageProofreadSnapshot = {
   raw: string;
-  typeset: string;
+  typeset?: string;
   capturedAt: number;
   imageId: string;
   pageLabel: string;
@@ -42,13 +43,22 @@ export type PageProofreadJob = {
   state: string;
   error?: string | null;
   payload?: Record<string, unknown>;
+  created_at?: number;
   progress?: {
     message?: string;
     critique?: string;
     prompt?: string;
+    followUp?: boolean;
     snapshot?: PageProofreadSnapshot;
   };
 };
+
+export type PageProofreadCall = 'Raw' | 'English' | 'Followup';
+
+export function pageProofreadCall(job: PageProofreadJob): PageProofreadCall {
+  if (job.payload?.followUpOf || job.progress?.followUp) return 'Followup';
+  return job.payload?.mode === 'raw' ? 'Raw' : 'English';
+}
 
 export type ProofreadFollowUpImage = { mime: string; data: string };
 

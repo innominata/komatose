@@ -15,6 +15,7 @@ const groups = {
     "tests/detector-config.test.ts",
     "tests/detect-fusion.test.ts",
     "tests/detection-geometry.test.ts",
+    "tests/typeset-page-clip.test.ts",
     "tests/remote-providers.test.ts",
     "tests/kana-chart.test.ts",
     "tests/hangul-entry.test.ts",

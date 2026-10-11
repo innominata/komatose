@@ -37,15 +37,20 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     if (!body || !Array.isArray(body.episodeIds) || !body.episodeIds.length || body.episodeIds.some((id: unknown) => typeof id !== 'string'))
       return fail(400, 'Select at least one chapter');
     if (!EXPORT_DOCUMENTS.some(file => file.id === body.file)) return fail(400, 'Unknown metadata file');
-    if (body.includeSceneNotes !== undefined && typeof body.includeSceneNotes !== 'boolean')
-      return fail(400, 'Invalid scene notes option');
+    for (const key of ['includeSceneNotes', 'includeEmptyPages', 'includeIds'] as const) {
+      if (body[key] !== undefined && typeof body[key] !== 'boolean') return fail(400, 'Invalid script export option');
+    }
     const selected = new Set<string>(body.episodeIds);
     const chapters = seriesChapters(series.id).filter(chapter => selected.has(chapter.id));
     if (chapters.length !== selected.size) return fail(404, 'Chapter not found in this series');
     const document = sqlite.transaction(() => exportDocument(
       chapters.map(chapter => captureExportMetadata(series, chapter)),
       body.file as ExportDocumentId,
-      body.includeSceneNotes !== false,
+      {
+        includeSceneNotes: body.includeSceneNotes !== false,
+        includeEmptyPages: body.includeEmptyPages !== false,
+        includeIds: body.includeIds !== false,
+      },
     ))();
     return json({ document, chapterCount: chapters.length }, { headers: { 'cache-control': 'no-store' } });
   } catch (e) {

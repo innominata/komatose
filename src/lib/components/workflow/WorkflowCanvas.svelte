@@ -3,7 +3,7 @@
   import { missingRegionCopy, missingRegionCopyLabel } from "$lib/exceptions";
   import { builtinRegionKinds, regionColor, regionKindLabel } from "$lib/regionCatalog";
   import { regionPaintOrder, translatePolygon } from "$lib/regionGeometry";
-  import { polygonEdgeHandle } from "$lib/textTransform";
+  import { polygonEdgeHandle, rotateNormalizedPoints } from "$lib/textTransform";
   import { interpolateBrushPixels } from "$lib/cloneStamp";
   import { blurSigma } from "$lib/blurBrush";
   import type {
@@ -204,8 +204,14 @@
   let ovalHover = $state<Point | null>(null);
   function livePolygon(points: Point[]): Point[] {
     const drag = drawing;
-    if (!drag?.polygonDrag) return points;
-    return translatePolygon(points, drag.end.x - drag.start.x, drag.end.y - drag.start.y);
+    if (drag?.polygonDrag)
+      return translatePolygon(points, drag.end.x - drag.start.x, drag.end.y - drag.start.y);
+    if (drag?.rotation && page && drag.regionId === selected?.id) {
+      const delta = rotationAngle(drag) - drag.rotation.initial;
+      if (!delta) return points;
+      return rotateNormalizedPoints(points, drag.rotation.center, delta, page.width, page.height);
+    }
+    return points;
   }
   const ovalGuides = $derived.by(() => {
     if (step !== "Typeset" || tool !== "oval" || !page) return [];
@@ -672,12 +678,12 @@
         ></canvas>
       {/if}
       {#if (step === "Typeset" || step === "Review") && !compare}{#each pageLines.filter((l) => l.sourceState !== "ignored" && !(["polygon", "rectangle", "oval"].includes(tool) && selected?.id === l.id)) as l}{@const layout =
-            regionLayout(l.id)}{#if layout}<img
+            regionLayout(l.id)}{#if layout}<div class="text-clip"><img
               class="text-overlay"
               style={[overlayStyle(l, layout), textMaskCss(regionTextMask(l.id))].filter(Boolean).join(";")}
               src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(layout.svg)}`}
               alt=""
-            />{/if}{/each}{/if}
+            /></div>{/if}{/each}{/if}
       <svg
         bind:this={svgEl}
         viewBox={`0 0 ${page.width} ${page.height}`}
@@ -1211,7 +1217,7 @@
     pointer-events: none;
   }
   .canvas-page svg,
-  .text-overlay {
+  .text-clip {
     position: absolute;
     top: 0;
     left: 0;
@@ -1222,7 +1228,14 @@
   .canvas-page svg {
     overflow: visible;
   }
+  .text-clip {
+    overflow: hidden;
+    pointer-events: none;
+  }
   .text-overlay {
+    display: block;
+    width: 100%;
+    height: 100%;
     pointer-events: none;
   }
   .canvas-page svg .ignored {

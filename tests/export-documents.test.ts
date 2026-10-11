@@ -71,6 +71,21 @@ test('bilingual and English scripts retain region types, stable IDs, scene notes
   const withoutNotes = chapterScript(snapshot(), true, false);
   assert.doesNotMatch(withoutNotes, /rainy street|Two friends|Scene notes/);
   assert.match(withoutNotes, /안녕하세요/);
+  const compact = chapterScript(snapshot(), true, { includeEmptyPages: false, includeIds: false });
+  assert.doesNotMatch(compact, /ID: early|\[No regions\]/);
+  assert.match(compact, /Region 1 · Thought/);
+});
+
+test('script export can omit empty pages and region IDs', () => {
+  sqlite.prepare("INSERT INTO images(id,episode_id,filename,original_name,sort_order,width,height,caption,page_number,created_at,updated_at) VALUES('empty-page','first','blank.png','blank.png',1,100,200,'Blank',3,1,1)").run();
+  const withEmpty = chapterScript(captureExportMetadata(series, episode), true);
+  assert.match(withEmpty, /--- Page 3 ---[\s\S]*Scene notes:\nBlank[\s\S]*\[No regions\]/);
+  const withoutEmpty = chapterScript(captureExportMetadata(series, episode), true, { includeEmptyPages: false });
+  assert.doesNotMatch(withoutEmpty, /--- Page 3 ---|\[No regions\]/);
+  assert.match(withoutEmpty, /--- Page 1 ---/);
+  const noIds = chapterScript(snapshot(), true, { includeIds: false });
+  assert.doesNotMatch(noIds, /ID: early|ID: late|ID: unplaced/);
+  assert.match(noIds, /Region 1 · Thought \[\(\)\] · needs_work/);
 });
 
 test('metadata capture reads incomplete pages without preparing images or changing any saved data', () => {
@@ -129,7 +144,7 @@ test('metadata formats include fonts and readiness notes and share script format
 test('document endpoint validates input and protects other series and anonymous requests', async () => {
   assert.equal((await GET(event(undefined, null))).status, 401);
   assert.equal((await POST(event({ episodeIds: ['first'], file: 'english.txt' }, null))).status, 401);
-  for (const body of [null, {}, { episodeIds: [], file: 'english.txt' }, { episodeIds: [1], file: 'english.txt' }, { episodeIds: ['first'], file: '../private' }, { episodeIds: ['first'], file: 'english.txt', includeSceneNotes: 'yes' }])
+  for (const body of [null, {}, { episodeIds: [], file: 'english.txt' }, { episodeIds: [1], file: 'english.txt' }, { episodeIds: ['first'], file: '../private' }, { episodeIds: ['first'], file: 'english.txt', includeSceneNotes: 'yes' }, { episodeIds: ['first'], file: 'english.txt', includeEmptyPages: 1 }, { episodeIds: ['first'], file: 'english.txt', includeIds: 'no' }])
     assert.equal((await POST(event(body))).status, 400);
   assert.equal((await POST(event({ episodeIds: ['private'], file: 'chapter.json' }))).status, 404);
   const actor = { ...user, role: 'proofreader' };

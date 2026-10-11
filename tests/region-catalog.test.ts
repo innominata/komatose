@@ -17,6 +17,7 @@ const {
   parseColorMap,
   regionColor,
   regionKindLabel,
+  regionKindFromLabel,
   regionKindOptions,
   regionKindUsage,
 } = await import("../src/lib/regionCatalog");
@@ -34,6 +35,20 @@ const CUSTOM = [
   { id: '""', label: "Dialogue", color: "#ff0000" },
   { id: "sfx-2", label: "Impact SFX", color: "#00ff00" },
 ];
+
+test("a saved style name becomes a unique region type", () => {
+  const existing = builtinRegionKinds();
+  const created = regionKindFromLabel("  Impact   SFX ", existing);
+  assert.equal(created.label, "Impact SFX");
+  assert.equal(created.id, "impact-sfx");
+  assert.match(created.color, /^#[0-9a-f]{6}$/);
+  assert.equal(regionKindFromLabel("Impact SFX 2", [...existing, created]).id, "impact-sfx-2");
+  assert.throws(() => regionKindFromLabel("dialogue", existing), /already a region type/);
+  assert.throws(() => regionKindFromLabel("   ", existing), /name of up to 40/);
+  const hangul = regionKindFromLabel("효과음", existing);
+  assert.equal(hangul.id, "type");
+  assert.equal(hangul.label, "효과음");
+});
 
 test("built-in kinds mirror the editor's text types and colors", () => {
   const kinds = builtinRegionKinds();

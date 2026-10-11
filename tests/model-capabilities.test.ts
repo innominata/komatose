@@ -289,7 +289,7 @@ test('stale successes and failures remain executable without an automatic retest
     assert.equal(conversationAvailable(passed), true);
     const stale = { ...general(), capabilities: { conversation: { ...pass(general(), 'conversation'), fingerprint: 'old-code' } } };
     assert.equal(conversationAvailable(stale), true, 'a stale pass still counts as chat');
-    const failedChat = { ...general(), capabilities: { conversation: { ...pass(general(), 'conversation'), ok: false, outcome: 'failed_validation' } } };
+    const failedChat = { ...general(), capabilities: { conversation: { ...pass(general(), 'conversation'), ok: false, outcome: 'failed_validation' as const } } };
     assert.equal(conversationAvailable(failedChat), false);
   } finally { globalThis.fetch = originalFetch; }
 });
