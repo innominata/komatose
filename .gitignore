@@ -66,6 +66,7 @@ vite.config.ts.timestamp-*
 # Local scratch and personal working notes
 *.ses
 /continue.txt
+/mockups/
 
 # Companion browser extension is private; it is not part of this distribution.
 /chrome-extension/
