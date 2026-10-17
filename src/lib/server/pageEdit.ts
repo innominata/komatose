@@ -559,40 +559,56 @@ export async function addSeriesCredits(ctx: Ctx): Promise<{ images: ImageRow[]; 
   return { images: next, added: created.length };
 }
 
-/** Join adjacent pages in RTL order without resampling either page. */
-export async function combineSpread(ctx: Ctx, input: unknown): Promise<ImageRow> {
+/** Join adjacent pages into an RTL spread or top-to-bottom strip. */
+async function combineAdjacent(ctx: Ctx, input: unknown, direction: "spread" | "strip"): Promise<ImageRow> {
   const all = await listImages(ctx.episode.id);
   if (!Array.isArray(input) || input.length !== 2 || input.some(id => typeof id !== "string") || input[0] === input[1])
     throw new PageEditError("Select exactly two consecutive pages");
   const selected = all.filter(img => input.includes(img.id));
   if (selected.length !== 2 || all.indexOf(selected[1]) !== all.indexOf(selected[0]) + 1)
     throw new PageEditError("Select exactly two consecutive pages");
-  const [right, left] = selected;
+  const [first, second] = selected;
   if (selected.some(isCreditsPage)) throw new PageEditError("Credits pages cannot be combined");
-  const [rightBytes, leftBytes] = await Promise.all(selected.map(img => readWorkingBytes(ctx, img)));
-  const [r, l] = await Promise.all([sharp(rightBytes).metadata(), sharp(leftBytes).metadata()]);
-  const width = r.width! + l.width!, height = Math.max(r.height!, l.height!);
+  const [firstBytes, secondBytes] = await Promise.all(selected.map(img => readWorkingBytes(ctx, img)));
+  const [a, b] = await Promise.all([sharp(firstBytes).metadata(), sharp(secondBytes).metadata()]);
+  const rtl = preferences(ctx.episode.id, ctx.series.id).direction === "rtl";
+  const width = direction === "spread" ? a.width! + b.width! : Math.max(a.width!, b.width!);
+  const height = direction === "strip" ? a.height! + b.height! : Math.max(a.height!, b.height!);
   const bytes = await sharp({ create: { width, height, channels: 4, background: "#ffffff" } })
-    .composite([{ input: leftBytes, left: 0, top: 0 }, { input: rightBytes, left: l.width!, top: 0 }]).png().toBuffer();
+    .composite(direction === "spread"
+      ? rtl
+        ? [{ input: secondBytes, left: 0, top: 0 }, { input: firstBytes, left: b.width!, top: 0 }]
+        : [{ input: firstBytes, left: 0, top: 0 }, { input: secondBytes, left: a.width!, top: 0 }]
+      : [{ input: firstBytes, left: 0, top: 0 }, { input: secondBytes, left: 0, top: a.height! }]).png().toBuffer();
   const geometry = Object.fromEntries(await Promise.all(selected.map(async img => [img.id, await captureGeometry(ctx.episode.id, img.id)])));
-  await backupWorking(ctx, right);
-  await pushUndo(ctx.series.slug, ctx.episode.slug, { type: "combine", originalId: right.id, removed: left, geometry });
-  const image = await commitPixels(ctx, right, bytes, false);
+  await backupWorking(ctx, first);
+  await pushUndo(ctx.series.slug, ctx.episode.slug, { type: "combine", originalId: first.id, removed: second, geometry,
+    ...(direction === "strip" ? { description: "Join strips" } : {}) });
+  const image = await commitPixels(ctx, first, bytes, false);
   for (const img of selected) {
     await applyPageGeometry(ctx.episode.id, img, image, geometry[img.id],
-      { sx: 1, sy: 1, dx: img.id === right.id ? l.width! : 0, dy: 0, width, height }, "#ffffff");
+      { sx: 1, sy: 1, dx: direction === "spread" ? (rtl && img.id === first.id ? b.width! : !rtl && img.id === second.id ? a.width! : 0) : 0,
+        dy: direction === "strip" && img.id === second.id ? a.height! : 0, width, height }, "#ffffff");
   }
-  // A spread needs a fresh prepared source; page-level cleaning belongs to the old halves.
-  const doc = getDoc(`page:${right.id}`, {});
+  // Joined artwork needs a fresh prepared source; cleaning belongs to the old pages.
+  const doc = getDoc(`page:${first.id}`, {});
   putDoc(ctx.episode.id, doc.id, {}, doc.revision);
-  await db.update(lines).set({ imageId: right.id }).where(and(eq(lines.episodeId, ctx.episode.id), eq(lines.imageId, left.id)));
-  await db.delete(images).where(eq(images.id, left.id));
+  await db.update(lines).set({ imageId: first.id }).where(and(eq(lines.episodeId, ctx.episode.id), eq(lines.imageId, second.id)));
+  await db.delete(images).where(eq(images.id, second.id));
   // Keep the removed half's files for undo.
-  broadcast(ctx.episode.id, { type: "image:delete", id: left.id });
+  broadcast(ctx.episode.id, { type: "image:delete", id: second.id });
   for (const line of await listLines(ctx.episode.id)) broadcast(ctx.episode.id, { type: "line:upsert", line });
   void logActivity({ seriesId: ctx.series.id, episodeId: ctx.episode.id, userId: ctx.user.id,
-    action: "combined_spread", payload: { imageIds: selected.map(img => img.id) } });
+    action: direction === "strip" ? "joined_strip" : "combined_spread", payload: { imageIds: selected.map(img => img.id) } });
   return image;
+}
+
+export function combineSpread(ctx: Ctx, input: unknown): Promise<ImageRow> {
+  return combineAdjacent(ctx, input, "spread");
+}
+
+export function joinStrip(ctx: Ctx, input: unknown): Promise<ImageRow> {
+  return combineAdjacent(ctx, input, "strip");
 }
 
 export async function splitSpread(
@@ -866,6 +882,7 @@ export function startDescribePages(
   overwrite = false,
   engine: TranslateEngine = DEFAULT_CHAT_MODEL_ID,
   model?: string,
+  compact = true,
 ) {
   const abort = new AbortController();
   describeAborts.set(ctx.episode.id, abort);
@@ -894,6 +911,7 @@ export function startDescribePages(
             model,
             abort.signal,
             jobId,
+            compact,
           );
         },
       );
@@ -1001,6 +1019,7 @@ export async function describePages(
   model?: string,
   abort?: AbortSignal,
   jobId?: string,
+  compact = true,
 ): Promise<ImageRow[]> {
   const imgs = await listImages(ctx.episode.id);
   const targets = imageIds?.length
@@ -1106,7 +1125,7 @@ export async function describePages(
     }
     try {
       if (abort?.aborted) throw new Error("Cancelled");
-      if (jobId) await compactChapterNotes(ctx, abort, jobId);
+      if (jobId && compact) await compactChapterNotes(ctx, abort, jobId);
     } catch (e) {
       if (abort?.aborted || (e instanceof Error && e.message === "Cancelled"))
         throw e;

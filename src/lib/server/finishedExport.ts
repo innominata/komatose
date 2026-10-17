@@ -25,6 +25,7 @@ import { workCredit } from "../workCredit";
 import { exportDocument } from './exportDocuments';
 import { loadSpeakerAssignments } from './characters';
 import type { CharacterAssignment } from '../characters';
+import { creditRole } from '../credits';
 
 export type ExportPage = {
   image: ImageRow;
@@ -79,6 +80,7 @@ export async function renderPage(page: ExportPage, options: { includeOverflow?: 
   const renderable = page.regions.filter(
     (r) =>
       r.line.sourceState !== "ignored" &&
+      r.data.renderEnabled !== false &&
       r.data.layout &&
       (options.includeOverflow || !r.data.layout.overflow),
   );
@@ -443,7 +445,18 @@ export async function captureExport(
     throw new WorkflowError("JPG quality must be 1–100");
   const imgs = await listImages(episode.id);
   for (const img of imgs) await preparePage(series, episode, img);
-  return readExportSnapshot(series, episode, format, draft, quality, includeMetadata, true);
+  const snapshot = readExportSnapshot(series, episode, format, draft, quality, includeMetadata, true);
+  const storyWidth = Math.max(0, ...snapshot.pages.filter(page => page.image.role === 'page').map(page => page.image.width));
+  for (const page of snapshot.pages.filter(page => page.image.id.startsWith('series-credit:'))) {
+    if (!storyWidth || storyWidth === page.image.width) continue;
+    const bytes = await sharp(await readAsset(page.source.original!)).resize({ width: storyWidth }).png().toBuffer();
+    const hash = await storeAsset(bytes);
+    const meta = await sharp(bytes).metadata();
+    page.image.width = storyWidth;
+    page.image.height = meta.height!;
+    page.source = { original: hash, prepared: hash, cleanBase: hash, cleaned: hash };
+  }
+  return snapshot;
 }
 
 /** Read saved metadata without preparing pages, writing jobs, or touching artwork. */
@@ -498,6 +511,40 @@ function readExportSnapshot(series: Series, episode: Episode, format: string, dr
         409,
       );
     const prefs = preferences(episode.id, series.id);
+    const pages: ExportPage[] = currentImages.map((image) => {
+      const doc = getDoc<PageData>(`page:${image.id}`, {});
+      const source = doc.data;
+      return {
+        image,
+        source,
+        sourceRevision: doc.revision,
+        dpi: effectiveDpi(source, image, prefs),
+        regions: lns
+          .filter((l) => l.imageId === image.id)
+          .map((line) => {
+            const doc = getDoc<RegionData>(`region:${line.id}`, {});
+            return { line, data: doc.data, revision: doc.revision };
+          }),
+      };
+    });
+    let addedDefault = false;
+    for (const kind of ['pre', 'post'] as const) {
+      const credit = currentSeries.credits[kind];
+      if (!credit || pages.some(page => page.image.role === creditRole(kind))) continue;
+      const image: ImageRow = {
+        id: `series-credit:${kind}:${episode.id}`, episodeId: episode.id,
+        filename: credit.filename, originalName: credit.originalName,
+        width: credit.width, height: credit.height, sortOrder: kind === 'pre' ? -1 : pages.length,
+        pageNumber: null, dpi: 72, caption: '', role: creditRole(kind),
+        createdAt: currentSeries.createdAt, updatedAt: currentSeries.updatedAt,
+      };
+      const source: PageData = { original: credit.hash, prepared: credit.hash, cleanBase: credit.hash, cleaned: credit.hash };
+      const page: ExportPage = { image, source, sourceRevision: 0, dpi: 72, regions: [] };
+      if (kind === 'pre') pages.unshift(page);
+      else pages.push(page);
+      addedDefault = true;
+    }
+    if (addedDefault) pages.forEach((page, index) => { page.image = { ...page.image, pageNumber: index + 1 }; });
     return {
       schemaVersion: 1 as const,
       revision: currentEpisode.revision ?? 0,
@@ -515,22 +562,7 @@ function readExportSnapshot(series: Series, episode: Episode, format: string, dr
         chapter: getDoc(`chapter:${episode.id}`, {}),
         series: getDoc(`series:${series.id}`, {}),
       },
-      pages: currentImages.map((image) => {
-        const doc = getDoc<PageData>(`page:${image.id}`, {});
-        const source = doc.data;
-        return {
-          image,
-          source,
-          sourceRevision: doc.revision,
-          dpi: effectiveDpi(source, image, prefs),
-          regions: lns
-            .filter((l) => l.imageId === image.id)
-            .map((line) => {
-              const doc = getDoc<RegionData>(`region:${line.id}`, {});
-              return { line, data: doc.data, revision: doc.revision };
-            }),
-        };
-      }),
+      pages,
     };
   })();
 }

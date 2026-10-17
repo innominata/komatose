@@ -94,7 +94,7 @@
         id: row.id,
         requestPreset,
         managedLaunch: recipe
-          ? { ...recipe, extraArgs: argsText.split('\n').map((token) => token.trim()).filter(Boolean) }
+          ? { ...recipe, startOnBoot: false, extraArgs: argsText.split('\n').map((token) => token.trim()).filter(Boolean) }
           : null,
       });
       await onSaved();
@@ -156,7 +156,6 @@
         Port {reserved.port} is reserved for {reserved.label}. Chat models use port {chatPort}.
       </div>
     {/if}
-    <label class="d-block my-2"><input type="checkbox" bind:checked={recipe.startOnBoot} /> Start with the app</label>
     <details class="my-2">
       <summary>Advanced tuning arguments</summary>
       <p class="hud-muted">

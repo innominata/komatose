@@ -26,7 +26,7 @@
     regionId?: string;
     corner?: number;
     regionRevision?: number;
-    rotation?: { initial: number; angle: number; center: Point; style: TextStyle };
+    rotation?: { center: Point; polygon: Point[]; initial: number };
     skew?: { axis: "x" | "y"; initial: number; angle: number; center: Point; style: TextStyle };
     polygonDrag?: boolean;
   };
@@ -41,13 +41,17 @@
     zoom,
     zooming,
     compare,
+    reviewSideBySide = false,
+    rawPageImage = "",
     showMask,
     showRegions,
+    ghostRegions = false,
     canEdit,
     canClean,
     busy,
     lineId,
     radius,
+    feather = 100,
     regionLabelScale,
     colorFor = (id) => regionColor(id, builtinRegionKinds()),
     labelFor = (id) => regionKindLabel(id, builtinRegionKinds()),
@@ -114,13 +118,17 @@
     zoom: number;
     zooming: boolean;
     compare: boolean;
+    reviewSideBySide?: boolean;
+    rawPageImage?: string;
     showMask: boolean;
     showRegions: boolean;
+    ghostRegions?: boolean;
     canEdit: boolean;
     canClean: boolean;
     busy: boolean;
     lineId: string;
     radius: number;
+    feather?: number;
     regionLabelScale: number;
     colorFor?: (id: string) => string;
     labelFor?: (id: string) => string;
@@ -200,16 +208,16 @@
   let restorePreviewKey = "";
   let restorePainted = 0;
   let featherStamp: HTMLCanvasElement | null = null;
-  let featherRadius = -1;
+  let featherStampKey = "";
   let ovalHover = $state<Point | null>(null);
   function livePolygon(points: Point[]): Point[] {
     const drag = drawing;
     if (drag?.polygonDrag)
       return translatePolygon(points, drag.end.x - drag.start.x, drag.end.y - drag.start.y);
     if (drag?.rotation && page && drag.regionId === selected?.id) {
-      const delta = rotationAngle(drag) - drag.rotation.initial;
-      if (!delta) return points;
-      return rotateNormalizedPoints(points, drag.rotation.center, delta, page.width, page.height);
+      const angle = rotationAngle(drag);
+      if (!angle) return drag.rotation.polygon;
+      return rotateNormalizedPoints(drag.rotation.polygon, drag.rotation.center, angle, page.width, page.height);
     }
     return points;
   }
@@ -353,24 +361,34 @@
     stampClonePreview(clonePainted === 0 ? pts : pts.slice(clonePainted - 1));
     clonePainted = pts.length;
   });
-  function featherStampCanvas(r: number) {
-    if (featherStamp && featherRadius === r) return featherStamp;
+  function featherStampCanvas(r: number, strength = 100) {
+    const key = `${r}:${strength}`;
+    if (featherStamp && featherStampKey === key) return featherStamp;
     const size = r * 2 + 1;
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    const g = ctx.createRadialGradient(r + 0.5, r + 0.5, 0, r + 0.5, r + 0.5, r);
-    g.addColorStop(0, "rgba(255,255,255,1)");
-    g.addColorStop(0.25, "rgba(255,255,255,0.84)");
-    g.addColorStop(0.5, "rgba(255,255,255,0.5)");
-    g.addColorStop(0.75, "rgba(255,255,255,0.16)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
+    if (strength === 0) {
+      ctx.fillStyle = "white";
+      ctx.beginPath();
+      ctx.arc(r + 0.5, r + 0.5, r, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const inner = 1 - strength / 100;
+      const g = ctx.createRadialGradient(r + 0.5, r + 0.5, 0, r + 0.5, r + 0.5, r);
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      if (inner > 0) g.addColorStop(inner, "rgba(255,255,255,1)");
+      for (const t of [0.25, 0.5, 0.75, 1]) {
+        const alpha = 1 - t * t * (3 - 2 * t);
+        g.addColorStop(inner + (1 - inner) * t, `rgba(255,255,255,${alpha})`);
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+    }
     featherStamp = canvas;
-    featherRadius = r;
+    featherStampKey = key;
     return canvas;
   }
   function ensureBlurMask() {
@@ -496,7 +514,7 @@
   function stampRestorePreview(points: Point[]) {
     if (!page || !cloneOverlay || !restoreSnapshot) return;
     const mask = ensureBlurMask();
-    const kernel = featherStampCanvas(Math.max(1, radius));
+    const kernel = featherStampCanvas(Math.max(1, radius), feather);
     const maskCtx = mask?.getContext("2d");
     if (!mask || !kernel || !maskCtx) return;
     const pixels = interpolateBrushPixels(points, page.width, page.height);
@@ -652,14 +670,21 @@
           style={`position:absolute;left:${Math.min(cropDraft.start.x, cropDraft.end.x) * 100}%;top:${Math.min(cropDraft.start.y, cropDraft.end.y) * 100}%;width:${Math.abs(cropDraft.start.x - cropDraft.end.x) * 100}%;height:${Math.abs(cropDraft.start.y - cropDraft.end.y) * 100}%;border:2px solid #68dac5;background:#68dac533;pointer-events:none`}
         ></div>{/if}
     </div>
-  {:else if page}<div
+  {:else if page}
+    {#if reviewSideBySide}
+      <div class="canvas-page review-raw-page" style={`aspect-ratio:${page.width}/${page.height};width:calc(${zoom / 2}% - 8px)`} aria-label="Raw page">
+        <img class="artwork" src={rawPageImage} alt={`Raw page ${page.pageNumber ?? page.originalName}`} draggable="false" />
+        <span class="review-page-label">Raw</span>
+      </div>
+    {/if}
+    <div
       class="canvas-page"
       bind:clientWidth={canvasWidth}
       class:zoom-tool={zooming}
       class:brush-tool={!zooming && (tool === "brush" || tool === "erase" || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
       class:click-tool={!zooming && (tool === "bubble-fill" || tool === "mask-grow")}
       class:style-brush-tool={tool === "style-brush"}
-      style={`aspect-ratio:${page.width}/${page.height};width:${zoom}%`}
+      style={`aspect-ratio:${page.width}/${page.height};width:${reviewSideBySide ? `calc(${zoom / 2}% - 8px)` : `${zoom}%`}`}
       oncontextmenu={handleContext}
       role="group"
     >
@@ -669,6 +694,7 @@
         alt={`Page ${page.pageNumber ?? page.originalName}`}
         draggable="false"
       />
+      {#if reviewSideBySide}<span class="review-page-label">Normal</span>{/if}
       {#if step === "Clean" && (tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
         <canvas
           bind:this={cloneOverlay}
@@ -848,6 +874,7 @@
             pointer-events="none"
           />
         {/if}
+        <g data-region-overlay opacity={ghostRegions ? 0.1 : 1}>
         {#if showRegions && step === "Review" && pageLines.length > 1}
           <defs>
             <marker id="region-flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
@@ -882,6 +909,21 @@
           {@const speaker = speakerLabelFor(l.id)}
           {@const label = `${i + 1} · ${labelFor(l.lineType)}${speaker && ['Review', 'Translate'].includes(step) ? ` · ${speaker}` : ''}`}
           {@const labelWidth = label.length * 6.6 + 12}
+          {@const regionLeft = (l.x ?? 0) * page.width}
+          {@const regionTop = (l.y ?? 0) * page.height}
+          {@const regionRight = ((l.x ?? 0) + (l.w ?? 0.2)) * page.width}
+          {@const regionBottom = ((l.y ?? 0) + (l.h ?? 0.1)) * page.height}
+          {@const labelHeight = 15 * regionLabelScale}
+          {@const labelGap = 3 * regionLabelScale}
+          {@const labelX = Math.max(0, Math.min(regionLeft, page.width - (labelWidth - 4) * regionLabelScale))}
+          {@const labelY = regionBottom + labelGap + labelHeight <= page.height || regionTop < labelGap + labelHeight
+            ? regionBottom + labelGap : regionTop - labelGap - labelHeight}
+          {@const numberOnLeft = regionLeft >= 23 * regionLabelScale}
+          {@const numberOnRight = regionRight + 23 * regionLabelScale <= page.width}
+          {@const numberX = numberOnLeft ? regionLeft - 13 * regionLabelScale
+            : numberOnRight ? regionRight + 13 * regionLabelScale : regionLeft + 10 * regionLabelScale}
+          {@const numberY = numberOnLeft || numberOnRight ? regionTop + 10 * regionLabelScale
+            : regionTop >= 23 * regionLabelScale ? regionTop - 13 * regionLabelScale : regionBottom + 13 * regionLabelScale}
           <g
             class:ignored={l.sourceState === "ignored"}
             class:reorder-pick={reorderFromId === l.id}
@@ -935,28 +977,20 @@
               class="region-num"
               pointer-events="none"
               aria-hidden="true"
-              transform={`translate(${(l.x ?? 0) * page.width} ${(l.y ?? 0) * page.height}) scale(${regionLabelScale})`}
+              transform={`translate(${numberX} ${numberY}) scale(${regionLabelScale})`}
             >
               <circle r="10" fill={color} stroke="#000" stroke-opacity="0.35" />
               <text y="3.8" text-anchor="middle">{i + 1}</text>
             </g>
             {#if selectedRegion || (tool === 'assign-character' && speaker)}
-              <clipPath id={`region-label-clip-${l.id}`}>
-                <rect
-                  x={(l.x ?? 0) * page.width}
-                  y={(l.y ?? 0) * page.height}
-                  width={(l.w ?? 0.2) * page.width}
-                  height={(l.h ?? 0.1) * page.height}
-                />
-              </clipPath>
-              <g clip-path={`url(#region-label-clip-${l.id})`} pointer-events="none" aria-hidden="true">
-                <g
-                  class="region-label"
-                  transform={`translate(${(l.x ?? 0) * page.width} ${((l.y ?? 0) + (l.h ?? 0.1)) * page.height - 15 * regionLabelScale}) scale(${regionLabelScale})`}
-                >
-                  <rect width={labelWidth - 4} height="15" fill={color} />
-                  <text id={`region-label-${l.id}`} x="4" y="11">{label}</text>
-                </g>
+              <g
+                class="region-label"
+                transform={`translate(${labelX} ${labelY}) scale(${regionLabelScale})`}
+                pointer-events="none"
+                aria-hidden="true"
+              >
+                <rect width={labelWidth - 4} height="15" fill={color} />
+                <text id={`region-label-${l.id}`} x="4" y="11">{label}</text>
               </g>
             {/if}
             {#if overflow || missingSource || missingEnglish}
@@ -1080,19 +1114,19 @@
                 };
               }}
             />{/each}{/if}
-        {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && ["Translate", "Review", "Typeset"].includes(step)}
+        {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && step === "Typeset"}
           {@const rotating = drawing?.rotation && drawing.regionId === selected.id ? drawing : null}
           {@const center = rotationCenter(selected)}
-          <g transform={rotating ? `rotate(${rotationAngle(rotating) - rotating.rotation!.initial} ${center.x * page.width} ${center.y * page.height})` : undefined}>
+          <g transform={rotating ? `rotate(${rotationAngle(rotating)} ${center.x * page.width} ${center.y * page.height})` : undefined}>
             <circle
               cx={((selected.x ?? 0) + (selected.w ?? 0.2) / 2) * page.width}
               cy={(selected.y ?? 0) * page.height}
               r="8" fill="#62e5ce" stroke="#123e38" stroke-width="2"
               vector-effect="non-scaling-stroke" style="cursor: grab"
-              role="button" tabindex="0" aria-label="Rotate placed text"
+              role="button" tabindex="0" aria-label="Rotate bubble geometry"
               onpointerdown={startRotation} onkeydown={rotationKey}
               onclick={(e) => e.stopPropagation()}>
-              <title>Drag to rotate text. Arrow keys rotate 1°; Shift rotates 15°.</title>
+              <title>Drag to rotate the bubble and its text. Arrow keys rotate 1°; Shift rotates 15°. Text rotation in Style adds an independent offset.</title>
             </circle>
           </g>
           {#if rotating}<text x={center.x * page.width} y={(selected.y ?? 0) * page.height - 15}
@@ -1126,6 +1160,7 @@
             y={(skewing.skew!.axis === "x" ? bottom.y : right.y) * page.height + (skewing.skew!.axis === "x" ? 22 : 0)}
             fill="#62e5ce" text-anchor="middle" pointer-events="none">{skewing.skew!.axis === "x" ? "H" : "V"} {skewAngle(skewing)}°</text>{/if}
         {/if}
+        </g>
         {#if drawing && ["region", "read-area", "place-line", "rectangle"].includes(tool)}<rect
             x={Math.min(drawing.start.x, drawing.end.x) *
               page.width}
@@ -1187,6 +1222,7 @@
     overflow: auto;
     scrollbar-gutter: stable;
     display: flex;
+    gap: 16px;
     background: var(--hud-canvas);
     padding: 18px 18px 64px;
   }
@@ -1207,6 +1243,19 @@
   .artwork {
     width: 100%;
     display: block;
+  }
+  .review-page-label {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 3;
+    padding: 5px 8px;
+    border-radius: 5px;
+    background: rgba(20, 25, 30, 0.82);
+    color: white;
+    font: 600 12px Inter, system-ui, sans-serif;
+    line-height: 1;
+    pointer-events: none;
   }
   .clone-preview {
     position: absolute;

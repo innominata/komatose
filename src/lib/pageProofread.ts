@@ -36,6 +36,7 @@ export type PageProofreadSnapshot = {
   imageId: string;
   pageLabel: string;
   followUpImages?: string[];
+  script?: {id:string;source:string;english:string}[];
 };
 export type PageProofreadJob = {
   id: string;

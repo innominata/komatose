@@ -26,6 +26,15 @@ export async function taskFixture(task: ModelTaskId): Promise<Record<string, any
       const { ADVISORY_SCHEMA, ENQUIRY_SYSTEM } = await import('./regionAi');
       return { ...common, system: ENQUIRY_SYSTEM, prompt: 'What does テスト mean in English?', images: [], schema: ADVISORY_SCHEMA };
     }
+    case 'director': return { ...common,
+      system: 'You are a scanlation director. Compare two page images and return JSON with exactly reason, textComplete, and edits. Example JSON output: {"reason":"Source and English are complete","textComplete":true,"edits":[]}. If changing text, each edit must have lineId, source, english, and reason; use null to keep existing text. Lettering problems do not make textComplete false.',
+      prompt: JSON.stringify({phase:'initial',critiqueMode:'raw',regions:[{id:'r0',number:0,box:[0.1,0.1,0.8,0.8],source:'テスト',english:'Test'}],requiredMissing:[],critique:'No changes required.'}),
+      images: [jpeg,jpeg],
+      schema: { type: 'object', additionalProperties: false, required: ['reason', 'textComplete', 'edits'], properties: {
+        reason: { type: 'string' }, textComplete: { type: 'boolean' }, edits: { type: 'array', items: { type: 'object', additionalProperties: false,
+          required: ['lineId','source','english','reason'], properties: {lineId:{type:'string'},source:{type:['string','null']},
+            english:{type:['string','null']},reason:{type:'string'}}} },
+      } } };
     case 'pageImageProofread': {
       const { PAGE_PROOFREAD_SYSTEM, PAGE_PROOFREAD_SCHEMA } = await import('./pageProofread');
       const meta = await sharp(jpeg).metadata();

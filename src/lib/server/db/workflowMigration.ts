@@ -258,3 +258,46 @@ export function migrateSeriesReadingPreferences(db: Database.Database) {
     db.prepare("INSERT INTO schema_versions VALUES(9,?)").run(now);
   })();
 }
+
+/** Director progress and audit are independent of workflow completion/history. */
+export function migrateDirector(db: Database.Database) {
+  if (db.prepare('SELECT 1 FROM schema_versions WHERE version=10').get()) return;
+  db.transaction(() => {
+    db.exec(`
+CREATE TABLE director_runs (
+ id TEXT PRIMARY KEY, episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+ user_id TEXT REFERENCES users(id) ON DELETE SET NULL, scope TEXT NOT NULL, image_id TEXT,
+ model TEXT NOT NULL, proofreader TEXT NOT NULL, state TEXT NOT NULL,
+ page_ids TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0,
+ recheck_all INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_director_runs_episode ON director_runs(episode_id,created_at);
+CREATE TABLE director_pages (
+ episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+ image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+ state TEXT NOT NULL, fingerprint TEXT, run_id TEXT,
+ detail TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL,
+ PRIMARY KEY(episode_id,image_id)
+);
+CREATE TABLE director_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES director_runs(id) ON DELETE CASCADE,
+ episode_id TEXT NOT NULL, image_id TEXT, kind TEXT NOT NULL,
+ detail TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_director_events_run ON director_events(run_id,id);
+CREATE TABLE director_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES director_runs(id) ON DELETE CASCADE,
+ episode_id TEXT NOT NULL, image_id TEXT, label TEXT NOT NULL,
+ before_json TEXT NOT NULL, after_json TEXT NOT NULL,
+ undone INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_director_changes_run ON director_changes(run_id,id);
+CREATE TABLE director_assets (
+ run_id TEXT NOT NULL REFERENCES director_runs(id) ON DELETE CASCADE,
+ hash TEXT NOT NULL, PRIMARY KEY(run_id,hash)
+);
+`);
+    db.prepare('INSERT INTO schema_versions VALUES(10,?)').run(Date.now());
+  })();
+}

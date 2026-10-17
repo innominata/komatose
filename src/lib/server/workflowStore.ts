@@ -148,6 +148,10 @@ export function assetPath(id: string) {
 /** Current page documents first. The id range keeps the lookup on the covering index, off the undo blobs. */
 export function episodeOwnsAsset(episodeId: string, hash: string): boolean {
   if (!/^[a-f0-9]{64}$/.test(hash)) return false;
+  if (sqlite.prepare(`SELECT 1 FROM director_memory_assets a JOIN episodes e ON e.series_id=a.series_id
+    WHERE e.id=? AND a.hash=?`).get(episodeId, hash)) return true;
+  if (sqlite.prepare(`SELECT 1 FROM director_assets a JOIN director_runs r ON r.id=a.run_id
+    WHERE r.episode_id=? AND a.hash=? LIMIT 1`).get(episodeId, hash)) return true;
   const doc = sqlite.prepare(
     "SELECT 1 FROM workflow_docs WHERE episode_id=? AND id>=? AND id<? AND instr(data,?)>0 LIMIT 1",
   );

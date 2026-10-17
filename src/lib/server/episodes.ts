@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { and, eq } from 'drizzle-orm';
 import { db, sqlite } from './db';
@@ -166,13 +166,14 @@ export async function duplicateEpisode(opts: {
 }): Promise<{ id: string; title: string; slug: string }> {
 	assertEpisodeIdle(opts.episode.id);
 	const title = `${opts.episode.title} (copy)`;
-	const slug = await uniqueSlug('episode', episodeSlugify(title), opts.series.id);
+	const baseSlug = episodeSlugify(title);
+	let slug = await uniqueSlug('episode', baseSlug, opts.series.id);
 	const existing = await db.select({ sortOrder: episodes.sortOrder }).from(episodes).where(eq(episodes.seriesId, opts.series.id));
 	const sortOrder = existing.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
 	const t = now();
 	const id = nid();
 	const src = await db.select().from(episodes).where(eq(episodes.id, opts.episode.id)).get();
-	await db.insert(episodes).values({
+	const episodeValues = {
 		id,
 		seriesId: opts.series.id,
 		slug,
@@ -183,66 +184,84 @@ export async function duplicateEpisode(opts: {
 		glossary: src?.glossary || '[]',
 		createdAt: t,
 		updatedAt: t
-	});
+	};
 
 	const fromDir = episodeDir(opts.series.slug, opts.episode.slug);
-	const toDir = episodeDir(opts.series.slug, slug);
-	let copiedFiles = false;
+	let toDir = episodeDir(opts.series.slug, slug);
+	let ownsDirectory = false;
 	try {
-		if (existsSync(fromDir)) {
-			await mkdir(toDir, { recursive: true });
-			const names = await readdir(fromDir);
-			for (const name of names) {
-				if (name.includes('.bak') || name === 'undo.json') continue;
-				await copyFile(join(fromDir, name), join(toDir, name));
+		await mkdir(dirname(toDir), { recursive: true });
+		// A failed older copy may have left a folder without a chapter row.
+		// Reserve a fresh folder rather than overwriting that data.
+		for (let suffix = 2; ; suffix++) {
+			try {
+				await mkdir(toDir);
+				ownsDirectory = true;
+				break;
+			} catch (e) {
+				if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+				slug = await uniqueSlug('episode', `${baseSlug}-${suffix}`, opts.series.id);
+				toDir = episodeDir(opts.series.slug, slug);
 			}
-			copiedFiles = true;
+		}
+		if (existsSync(fromDir)) {
+			const entries = await readdir(fromDir, { withFileTypes: true });
+			for (const entry of entries) {
+				// Reslice undo directories, pixel backups and undo logs belong
+				// to the original chapter, not its independent copy.
+				if (!entry.isFile() || entry.name.includes('.bak') || entry.name === 'undo.json') continue;
+				await copyFile(join(fromDir, entry.name), join(toDir, entry.name));
+			}
 		}
 
-		const srcImages = await db.select().from(images).where(eq(images.episodeId, opts.episode.id));
-		const imageMap = new Map<string, string>();
-		for (const img of srcImages) {
-			const newId = nid();
-			imageMap.set(img.id, newId);
-			await db.insert(images).values({
-				...img,
-				id: newId,
-				episodeId: id,
-				createdAt: t,
-				updatedAt: t
-			});
-		}
+		// Publish the chapter and all its remapped records together, only
+		// after the files have been copied successfully.
+		sqlite.transaction(() => {
+			db.insert(episodes).values({ ...episodeValues, slug }).run();
+			const srcImages = db.select().from(images).where(eq(images.episodeId, opts.episode.id)).all();
+			const imageMap = new Map<string, string>();
+			for (const img of srcImages) {
+				const newId = nid();
+				imageMap.set(img.id, newId);
+				db.insert(images).values({
+					...img,
+					id: newId,
+					episodeId: id,
+					createdAt: t,
+					updatedAt: t
+				}).run();
+			}
 
-		const srcLines = await db.select().from(lines).where(eq(lines.episodeId, opts.episode.id));
-		const lineMap = new Map<string, string>();
-		for (const line of srcLines) {
-			const newId = nid();
-			lineMap.set(line.id, newId);
-			await db.insert(lines).values({
-				...line,
-				id: newId,
-				episodeId: id,
-				imageId: line.imageId ? imageMap.get(line.imageId) || null : null,
-				updatedAt: t
-			});
-		}
+			const srcLines = db.select().from(lines).where(eq(lines.episodeId, opts.episode.id)).all();
+			const lineMap = new Map<string, string>();
+			for (const line of srcLines) {
+				const newId = nid();
+				lineMap.set(line.id, newId);
+				db.insert(lines).values({
+					...line,
+					id: newId,
+					episodeId: id,
+					imageId: line.imageId ? imageMap.get(line.imageId) || null : null,
+					updatedAt: t
+				}).run();
+			}
 
-		const srcComments = await db.select().from(comments);
-		for (const c of srcComments) {
-			const newLineId = lineMap.get(c.lineId);
-			if (!newLineId) continue;
-			await db.insert(comments).values({
-				...c,
-				id: nid(),
-				lineId: newLineId,
-				createdAt: t
-			});
-		}
+			const srcComments = db.select().from(comments).all();
+			for (const c of srcComments) {
+				const newLineId = lineMap.get(c.lineId);
+				if (!newLineId) continue;
+				db.insert(comments).values({
+					...c,
+					id: nid(),
+					lineId: newLineId,
+					createdAt: t
+				}).run();
+			}
 
-		copyWorkflowDocs(opts.episode.id, id, imageMap, lineMap, t);
+			copyWorkflowDocs(opts.episode.id, id, imageMap, lineMap, t);
+		})();
 	} catch (e) {
-		if (copiedFiles) await rm(toDir, { recursive: true, force: true });
-		await db.delete(episodes).where(eq(episodes.id, id));
+		if (ownsDirectory) await rm(toDir, { recursive: true, force: true });
 		throw e;
 	}
 
@@ -258,9 +277,10 @@ export async function duplicateEpisode(opts: {
 }
 
 export async function deleteEpisode(opts: { series: Series; episode: Episode }) {
+	const dir = episodeDir(opts.series.slug, opts.episode.slug);
 	cancelAiTranslate(opts.episode.id);
 	await db.delete(episodes).where(eq(episodes.id, opts.episode.id));
-	await rm(episodeDir(opts.series.slug, opts.episode.slug), { recursive: true, force: true });
+	await rm(dir, { recursive: true, force: true });
 }
 
 export async function clearEpisodeMeta(opts: { series: Series; episode: Episode; user: PublicUser }) {

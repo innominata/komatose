@@ -122,6 +122,9 @@ test('API saves series choices with concurrency checks and notifies every chapte
     assert.equal(partial.status, 200, await partial.text());
     assert.equal(preferences('api-a', 'api').lang, 'korean');
     assert.equal(preferences('api-a', 'api').direction, 'rtl');
+    const format = await POST(event('api-a', { action: 'preferences', scope: 'series', expectedRevision: 3, data: { pageMode: 'strip' } }));
+    assert.equal(format.status, 200, await format.text());
+    assert.equal(preferences('api-b', 'api').pageMode, 'strip');
     const local = await POST(event('api-a', { action: 'preferences', expectedRevision: 0, data: { dpi: 144 } }));
     assert.equal(local.status, 200, await local.text());
     assert.deepEqual(doc('chapter:api-a').data, { dpi: 144 });
@@ -133,11 +136,11 @@ test('API saves series choices with concurrency checks and notifies every chapte
 
 test('API rejects invalid or chapter-scoped choices without changing stored settings', async () => {
   const before = doc('series:api');
-  for (const data of [{ lang: 'english' }, { lang: null }, { lang: ['korean'] }, { direction: 'sideways' }, { direction: ['rtl'] }, { direction: null }, { lang: 'korean', dpi: 96 }]) {
+  for (const data of [{ lang: 'english' }, { lang: null }, { lang: ['korean'] }, { direction: 'sideways' }, { direction: ['rtl'] }, { direction: null }, { pageMode: 'both' }, { lang: 'korean', dpi: 96 }]) {
     const response = await POST(event('api-a', { action: 'preferences', scope: 'series', expectedRevision: before.revision, data }));
     assert.equal(response.status, 400, JSON.stringify(data));
   }
-  for (const data of [{ lang: 'korean' }, { direction: 'ltr' }]) {
+  for (const data of [{ lang: 'korean' }, { direction: 'ltr' }, { pageMode: 'strip' }]) {
     const response = await POST(event('api-a', { action: 'preferences', expectedRevision: doc('chapter:api-a').revision, data }));
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /belong to the series/);

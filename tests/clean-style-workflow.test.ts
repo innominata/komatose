@@ -14,7 +14,7 @@ const { sqlite } = await import('../src/lib/server/db');
 const { getDoc, putDoc, storeAsset, readAsset } = await import('../src/lib/server/workflowStore');
 const { getSeries, getEpisode, listImages, listLines } = await import('../src/lib/server/queries');
 const { forgetPageHistory, completeOutstandingPages, rememberPageSteps } = await import('../src/lib/server/stepUndo');
-const { preferences, resolveStyle, typesetRegions, applyCleaning, readiness } = await import('../src/lib/server/workflowService');
+const { preferences, resolveStyle, typesetRegions, applyCleaning, readiness, workflowState } = await import('../src/lib/server/workflowService');
 const { uploadFont } = await import('../src/lib/server/typesetting');
 const { listJobs, createJob, updateJob } = await import('../src/lib/server/jobs');
 const { POST } = await import('../src/routes/api/episodes/[eid]/workflow/+server');
@@ -145,6 +145,8 @@ test('saved-style batch renders real text, preserves shapes/masks/transforms and
     assert.ok(doc.data.layout.svg.includes('<path'));
     assert.deepEqual((await listLines('refit')).find(l => l.id === line.id), line);
   }
+  const refreshed = await workflowState(ctx.series, ctx.episode);
+  for (const id of ['refit-a', 'refit-b']) assert.equal(refreshed.regions[id].data.style?.size, undefined);
 });
 
 test('chapter category refit filters other types, ignored/unplaced/blank text and locked layouts', async () => {

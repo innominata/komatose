@@ -1,5 +1,6 @@
 import { activeRegionKinds, type RegionKind } from "./regionCatalog";
 import { LINE_TYPES, type OcrLang, type Detector } from "./types";
+import { effectiveTextRotation } from "./textRotation";
 
 export function isBlankRegion(line: { source?: string | null; body: string }): boolean {
   return !line.source?.trim() && !line.body.trim();
@@ -103,6 +104,7 @@ export type Preferences = {
   /** Series settings; legacy chapter overrides are ignored. */
   lang: OcrLang;
   direction: "rtl" | "ltr";
+  pageMode: "pages" | "strip";
   dpi: number | null;
   aliases: string;
   translationPreferences: string;
@@ -124,6 +126,7 @@ export type Preferences = {
 export const DEFAULT_PREFERENCES: Preferences = {
   lang: "japanese",
   direction: "rtl",
+  pageMode: "pages",
   dpi: null,
   aliases: "",
   translationPreferences: "",
@@ -217,10 +220,11 @@ export function styleIsOwned(style: Partial<TextStyle> | undefined): boolean {
  */
 export function regionPanelStyle(
   inherited: TextStyle,
-  data: { style?: Partial<TextStyle>; layout?: { style?: Partial<TextStyle> } } | undefined,
+  data: { style?: Partial<TextStyle>; layout?: { style?: Partial<TextStyle> }; geometryRotation?: number } | undefined,
 ): TextStyle {
   if (data?.style && styleIsOwned(data.style)) return { ...DEFAULT_STYLE, ...data.style };
-  if (data?.layout?.style) return { ...DEFAULT_STYLE, ...data.layout.style };
+  if (data?.layout?.style) return { ...DEFAULT_STYLE, ...data.layout.style,
+    rotation: effectiveTextRotation(-(data.geometryRotation ?? 0), data.layout.style.rotation ?? 0), ...data.style };
   return { ...inherited, ...data?.style };
 }
 export type FittedRow = {
@@ -244,19 +248,44 @@ export type FittedLayout = {
   font: { id: string; hash: string; postscriptName: string };
 };
 export type RegionData = {
+  /** Retain the region and its text while suppressing its English lettering. */
+  renderEnabled?: boolean;
+  directorRenderingReview?: {runId:string;duplicateOf:string;evidence:string;reviewed?:boolean};
+  /** Machine exclusions stay distinguishable from a later human ignore/edit. */
+  directorDetectionReview?: {
+    runId: string;
+    lineRevision: number;
+    verdict: "non-text" | "duplicate";
+    duplicateOf: string;
+    evidence: string;
+  };
   speaker?: import('./characters').CharacterAssignment;
   sourceDecision?: import('./decider').TranscriptionDecision;
   detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
   bubbleBounds?: { x: number; y: number; w: number; h: number };
   detectionKind?: "bubble" | "free" | "unknown";
+  /** Visual evidence is valid only for this raw image and geometry. */
+  directorPresentation?: {
+    raw: string;
+    box: string;
+    source: string;
+    enclosure: "bubble" | "box" | "none" | "uncertain";
+    handwritten: boolean;
+    role: "speech" | "thought" | "narration" | "sfx" | "uncertain";
+    reason: string;
+  };
   /** Detection found a black rectangular border around this region. */
   boxed?: boolean;
   polygon?: Point[];
+  /** Rotation inherited by lettering from the geometry handle; style.rotation is the text-only offset. */
+  geometryRotation?: number;
   /** Signature of a polygon in an old page frame; changing the shape invalidates it. */
   resliceStalePolygon?: string;
   geometryApproved?: boolean;
   geometryConfidence?: number;
   style?: Partial<TextStyle>;
+  /** A category refit keeps only placement overrides; avoid copying the resolved default on chapter load. */
+  styleFromSeries?: boolean;
   layout?: FittedLayout;
   locked?: boolean;
   /** Page-sized grayscale PNG. White reveals typeset text; black conceals it (Photoshop layer-mask convention). */
@@ -276,6 +305,10 @@ export type PageData = {
   thumbnailAt?: number;
   cleaned?: string;
   cleanBase?: string; // Applied cleaning passes; prepared/original remain unchanged.
+  /** Newly detected regions still needing removal from the working artwork. */
+  pendingCleanRegions?: string[];
+  /** Verified regional cleaning survives retries while source/artwork/geometry match. */
+  directorCleaning?: {raw:string;artwork:string;regions:Record<string,{geometry:string;method:string;bubbleToolsOnly?:boolean}>};
   /** Artwork the restore brush paints from; pinned across restore strokes after an inpaint. */
   previousArtwork?: string;
   mask?: string;
@@ -354,6 +387,7 @@ export function pageStepStamp(
           styleText,
           data.textMask ?? "",
           data.locked ? "1" : "0",
+          ...(data.renderEnabled===false||data.directorRenderingReview ? [data.renderEnabled===false?"render-off":"render-on",data.directorRenderingReview?.reviewed?"render-reviewed":"render-unreviewed"]:[]),
         ].join("\t");
       })
       .join("\n");

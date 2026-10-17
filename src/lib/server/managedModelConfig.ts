@@ -47,7 +47,7 @@ export function launchPreset(preset: "generic" | "qwen38" | "gemma4"): ManagedLa
       contextSize: Number(process.env.SCAN_LLM_CONTEXT) || 131072,
       gpuLayers: 999,
       slots: 1,
-      startOnBoot: true,
+      startOnBoot: false,
       extraArgs: [],
     };
   }

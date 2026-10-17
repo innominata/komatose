@@ -52,35 +52,31 @@ try {
   // "labelFor is not a function" and blank the studio.
   expect(errors).toEqual([]);
 
-  // Labels render for the selected region only, clipped inside it.
-  const labelClipId = async () => {
-    const attr = await page.locator("g.region-label").locator("..").getAttribute("clip-path");
-    return attr?.replace(/^url\(#region-label-clip-/, "").replace(/\)$/, "");
-  };
+  // Labels render for the selected region only, outside its outline.
+  const labelRegionId = async () =>
+    (await page.locator("g.region-label text").getAttribute("id"))?.replace(/^region-label-/, "");
   const regionButton = page.getByRole("button", { name: /^Region 1, Dialogue/ });
   await regionButton.click();
   await expect(page.locator("g.region-label")).toHaveCount(1);
   const label = page.locator("g.region-label");
   await expect(label.locator("text")).toHaveText(/^1 · Dialogue$/);
   const selectedId = (await state()).lines.find((l) => l.imageId === "fixture-page-0").id;
-  expect(await labelClipId()).toBe(selectedId);
-  const inside = await page.evaluate((id) => {
-    const clip = document.querySelector(`#region-label-clip-${id} rect`);
-    const box = document.querySelector(`rect[aria-label^="Region 1,"]`);
-    return {
-      clip: clip && [clip.getAttribute("x"), clip.getAttribute("y")],
-      box: box && [box.getAttribute("x"), box.getAttribute("y")],
-      labelInside: !!document.querySelector(`g[clip-path="url(#region-label-clip-${id})"] g.region-label`),
-    };
-  }, selectedId);
-  expect(inside.labelInside).toBe(true);
-  expect(inside.clip).toEqual(inside.box);
+  expect(await labelRegionId()).toBe(selectedId);
+  const placement = await page.evaluate(() => {
+    const region = document.querySelector(`rect[aria-label^="Region 1,"]`).getBoundingClientRect();
+    const label = document.querySelector("g.region-label rect").getBoundingClientRect();
+    const number = document.querySelector("g.region-num circle").getBoundingClientRect();
+    const outside = (item) => item.bottom <= region.top || item.top >= region.bottom ||
+      item.right <= region.left || item.left >= region.right;
+    return { labelOutside: outside(label), numberOutside: outside(number) };
+  });
+  expect(placement).toEqual({ labelOutside: true, numberOutside: true });
 
   // Moving the selection moves the one label; it never accumulates.
   await page.getByRole("button", { name: /^Region 2, Dialogue/ }).click();
   await expect(page.locator("g.region-label")).toHaveCount(1);
   await expect(label.locator("text")).toHaveText(/^2 · Dialogue$/);
-  expect(await labelClipId()).not.toBe(selectedId);
+  expect(await labelRegionId()).not.toBe(selectedId);
   await regionButton.click();
   await expect(label.locator("text")).toHaveText(/^1 · Dialogue$/);
 
@@ -229,7 +225,7 @@ try {
 
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(
-    "Browser acceptance passed: region labels inside the selection only, 80% region borders, black 25% reading-flow arrows, per-user region colors saved from the View menu, dynamic series region types added, assigned, and removed without losing existing labels.",
+    "Browser acceptance passed: region labels outside the selection, 80% region borders, black 25% reading-flow arrows, per-user region colors saved from the View menu, dynamic series region types added, assigned, and removed without losing existing labels.",
   );
 } finally {
   await page

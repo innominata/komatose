@@ -1023,7 +1023,11 @@ def bubble_fill(img, req):
                 continue
             # Lettering in the outline colour can split the fill and still touch
             # the border. Join those pieces before filling the holes.
-            region = _bridge_split_fill(work, region)
+            bridged = _bridge_split_fill(work, region)
+            if req.get('strict') and not np.array_equal(bridged, region):
+                raise ValueError('Lettering or artwork touches the balloon border; use inpainting')
+            if not req.get('strict'):
+                region = bridged
 
             # Text glyphs are holes in the flooded interior: components of the
             # complement that never reach the window border.
@@ -1036,6 +1040,22 @@ def bubble_fill(img, req):
             if not int(cv2.countNonZero(fill)):
                 raise ValueError("bubble is too thin to fill")
 
+            if req.get('strict'):
+                protected_mask = np.zeros_like(fill)
+                for protected in req.get('excludeRegions', []):
+                    if len(protected) < 3:
+                        continue
+                    vertices = np.array([[round(p['x']*W)-cx0, round(p['y']*H)-cy0] for p in protected], np.int32)
+                    cv2.fillPoly(protected_mask, [vertices], 255)
+                if protected_mask[sy-cy0, sx-cx0]:
+                    raise ValueError('Fill point is inside a locked or already cleaned region')
+                # Connected balloons share an interior. Preserve neighbouring
+                # regions pixel-for-pixel rather than rejecting the whole fill.
+                # Find and validate the OUTER border before clipping; exclusions
+                # must never manufacture a closed border around an open bubble.
+                fill[protected_mask > 0] = 0
+                if not cv2.countNonZero(fill):
+                    raise ValueError('Balloon contains no unprotected interior to fill')
             colour = np.median(work[region > 0], axis=0).astype(np.uint8)
             work[fill > 0] = colour
             img[cy0:cy1, cx0:cx1] = work
@@ -1102,6 +1122,20 @@ def removal_mask(img, req):
         req['_maskDiagnostics'] = diagnostics
         req['_maskMeta'] = meta
         req['_requestedMaskEngine'] = engine
+    elif req.get('regionMask'):
+        # Explicit instruction-editor fallback: do not depend on glyph detection.
+        mask = np.zeros((H, W), np.uint8)
+        for region in req.get('regions', []):
+            if len(region) >= 3:
+                vertices = np.array([[round(p['x']*W), round(p['y']*H)] for p in region], np.int32)
+                cv2.fillPoly(mask, [vertices], 255)
+        if not np.any(mask):
+            raise ValueError('Define a region before creating a full-region mask')
+        expansion = max(0, min(12, int(req.get('expansion', 0))))
+        if expansion:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (expansion*2+1, expansion*2+1))
+            mask = cv2.dilate(mask, kernel)
+        req['_maskMeta'] = {'engine': 'region', 'version': 'full-region-v1', 'backend': 'CPU'}
     elif req.get('mask'):
         mask = cv2.imread(req['mask'], cv2.IMREAD_GRAYSCALE)
         if mask is None or mask.shape != (H,W):
@@ -1120,6 +1154,10 @@ def removal_mask(img, req):
     if req.get('detect'):
         # Clip the complete proposal, including padding and any supplied strokes.
         mask = cv2.bitwise_and(mask, allowed)
+    for protected in req.get('excludeRegions', []):
+        if len(protected) >= 3:
+            vertices = np.array([[round(p['x']*W), round(p['y']*H)] for p in protected], np.int32)
+            cv2.fillPoly(mask, [vertices], 0)
     return (mask>127).astype(np.uint8)*255
 
 
@@ -1336,11 +1374,15 @@ def _copy_circle(src, dst, sx, sy, dx, dy, radius):
     dst[yy[keep], xx[keep]] = src[src_y[keep], src_x[keep]]
 
 
-def _feather_kernel(radius):
+def _feather_kernel(radius, feather=100):
     r = max(1, int(radius))
     yy, xx = np.ogrid[-r:r + 1, -r:r + 1]
     dist = np.sqrt((xx * xx + yy * yy).astype(np.float32))
-    t = np.clip(dist / float(r), 0.0, 1.0)
+    strength = max(0.0, min(100.0, float(feather))) / 100.0
+    if strength == 0:
+        return (dist <= r).astype(np.float32)
+    inner = r * (1.0 - strength)
+    t = np.clip((dist - inner) / (r - inner), 0.0, 1.0)
     return (1.0 - t * t * (3.0 - 2.0 * t)).astype(np.float32)
 
 
@@ -1429,7 +1471,7 @@ def _blend_from_file(img, req, path_key, missing_msg, size_msg, paint_msg, metho
     painted = 0
     for stroke in strokes:
         radius = max(1, min(200, int(stroke.get('radius', 8))))
-        kernel = _feather_kernel(radius)
+        kernel = _feather_kernel(radius, stroke.get('feather', 100))
         mask = np.zeros((H, W), np.float32)
         for x, y in _brush_pixels(stroke.get('points') or [], W, H):
             _stamp_feather(mask, x, y, kernel)
@@ -1547,9 +1589,14 @@ def run(req):
                             'neighbors': [other['box'] for j, other in enumerate(regions) if j != i]})
                             for i, r in enumerate(regions)]}
     if req['cmd']=='bubble-fill':
+        before = img.copy()
         method = bubble_fill(img, req)
+        changed = np.any(img != before, axis=2)
+        ys, xs = np.where(changed)
+        bounds = {'x':float(xs.min())/img.shape[1], 'y':float(ys.min())/img.shape[0],
+                  'w':float(xs.max()-xs.min()+1)/img.shape[1], 'h':float(ys.max()-ys.min()+1)/img.shape[0]} if len(xs) else None
         if not cv2.imwrite(req['out'], img): raise ValueError('Clean write failed')
-        return {'method': method, 'backend': 'CPU'}
+        return {'method': method, 'backend': 'CPU', 'changedBounds': bounds}
     if req['cmd']=='clone-brush':
         method = clone_brush(img, req)
         if not cv2.imwrite(req['out'], img): raise ValueError('Clean write failed')

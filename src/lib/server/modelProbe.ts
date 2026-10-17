@@ -30,7 +30,7 @@ export async function probeModelRow(row: ModelRow, operation: ModelTaskId = 'tra
     const requireAll = operation === 'sourceDecide';
     const acceptEither = !requireAll && fixtures.length > 1;
     let lastFailure: unknown;
-    const failures: { label: string; reason: string; outcome: 'failed_validation' | 'error' | 'cancelled' }[] = [];
+    const failures: { label: string; reason: string; outcome: 'failed_validation' | 'error' | 'cancelled' | 'unsupported' }[] = [];
     const passed: { label: string; value: unknown }[] = [];
     for (const [index, input] of fixtures.entries()) {
     const label = input.probeLabel || (operation === 'translate' || operation === 'vision' ? String(input.lang || 'fixture') : index === 0 ? 'dialogue' : 'sfx');
@@ -43,7 +43,7 @@ export async function probeModelRow(row: ModelRow, operation: ModelTaskId = 'tra
     if (!invoke && deps.task) invoke = () => deps.task!(row, operation);
     const value = await contract.run(row, input, { diagnostic: true, abort: deps.abort ? AbortSignal.any([deps.abort, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000), invoke });
     await contract.validateFixture(value, input);
-    if (!acceptEither || operation !== 'detect') {
+    if (!requireAll && (!acceptEither || operation !== 'detect')) {
       return { operation, fingerprint, ok: true, outcome: 'passed', at: Date.now(), ms: Date.now() - started,
         reason: acceptEither ? `Passed the ${label} fixture` : undefined,
         outputPreview: truncateOutputPreview(JSON.stringify(value instanceof Map ? Object.fromEntries(value) : value), 2000) };
@@ -52,20 +52,21 @@ export async function probeModelRow(row: ModelRow, operation: ModelTaskId = 'tra
     } catch (error) {
       if (requireAll || !acceptEither) throw error;
       if (deps.abort?.aborted || (error as Error)?.name === 'AbortError') throw error;
-      if (error instanceof ModelTaskError && error.outcome === 'unsupported') throw error;
+      // A language-specific model can reject Japanese and still pass Korean.
+      if (error instanceof ModelTaskError && error.outcome === 'unsupported' && !['vision','translate'].includes(operation)) throw error;
       lastFailure = error;
-      const outcome = error instanceof ModelTaskError && (error.outcome === 'failed_validation' || error.outcome === 'cancelled') ? error.outcome : 'error';
+      const outcome = error instanceof ModelTaskError ? error.outcome : 'error';
       failures.push({ label, reason: (error as Error).message || String(error), outcome });
     }
     }
-    if (acceptEither && passed.length) {
+    if ((acceptEither || requireAll) && passed.length) {
       const value = passed[0].value;
       return { operation, fingerprint, ok: true, outcome: 'passed', at: Date.now(), ms: Date.now() - started,
         reason: `Passed ${passed.map((item) => item.label).join(' + ')} fixture${passed.length === 1 ? '' : 's'}`,
         outputPreview: truncateOutputPreview(JSON.stringify(value instanceof Map ? Object.fromEntries(value as Map<unknown, unknown>) : value), 2000) };
     }
     if (failures.length > 1) {
-      const outcome = failures.some((item) => item.outcome === 'error') ? 'error' : failures.some((item) => item.outcome === 'cancelled') ? 'cancelled' : 'failed_validation';
+      const outcome = failures.every((item) => item.outcome === 'unsupported') ? 'unsupported' : failures.some((item) => item.outcome === 'error') ? 'error' : failures.some((item) => item.outcome === 'cancelled') ? 'cancelled' : 'failed_validation';
       throw new ModelTaskError(outcome, failures.map((item) => `${item.label}: ${item.reason}`).join(' · '));
     }
     throw lastFailure;

@@ -36,6 +36,8 @@
     fitting = false,
     onfit,
     onlock,
+    onrender,
+    onconfirmrender,
     onrectangle,
     onfitbubble,
     onapprovegeometry,
@@ -65,6 +67,8 @@
     fitting?: boolean;
     onfit?: () => void;
     onlock?: () => void;
+    onrender?:()=>void;
+    onconfirmrender?:()=>void;
     onrectangle?: () => void;
     onfitbubble?: () => void;
     onapprovegeometry?: () => void;
@@ -113,6 +117,16 @@
       >{regionDoc.data.locked ? "Unlock layout" : "Lock layout"}</button>
       <button type="button" disabled={!canClean || busy || regionDoc.data.locked} onclick={() => onrectangle?.()}>Set polygon to region bounds</button>
     </div>
+    <label><input type="checkbox" checked={regionDoc.data.renderEnabled!==false} disabled={!canClean||busy||regionDoc.data.locked} onchange={()=>onrender?.()}> Render English text</label>
+    {#if regionDoc.data.renderEnabled===false}
+      <p role="status">Rendering is off. Source, English and layout are retained for review.</p>
+      {#if regionDoc.data.directorRenderingReview}
+        <p>{regionDoc.data.directorRenderingReview.evidence}</p>
+        {#if !regionDoc.data.directorRenderingReview.reviewed}
+          <button type="button" disabled={!canClean||busy} onclick={()=>onconfirmrender?.()}>Confirm rendering off</button>
+        {:else}<small>Rendering decision reviewed.</small>{/if}
+      {/if}
+    {/if}
     {#if tab === "text"}
     <div data-find="autofit-region">
     <label
@@ -163,7 +177,7 @@
           </div>
         </div>
         <div class="style-grid">
-          {#each [["size", "Default size (pt)"], ["minSize", "Minimum size (pt)"], ["leading", "Leading multiplier"], ["padding", "Padding (pt)"], ["outlineWidth", "Outline (pt)"], ["rotation", "Rotation (°)"], ["skewX", "Skew H (°)"], ["skewY", "Skew V (°)"]] as [k, label]}<label
+          {#each [["size", "Default size (pt)"], ["minSize", "Minimum size (pt)"], ["leading", "Leading multiplier"], ["padding", "Padding (pt)"], ["outlineWidth", "Outline (pt)"], ["rotation", "Text rotation (°)"], ["skewX", "Skew H (°)"], ["skewY", "Skew V (°)"]] as [k, label]}<label
               >{label}<input
                 type="number"
                 step={k === "skewX" || k === "skewY" ? 1 : ".25"}
@@ -272,7 +286,7 @@
     {#if tab === "shape"}
       <section class="sec" data-find="bubble-shape">
         <h3>Bubble geometry</h3>
-        <p class="panel-hint">Draw a rectangle, oval, or polygon on the Geometry rail tools. Fit bubble traces the speech bubble; approve once the outline matches the art.</p>
+        <p class="panel-hint">Draw a rectangle, oval, or polygon on the Geometry rail tools. Drag the cyan handle to rotate the geometry and its text. Text rotation in Style adds an offset without changing the geometry and refits the lettering. Fit bubble traces the speech bubble; approve once the outline matches the art.</p>
         <div class="control-row">
           <button type="button" disabled={busy || !canClean || regionDoc.data.locked} data-find="fit-bubble" onclick={() => onfitbubble?.()}><i class="bi bi-crosshair" aria-hidden="true"></i> Fit bubble (enclosed interior)</button>
           {#if canSegmentBubble}

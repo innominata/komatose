@@ -79,9 +79,15 @@ export function acquireModelUse(id: string, jobId?: string, managed = false) {
     }
   };
 }
-export function lockModelLifecycle(id: string, opts?: { ignoreJobReservations?: boolean }) {
+export function lockModelLifecycle(
+  id: string,
+  opts?: { ignoreJobReservations?: boolean; ignoreJobIds?: readonly string[] },
+) {
   const s = state(id);
-  const uses = opts?.ignoreJobReservations ? s.calls : activeModelUses(id);
+  const uses = opts?.ignoreJobReservations
+    ? s.calls
+    : s.calls +
+      [...s.jobs].filter((job) => !opts?.ignoreJobIds?.includes(job)).length;
   if (s.locked || uses)
     throw Object.assign(
       new Error("Model is busy. Finish or cancel its jobs first."),

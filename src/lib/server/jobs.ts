@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { sqlite } from "./db";
 import { broadcast } from "./realtime";
+import { directorContext, directorJobLog } from './directorAudit';
 
 export type JobRow = {
   id: string;
@@ -346,6 +347,7 @@ export function appendJobLog(
   const prev = readJobProgress(id);
   const log = Array.isArray(prev.log) ? [...(prev.log as JobLogEntry[])] : [];
   const usage = entry.usage;
+  directorJobLog({ ...entry, imageId: entry.imageId ?? ctx?.imageId });
   const usageText = entry.usageText ?? (usage ? formatJobUsage(usage) : undefined);
   log.push({
     t: entry.t ?? Date.now(),
@@ -370,7 +372,7 @@ export function appendJobLog(
 }
 
 export function sanitizeLlmMessages(messages: unknown): string {
-  if (!Array.isArray(messages)) return clipJobText(String(messages ?? ""));
+  if (!Array.isArray(messages)) return directorContext() ? String(messages ?? "") : clipJobText(String(messages ?? ""));
   const parts: string[] = [];
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") continue;
@@ -378,7 +380,8 @@ export function sanitizeLlmMessages(messages: unknown): string {
     const content = (msg as { content?: unknown }).content;
     parts.push(`${role}: ${sanitizeLlmContent(content)}`);
   }
-  return clipJobText(parts.join("\n\n"));
+  const joined = parts.join("\n\n");
+  return directorContext() ? joined : clipJobText(joined);
 }
 
 function sanitizeLlmContent(content: unknown): string {
@@ -469,7 +472,7 @@ export function listJobs(episodeId: string, scope: "full" | "summary" = "full") 
     .prepare(
       "SELECT job_pages.* FROM job_pages JOIN workflow_jobs ON workflow_jobs.id=job_pages.job_id WHERE workflow_jobs.episode_id=?",
     )
-    .all(episodeId) as { job_id: string }[];
+    .all(episodeId) as { job_id: string; image_id: string; state: string; error: string | null }[];
   const pagesByJob = new Map<string, typeof pages>();
   for (const page of pages) {
     const list = pagesByJob.get(page.job_id) ?? [];

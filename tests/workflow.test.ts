@@ -1699,6 +1699,24 @@ test("TTF/OTF versioned fonts, duplicate detection and missing glyph reporting",
   assert.deepEqual(missing.missingGlyphs, ["\u{10ffff}"]);
 });
 
+test("geometry rotation is inherited while the style panel keeps the text offset", async () => {
+  const { regionPanelStyle } = await import("../src/lib/workflow");
+  const { rotateNormalizedPoints } = await import("../src/lib/textTransform");
+  const line = { ...(await listLines("e"))[0], body: "A longer line of English text", x: 0.1, y: 0.2, w: 0.4, h: 0.2 };
+  const page = (await listImages("e"))[0];
+  const style = { ...DEFAULT_STYLE, fontId: ttf.font.id, rotation: 0 };
+  const polygon = rotateNormalizedPoints(regionRectangle(line), { x: 0.3, y: 0.3 }, 30, page.width, page.height);
+  const region = { polygon, geometryRotation: 30, style };
+  const inherited = await fitText(line, region, page, style, 72);
+  assert.equal(inherited.style.rotation, 30);
+  assert.equal(regionPanelStyle(style, { ...region, layout: inherited }).rotation, 0);
+  const offsetStyle = { ...style, rotation: 25 };
+  const offset = await fitText(line, region, page, offsetStyle, 72);
+  assert.equal(offset.style.rotation, 55);
+  assert.notEqual(offset.key, inherited.key);
+  assert.equal(regionPanelStyle(style, { geometryRotation: 30, layout: offset }).rotation, 25);
+});
+
 test("text fill and outline opacity are fitted into the lettering and the PSD layer", async () => {
   assert.equal(validateStyle({ fillOpacity: 140.4 }).fillOpacity, 100);
   assert.equal(validateStyle({ outlineOpacity: -8 }).outlineOpacity, 0);
@@ -3294,17 +3312,7 @@ test("moving and resetting placed text preserves glyph layout without refitting"
   const movedLine = { ...line, x: 0.2, y: 0.3 };
   assert.equal(moved.layout!.key, layoutKey(movedLine, moved, page, style, 96));
   const reset = transformPlacedText(movedLine, moved, page, 0.2, 0.3, 0);
-  assert.notDeepEqual(reset.polygon, moved.polygon);
-  const { rotateNormalizedPoints } = await import("../src/lib/textTransform");
-  const box = moved.polygon!;
-  const center = {
-    x: (Math.min(...box.map(p => p.x)) + Math.max(...box.map(p => p.x))) / 2,
-    y: (Math.min(...box.map(p => p.y)) + Math.max(...box.map(p => p.y))) / 2,
-  };
-  const turned = rotateNormalizedPoints(box, center, -30, page.width, page.height);
-  for (const [i, point] of reset.polygon!.entries()) {
-    assert.ok(Math.abs(point.x - turned[i].x) < 1e-9 && Math.abs(point.y - turned[i].y) < 1e-9);
-  }
+  assert.deepEqual(reset.polygon, moved.polygon, "text rotation must leave bubble geometry unchanged");
   assert.equal(reset.style!.rotation, 0);
   assert.equal(reset.layout!.style.rotation, 0);
   assert.deepEqual(reset.layout!.rows, moved.layout!.rows);

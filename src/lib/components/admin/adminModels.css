@@ -324,6 +324,10 @@
 }
 @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
 .amodels .drawer-head { padding: 1rem 1.2rem 0.8rem; border-bottom: 1px solid var(--line); }
+.amodels .name-line { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.3rem; }
+.amodels .name-line h2 { margin: 0; }
+.amodels .rename { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.3rem; }
+.amodels .rename input { flex: 1; min-width: 0; }
 .amodels .drawer-body { padding: 0.4rem 1.2rem 2rem; overflow: auto; flex: 1; }
 .amodels .d-sec { padding: 0.9rem 0; border-bottom: 1px solid var(--line); }
 .amodels .d-sec:last-child { border-bottom: 0; }
@@ -436,8 +440,9 @@ body.admin-dlg-open { overflow: hidden; }
 .amodels .testing-note { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--muted); }
 .amodels .matrix-legend .mx { width: 20px; height: 20px; font-size: 0.8rem; margin-right: 0.3rem; }
 .amodels .devices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
-.amodels .resident { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.6rem; align-items: baseline; }
+.amodels .resident { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.6rem; align-items: center; }
 .amodels .resident .mem { white-space: nowrap; text-align: right; }
+.amodels .resident .actions { display: inline-flex; gap: 0.45rem; align-items: center; justify-content: flex-end; }
 .amodels .device { display: grid; gap: 0.5rem; }
 .amodels .device h3 { font-size: 1rem; }
 .amodels .svc-table td .row { flex-wrap: nowrap; }

@@ -13,6 +13,11 @@ const EXT: Record<string, string> = {
 };
 
 export function episodeDir(seriesSlug: string, episodeSlug: string): string {
+	for (const slug of [seriesSlug, episodeSlug]) {
+		if (!slug || slug === '.' || slug === '..' || slug.includes('/') || slug.includes('\\')) {
+			throw new Error('Invalid image folder slug');
+		}
+	}
 	return join(IMAGES_DIR, seriesSlug, episodeSlug);
 }
 

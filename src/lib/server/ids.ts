@@ -32,7 +32,7 @@ export function episodeSlugify(input: string): string {
 		.replace(/[\s_]+/g, '-')
 		.replace(/-+/g, '-')
 		.replace(/^-|-$/g, '');
-	return s || 'chapter';
+	return s && s !== '.' && s !== '..' ? s : 'chapter';
 }
 
 export function now(): number {

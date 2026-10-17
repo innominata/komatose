@@ -20,7 +20,6 @@
     duplicateWarning,
     numberingStale,
     pendingFiles = $bindable([]),
-    stitch = $bindable(false),
     chapterDpi = $bindable(""),
     resliceSizing = $bindable<ResliceSizing>("pages"),
     resliceMaxHeight = $bindable<number | undefined>(2048),
@@ -42,6 +41,7 @@
     onsaveseriesprefs,
     onsavedpi,
     onuploadcredit,
+    onuploadchaptercredit,
     onclearcredit,
     section = "full",
   }: {
@@ -55,7 +55,6 @@
     duplicateWarning: string;
     numberingStale: boolean;
     pendingFiles?: File[];
-    stitch?: boolean;
     chapterDpi?: string;
     resliceSizing?: ResliceSizing;
     resliceMaxHeight?: number;
@@ -77,6 +76,7 @@
     onsaveseriesprefs: (data: Record<string, unknown>) => void;
     onsavedpi: () => void;
     onuploadcredit: (kind: CreditKind, file: File) => void;
+    onuploadchaptercredit: (kind: CreditKind, file: File) => void;
     onclearcredit: (kind: CreditKind) => void;
     section?: "full" | "upload" | "credits" | "defaults" | "series";
   } = $props();
@@ -89,10 +89,6 @@
     pre: images.some((img) => img.role === "pre-credits"),
     post: images.some((img) => img.role === "post-credits"),
   });
-  const canAddCredits = $derived(
-    Boolean(credits.pre || credits.post) &&
-      ((credits.pre && !hasKind.pre) || (credits.post && !hasKind.post)),
-  );
 
 </script>
 
@@ -100,7 +96,7 @@
   {#if section === "full"}
   <h1>Prepare the chapter</h1>
   <p>
-    Import pages in reading order, organize spreads or strips, then renumber for
+    Import images in reading order, organize {preferences.pageMode === "strip" ? "strips" : "pages"}, then renumber for
     export. Use the thumbnail checkboxes to delete pages together or extract a
     copy to a new chapter. Shift-click selects a range.
   </p>
@@ -128,10 +124,7 @@
               onclick={() => (pendingFiles = pendingFiles.filter((_, n) => n !== i))}
               >Remove</button
             >
-          </div>{/each}<label
-          ><input type="checkbox" bind:checked={stitch} /> Stitch these images into
-          strips</label
-        ><button class="primary" disabled={busy} onclick={onupload}
+          </div>{/each}<p>{preferences.pageMode === "strip" ? "Short uploads are automatically joined into strips." : "Images will remain separate pages."}</p><button class="primary" disabled={busy} onclick={onupload}
           >Upload in this order</button
         >
       </div>{/if}
@@ -154,10 +147,9 @@
     {#if section === "full" || section === "credits"}
     <h2 data-find="tab-prepare-credits">Series credits</h2>
     <p>
-      Optional pre-credits and post-credits pages are saved on the series. Add
-      them to this chapter with one click. Auto-align and auto-crop ignore them
-      when measuring story pages, then scale credits to that width without
-      padding or cropping.
+      Series credits are included in every chapter export automatically. Upload a
+      chapter image below when this chapter needs different credits. Auto-align
+      and auto-crop ignore credits when measuring story pages.
     </p>
     <div class="credits-slots">
       {#each slots as slot}
@@ -170,9 +162,9 @@
               alt=""
             />
             <p>{credit.originalName} · {credit.width}×{credit.height}</p>
-            <p>
-              {hasKind[slot.kind] ? "Already in this chapter." : "Not in this chapter yet."}
-            </p>
+            <p>{hasKind[slot.kind] ? "This chapter has its own credits image." : "Included automatically in this chapter’s exports."}</p>
+            {#if canUpload}<label>Replace series default<input type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+              disabled={busy} onchange={(e) => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (file) onuploadcredit(slot.kind, file); }} /></label>{/if}
             {#if canUpload}<button
                 disabled={busy}
                 onclick={() => onclearcredit(slot.kind)}>Remove from series</button
@@ -195,32 +187,30 @@
           {:else}
             <p>None saved.</p>
           {/if}
+          {#if canUpload}
+            <label>{hasKind[slot.kind] ? `Replace chapter ${slot.label.toLowerCase()}` : `Override in this chapter`}
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy}
+                onchange={(e) => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (file) onuploadchaptercredit(slot.kind, file); }} />
+            </label>
+          {/if}
         </div>
       {/each}
     </div>
-    <div class="control-row">
-      <button
-        class="primary"
-        disabled={busy || !canUpload || !canAddCredits}
-        onclick={() => onpageop({ op: "add-credits" })}
-        >Add credits to this chapter</button
-      >
-    </div>
     {#if canUpload && section === "full"}
     <div class="control-row">
-      <button disabled={busy} onclick={() => onpageop({ op: "split" })}
+      {#if preferences.pageMode === "pages"}<button disabled={busy} onclick={() => onpageop({ op: "split" })}
         >Split spreads</button
-      >
+      >{/if}
       <button disabled={busy} onclick={() => onpageop({ op: "auto-crop" })}
         >Auto-crop margins</button
       >
       <button disabled={busy} onclick={() => onpageop({ op: "auto-align" })}
         >Auto-align pages</button
       >
-      <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
-      <button disabled={busy || aiRunning || !canUpload || (resliceSizing === "custom" && !validSliceHeight(resliceMaxHeight))} onclick={onreslice}
-        >Split strips</button
-      >
+      {#if preferences.pageMode === "strip"}
+        <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
+        <button disabled={busy || aiRunning || !canUpload || (resliceSizing === "custom" && !validSliceHeight(resliceMaxHeight))} onclick={onreslice}>Split strips</button>
+      {/if}
       <button
         disabled={busy || !pageUndoCount}
         onclick={() => onpageop({ op: "undo" })}
@@ -246,8 +236,12 @@
   {/if}
   {#if section === "full" || section === "series"}
   <div class="settings" data-find="set-series">
-    <h2>Series language & reading direction</h2>
+    <h2>Series format, language & reading direction</h2>
     <p>Applies to every chapter in this series, including new chapters.</p>
+    <label>Page mode<select value={preferences.pageMode} disabled={!canEdit || busy}
+      onchange={(e) => onsaveseriesprefs({ pageMode: e.currentTarget.value })}>
+      <option value="pages">Pages · manga</option><option value="strip">Strip · webtoon</option>
+    </select></label>
     <label
       >Source language<select
         value={preferences.lang}

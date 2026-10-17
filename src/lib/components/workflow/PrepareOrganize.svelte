@@ -12,13 +12,13 @@
     busy = false,
     numberingStale = false,
     credits = {},
+    pageMode = "pages",
     seriesId,
     onopen,
     onselect,
     onselectall,
     onreorder,
     onaddfiles,
-    onaddcredits,
     canCombinePages = false,
     oncombine,
     onextract,
@@ -35,13 +35,13 @@
     busy?: boolean;
     numberingStale?: boolean;
     credits?: SeriesCredits;
+    pageMode?: "pages" | "strip";
     seriesId: string;
     onopen: (id: string) => void;
     onselect: (id: string, range: boolean) => void;
     onselectall: (selected: boolean) => void;
     onreorder: (order: string[]) => void;
     onaddfiles: (files: File[]) => void;
-    onaddcredits: () => void;
     canCombinePages?: boolean;
     oncombine: () => void;
     onextract: () => void;
@@ -71,6 +71,14 @@
     onreorder(order);
   }
 
+  function move(index: number, delta: -1 | 1) {
+    const next = index + delta;
+    if (next < 0 || next >= images.length) return;
+    const order = images.map((img) => img.id);
+    [order[index], order[next]] = [order[next], order[index]];
+    onreorder(order);
+  }
+
   const slots: { kind: CreditKind; label: string; role: string }[] = [
     { kind: "pre", label: "Pre-credits", role: "pre-credits" },
     { kind: "post", label: "Post-credits", role: "post-credits" },
@@ -90,8 +98,7 @@
         {/if}
         <strong>{slot.label}</strong>
         {#if credit}
-          <small>Saved on series · missing here</small>
-          <button type="button" class="ed-btn small accent" aria-label={`Add ${slot.label} page`} disabled={busy || !canUpload} onclick={onaddcredits}>Add to chapter</button>
+          <small>Series default · included in export</small>
         {:else}
           <small>No series {slot.label.toLowerCase()} page saved.</small>
         {/if}
@@ -100,9 +107,9 @@
   {/if}
 {/snippet}
 
-<div class="organize" data-find="organize">
+<div class="organize" class:strip={pageMode === "strip"} data-find="organize">
   <div class="grid-hint">
-    <span><i class="bi bi-arrows-move" aria-hidden="true"></i> Drag to reorder · Click to edit · Shift-click checkboxes for a range · Paste images anywhere</span>
+    <span><i class="bi bi-arrows-move" aria-hidden="true"></i> {pageMode === "strip" ? "Strip · top to bottom" : "Pages · reading order"} · Drag to reorder · Shift-click to select a range · Paste images anywhere</span>
     <span class:warning={numberingStale}>
       {numberingStale ? "Numbering is stale. Renumber after organizing." : "Numbering is current. Export names: 1, 2, 3…"}
     </span>
@@ -118,7 +125,7 @@
       <i class="bi bi-check2-square" aria-hidden="true"></i>
       <strong>{selectedIds.length} selected</strong>
       {#if canCombinePages}
-        <button type="button" class="ed-btn small" data-find="combine-spread" title="RTL spread: later page on the left, earlier page on the right" disabled={selectionDisabled} onclick={oncombine}>Combine into spread</button>
+        <button type="button" class="ed-btn small" data-find="combine-spread" title={pageMode === "strip" ? "Join the selected consecutive strips top to bottom" : "Place adjacent pages side by side in the series reading direction"} disabled={selectionDisabled} onclick={oncombine}>{pageMode === "strip" ? "Join strips" : "Combine into spread"}</button>
       {/if}
       <button type="button" class="ed-btn small" disabled={selectionDisabled} onclick={onextract}>Extract to chapter…</button>
       <button type="button" class="ed-btn small danger" disabled={selectionDisabled || !canRemoveRegions} onclick={onremoveregions}>Remove all regions…</button>
@@ -155,8 +162,14 @@
           <img src={thumb(img)} alt="" />
         </button>
         <div class="gmeta">
-          <strong>{img.pageNumber ?? "—"}</strong>
+          <strong>{index + 1}</strong>
           <span>{img.role === "pre-credits" ? "Pre-credits" : img.role === "post-credits" ? "Post-credits" : img.filename ?? ""}</span>
+          {#if canUpload}
+            <div class="move-actions">
+              <button type="button" class="ed-btn small" aria-label={`Move image ${index + 1} earlier`} disabled={selectionDisabled || index === 0} onclick={() => move(index, -1)}>↑</button>
+              <button type="button" class="ed-btn small" aria-label={`Move image ${index + 1} later`} disabled={selectionDisabled || index === images.length - 1} onclick={() => move(index, 1)}>↓</button>
+            </div>
+          {/if}
         </div>
       </div>
     {/each}
@@ -217,9 +230,16 @@
   .gcheck { position: absolute; left: 7px; top: 7px; z-index: 2; background: var(--hud-bg-2); padding: 4px; border-radius: 6px; border: 1px solid var(--hud-line); display: block; margin: 0; line-height: 0; }
   .gcheck input { width: 15px; height: 15px; margin: 0; accent-color: var(--hud-teal-ink); }
   .gimg { display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: var(--hud-canvas); cursor: pointer; }
-  .gimg img { display: block; width: 100%; aspect-ratio: 1414 / 2000; object-fit: cover; }
+  .gimg img { display: block; width: 100%; aspect-ratio: 1414 / 2000; object-fit: contain; background: var(--hud-canvas); }
   .gmeta { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 9px; font-size: 11.5px; }
   .gmeta span { color: var(--hud-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .move-actions { display: flex; gap: 2px; }
+  .strip .grid { grid-template-columns: minmax(0, 1fr); max-width: 720px; gap: 8px; }
+  .strip .gcard:not(.ghost-slot):not(.drop) { display: grid; grid-template-columns: 128px minmax(0, 1fr); min-height: 158px; }
+  .strip .gimg img { height: 158px; aspect-ratio: auto; }
+  .strip .gmeta { padding: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .strip .gmeta strong { font-size: 18px; min-width: 30px; }
+  .strip .gslot { min-height: 120px; aspect-ratio: auto; }
   .ghost-slot { border-style: dashed; background: transparent; }
   .gslot { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; padding: 14px; min-height: 100%; aspect-ratio: 1414 / 2150; color: var(--hud-muted); }
   .gslot > .bi { font-size: 26px; }

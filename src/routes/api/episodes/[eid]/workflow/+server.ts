@@ -1,3 +1,4 @@
+import { runWorkflowPng } from '$lib/server/workflowImages';
 import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
 import { imageWorkflowModel, imageWorkflowChoices, runImageTaskFiles } from '$lib/server/modelImageWorkflow';
 import { DEFAULT_CHAT_MODEL_ID } from '$lib/modelDefaults';
@@ -66,7 +67,6 @@ import {
   saveSeriesRegionKinds,
   saveSeriesTypeSettings,
   saveStyleAsRegionType,
-  applyDefaultToUnfitted,
 } from "$lib/server/workflowService";
 import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
 import { cleaningDeviceLabel, localOperation, probeBackend } from "$lib/server/localWorker";
@@ -111,7 +111,9 @@ import {
 } from "$lib/server/glossaryMine";
 import { cancelDescribePages, startDescribePages } from "$lib/server/pageEdit";
 import { cancelReslice, startReslice } from "$lib/server/reslice";
-import { cancelPageProofread, startPageProofread, startPageProofreadFollowUp } from '$lib/server/pageProofread';
+import { cancelPageProofread, cancelChapterRawProofread, startPageProofread, startPageProofreadFollowUp, startChapterRawProofread } from '$lib/server/pageProofread';
+import { isProofreaderId, type ProofreaderId } from '$lib/proofreaders';
+import { assertProofreaderGrant } from '$lib/server/proofreadService';
 import { KOHARU_MODEL, maskModelName, parseDetectConf } from "$lib/server/detect";
 import { detectorSetupId, parseDetectorSetup } from "$lib/detectorSetup";
 import { komatoseGpuEnabled } from "$lib/server/gpuMode";
@@ -172,22 +174,17 @@ function clickPoint(body: { px?: unknown; py?: unknown }): { px: number; py: num
     throw new WorkflowError("Click a point on the page");
   return { px, py };
 }
-async function runWorkflowPng(payload: Record<string, unknown>) {
-  const output = join(DATA_DIR, "workflow", `${randomUUID()}.png`);
-  try {
-    await mkdir(join(DATA_DIR, "workflow"), { recursive: true });
-    const started = Date.now();
-    const result = (await localOperation({ ...payload, out: output })) as Record<string, any>;
-    result.cleanDurationMs = Date.now() - started;
-    return { result, artifact: await storeAsset(await readFile(output)) };
-  } finally {
-    await unlink(output).catch(() => {});
-  }
-}
-function brushStrokes(value: unknown, empty: string) {
+
+function brushStrokes(value: unknown, empty: string, allowFeather = false) {
   const strokes = (Array.isArray(value) ? value : []).map((s: any) => {
     if (!Number.isFinite(s.radius) || s.radius < 1 || s.radius > 200)
       throw new WorkflowError("Invalid brush size");
+    if (allowFeather) {
+      const feather = s.feather ?? 100;
+      if (!Number.isFinite(feather) || feather < 0 || feather > 100)
+        throw new WorkflowError("Invalid brush feather");
+      return { points: points(s.points), radius: s.radius, feather };
+    }
     return { points: points(s.points), radius: s.radius };
   });
   if (!strokes.length) throw new WorkflowError(empty);
@@ -420,7 +417,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         return json({ ok: true });
       }
       if (["describe", "reslice"].includes(job.kind)) requireUpload(user);
-      else if (["transcribe", "translate", "proofread", "page-proofread", "review", "selection", "reread", "fill-missing", "suggest", "source-translation", "region-ocr", "glossary-mine"].includes(job.kind))
+      else if (["transcribe", "translate", "proofread", "page-proofread", "page-proofread-batch", "review", "selection", "reread", "fill-missing", "suggest", "source-translation", "region-ocr", "glossary-mine"].includes(job.kind))
         requireEdit(user);
       else requireClean(user);
       if (
@@ -439,6 +436,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         if (job.kind === "region-ocr") cancelRegionOcr(job.id);
         if (job.kind === "glossary-mine") cancelGlossaryMine(job.id);
         if (job.kind === 'page-proofread') cancelPageProofread(job.id);
+        if (job.kind === 'page-proofread-batch') cancelChapterRawProofread(job.id);
         if (job.kind === "describe") cancelDescribePages(episode.id);
         if (job.kind === "reslice") cancelReslice(episode.id);
         aborts.get(job.id)?.abort();
@@ -450,6 +448,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         });
         return json({ ok: true });
       }
+      const retryProofreader = String(job.payload.engine || '');
+      if ((job.kind === 'page-proofread' || job.kind === 'page-proofread-batch') &&
+        isProofreaderId(retryProofreader)) assertProofreaderGrant(user, retryProofreader as ProofreaderId);
       if (job.kind === "describe")
         return json(
           startDescribePages(
@@ -493,6 +494,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           },
           snapshot: job.progress.snapshot,
           mode: job.payload.mode === 'raw' ? 'raw' : 'critique',
+        }), { status: 202 });
+      }
+      if (job.kind === 'page-proofread-batch') {
+        return json(await startChapterRawProofread({
+          series, episode,
+          model: { engine: job.payload.engine || DEFAULT_CHAT_MODEL_ID, model: job.payload.model || '' },
+          imageIds: job.payload.imageIds,
+          completedIds: job.pages.filter(page => page.state === 'completed').map(page => page.image_id),
         }), { status: 202 });
       }
       if (["translate", "proofread", "review", "selection", "reread", "suggest", "glossary-mine"].includes(job.kind))
@@ -664,9 +673,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         if (!changed.changes) throw new WorkflowError("Region changed", 409);
         return putDoc(episode.id, region.id, data, region.revision);
       })();
+      let fitted = doc;
+      if (b.rotation !== undefined && line.body?.trim()) {
+        try { fitted = await fitRegion(series, episode, line.id, doc.revision); }
+        catch { /* Keep the saved text angle when the region cannot be fitted yet. */ }
+      }
       const updated = (await listLines(episode.id)).find(l => l.id === line.id)!;
       broadcast(episode.id, { type: "line:upsert", line: updated });
-      return json({ doc, line: updated });
+      return json({ doc: fitted, line: updated });
     }
     if (action === "remove-page-regions" || action === "remove-selected-page-regions") {
       requireEdit(user);
@@ -781,7 +795,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         });
       }
       if (b.scope === "series") {
-        if (b.data && ("lang" in b.data || "direction" in b.data)) {
+        if (b.data && ("lang" in b.data || "direction" in b.data || "pageMode" in b.data)) {
           requireEdit(user);
           return json({ doc: saveSeriesReadingPreferences(series.id, b.expectedRevision, b.data) });
         }
@@ -801,8 +815,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         });
       }
       requireEdit(user);
-      if (b.data && ("lang" in b.data || "direction" in b.data))
-        throw new WorkflowError("Language and reading direction belong to the series. Save them in Series settings.");
+      if (b.data && ("lang" in b.data || "direction" in b.data || "pageMode" in b.data))
+        throw new WorkflowError("Page mode, language and reading direction belong to the series. Save them in Series settings.");
       if (b.data && ('styles' in b.data || 'style' in b.data))
         throw new WorkflowError('Category styles belong to the series. Save them in Series type settings.');
       const id = `chapter:${episode.id}`;
@@ -810,6 +824,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       const data = { ...current.data, ...b.data };
       delete data.lang;
       delete data.direction;
+      delete data.pageMode;
       if (b.data && "detector" in b.data) {
         if (!(DETECTORS as string[]).includes(String(b.data.detector)))
           throw new WorkflowError("Invalid detector");
@@ -922,13 +937,27 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       if (action === "region") {
         let data: RegionData = { ...doc.data };
         if ("polygon" in b.data) data.polygon = points(b.data.polygon, true);
+        if ("geometryRotation" in b.data) {
+          if (!Number.isFinite(b.data.geometryRotation) || Math.abs(b.data.geometryRotation) > 180)
+            throw new WorkflowError("Invalid geometry rotation");
+          data.geometryRotation = b.data.geometryRotation;
+        }
         if (data.polygon?.length && data.polygon.length < 3)
           throw new WorkflowError("A polygon needs at least three points");
         if ("style" in b.data) {
           const style = pickStyle(b.data.style);
           if (Object.keys(style).length) data.style = style;
           else delete data.style;
+          delete data.styleFromSeries;
         }
+        if ("renderEnabled" in b.data) {
+          if(typeof b.data.renderEnabled!=="boolean") throw new WorkflowError("Rendering must be enabled or disabled");
+          if(doc.data.locked) throw new WorkflowError("Unlock this layout before changing rendering");
+          data.renderEnabled=b.data.renderEnabled;
+          if(data.directorRenderingReview) data.directorRenderingReview={...data.directorRenderingReview,reviewed:true};
+        }
+        if(b.data.renderReviewConfirmed===true && data.directorRenderingReview && data.renderEnabled===false)
+          data.directorRenderingReview={...data.directorRenderingReview,reviewed:true};
         if ("locked" in b.data) data.locked = !!b.data.locked;
         if ("geometryApproved" in b.data)
           data.geometryApproved = !!b.data.geometryApproved;
@@ -940,7 +969,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           b.history || "save",
         );
         if (
-          "polygon" in b.data &&
+          ("polygon" in b.data || "geometryRotation" in b.data) &&
           !saved.data.locked &&
           line.body?.trim() &&
           (doc.data.layout || b.data.geometryApproved)
@@ -1036,7 +1065,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       putDoc(
         episode.id,
         doc.id,
-        { ...doc.data, polygon: undefined, geometryApproved: false },
+        { ...doc.data, polygon: undefined, geometryRotation: 0, geometryApproved: false },
         doc.revision,
       );
       broadcast(episode.id, {
@@ -1075,7 +1104,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           l.body.trim(),
       );
       const selectedTargets = savedStyle ? targets.filter(l => l.lineType === b.lineType) : targets;
-      if (savedStyle) applyDefaultToUnfitted(series.id, episode.id, b.lineType, selectedTargets.map(l => l.id));
       const jobId = createJob(episode.id, "typeset-all", { request: b });
       const abort = new AbortController();
       aborts.set(jobId, abort);
@@ -1190,7 +1218,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       });
     }
     if (action === "restore-brush") {
-      const restoreStrokes = brushStrokes(b.strokes, "Paint with the restore brush");
+      const restoreStrokes = brushStrokes(b.strokes, "Paint with the restore brush", true);
       const source = pageArtwork(doc.data)!;
       const previous = previousSavedArtwork(doc.id, doc.data);
       if (!previous || previous === source)
@@ -1206,7 +1234,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       });
     }
     if (action === "raw-brush") {
-      const rawStrokes = brushStrokes(b.strokes, "Paint with the raw brush");
+      const rawStrokes = brushStrokes(b.strokes, "Paint with the raw brush", true);
       const source = pageArtwork(doc.data)!;
       const raw = pageRawArtwork(doc.data);
       if (!raw)

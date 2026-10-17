@@ -116,7 +116,17 @@ export function textHasTerm(haystack: string, needle: string): boolean {
 	return text.includes(term);
 }
 
-/** Edited series terms whose source appears but required English does not. */
+function acceptedEnglishForms(term: GlossaryTerm): string[] {
+	const forms = [term.translation, ...(term.aliases ?? [])];
+	// Korean names put the family name first. Dialogue can naturally use only the given name.
+	if (term.kind === 'character' && /[\uac00-\ud7a3]/u.test(term.source)) {
+		const parts = term.translation.trim().split(/\s+/);
+		if (parts.length > 1) forms.push(parts.slice(1).join(' '));
+	}
+	return forms;
+}
+
+/** Edited series terms whose source appears but no accepted English form does. */
 export function glossaryMismatches(
 	source: string,
 	english: string,
@@ -131,7 +141,7 @@ export function glossaryMismatches(
 			t.source.trim() &&
 			t.translation.trim() &&
 			textHasTerm(src, t.source) &&
-			!textHasTerm(en, t.translation)
+			!acceptedEnglishForms(t).some((form) => textHasTerm(en, form))
 	);
 }
 

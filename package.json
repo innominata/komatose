@@ -22,6 +22,8 @@
 		"diagnose:decider": "node --import tsx scripts/diagnose-decider.ts",
 		"evaluate:decider-korean": "node --import tsx scripts/evaluate-korean-decider.ts",
 		"smoke:decider": "node --import tsx scripts/smoke-decider.ts",
+		"test:director": "node --import tsx --test tests/director-workflow.test.ts tests/director-cleaning-residue.test.ts",
+		"test:browser-director": "node scripts/test-browser.mjs scripts/check-browser-director.mjs",
 		"test:workflow": "node --import tsx tests/workflow.test.ts",
 		"test:unit": "node scripts/run-node-tests.mjs unit",
 		"test:integration": "node scripts/run-node-tests.mjs integration",
@@ -71,6 +73,8 @@
 		"test:browser-font-library": "node scripts/test-browser.mjs scripts/check-browser-font-library.mjs",
 		"bench:image-editors": "node --import tsx scripts/bench-image-editors.ts",
 		"test:browser": "node scripts/test-browser.mjs",
+		"test:series-backups": "node --import tsx tests/series-backups.test.ts",
+		"test:browser-series-backups": "node scripts/test-browser.mjs scripts/check-browser-series-backups.mjs",
 		"test:browser-reslice": "node scripts/test-browser.mjs scripts/check-browser-reslice.mjs",
 		"test:browser-prepare-safety": "node scripts/test-browser.mjs scripts/check-browser-prepare-safety.mjs",
 		"test:browser-models": "node scripts/test-browser.mjs scripts/check-browser-models.mjs",
@@ -88,7 +92,10 @@
 		"test:browser-review-servers": "node scripts/test-browser.mjs scripts/check-browser-review-servers.mjs",
 		"test:model-benchmark": "node --import tsx tests/model-benchmark.test.ts && node --import tsx tests/korean-benchmark.test.ts",
 		"test:browser-model-benchmark": "node scripts/test-browser.mjs scripts/check-browser-model-benchmark.mjs",
+		"test:browser-proofread-all-raw": "node scripts/test-browser.mjs scripts/check-browser-proofread-all-raw.mjs",
+		"test:browser-proofreader-window": "node scripts/test-browser.mjs scripts/check-browser-proofreader-window.mjs",
 		"test:browser-region-colors": "node scripts/test-browser.mjs scripts/check-browser-region-colors.mjs",
+		"test:browser-rotation": "node scripts/test-browser.mjs scripts/check-browser-independent-rotation.mjs",
 		"test:browser-region-compare": "node scripts/test-browser.mjs scripts/check-browser-region-compare.mjs",
 		"test:model-packages": "node --import tsx tests/model-packages.test.ts"
 	},
@@ -101,6 +108,8 @@
 		"@types/fontkit": "^2.0.9",
 		"@types/node": "^22",
 		"@types/ws": "^8.18.1",
+		"@types/yauzl": "^3.4.0",
+		"@types/yazl": "^3.3.1",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",
 		"prettier": "^3.9.6",
@@ -126,6 +135,8 @@
 		"marked": "^18.0.10",
 		"sharp": "^0.35.3",
 		"tsx": "^4.23.12",
-		"ws": "^8.21.3"
+		"ws": "^8.21.3",
+		"yauzl": "^3.4.0",
+		"yazl": "^3.3.1"
 	}
 }

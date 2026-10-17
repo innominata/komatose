@@ -200,7 +200,7 @@ test('bulk deletion removes only selected pages and their dependent metadata', a
   assert.equal(db.select().from(comments).where(eq(comments.lineId, `${id}-l0`)).all().length, 0);
   assert.equal(sqlite.prepare('SELECT 1 FROM suggestions WHERE line_id=?').get(`${id}-l0`), undefined);
   assert.equal(db.select().from(episodes).where(eq(episodes.id, id)).get()!.numberingStale, true);
-  assert.deepEqual(await readUndoLog(s.slug, id), [
+  assert.deepEqual((await readUndoLog(s.slug, id)).map(({ undoId: _undoId, ...op }) => op), [
     { type: 'pixels', imageId: `${id}-p1` },
     { type: 'reorder', order: [{ id: `${id}-p1`, sortOrder: 1 }] },
   ]);
@@ -243,6 +243,56 @@ test('combine requires adjacent pages, joins RTL pixels and restores pages and r
   assert.equal(db.select().from(images).where(eq(images.id, ids[0])).get()!.width, 80);
   assert.equal(db.select().from(lines).where(eq(lines.id, left.id)).get()!.imageId, ids[1]);
   assert.equal(db.select().from(lines).where(eq(lines.id, right.id)).get()!.x, 0.1);
+});
+
+test('join strips stacks adjacent images and restores both on undo', async () => {
+  const { joinStrip, undoPageOp } = await import('../src/lib/server/pageEdit');
+  const { imagePath } = await import('../src/lib/server/storage');
+  const ctx = await fixture(), id = ctx.episode.id;
+  const firstId = `${id}-p0`, secondId = `${id}-p1`;
+  await assert.rejects(joinStrip(ctx, [firstId, `${id}-p2`]), /consecutive/);
+  for (const [pageId, color] of [[firstId, '#ff0000'], [secondId, '#0000ff']]) {
+    const row = db.select().from(images).where(eq(images.id, pageId)).get()!;
+    await writeFile(imagePath(s.slug, id, row.filename), await sharp({ create: {
+      width: 80, height: 100, channels: 3, background: color,
+    } }).png().toBuffer());
+  }
+  const joined = await joinStrip(ctx, [secondId, firstId]);
+  assert.equal(joined.width, 80);
+  assert.equal(joined.height, 200);
+  const pixels = await sharp(await readFile(imagePath(s.slug, id, joined.filename))).removeAlpha().raw().toBuffer();
+  assert.deepEqual([...pixels.subarray(0, 3)], [255, 0, 0]);
+  assert.deepEqual([...pixels.subarray(100 * 80 * 3, 100 * 80 * 3 + 3)], [0, 0, 255]);
+  assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l0`)).get()!.y, 0.05);
+  assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l1`)).get()!.y, 0.55);
+  assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l1`)).get()!.imageId, firstId);
+  await undoPageOp(ctx);
+  assert.ok(db.select().from(images).where(eq(images.id, secondId)).get());
+  assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l1`)).get()!.y, 0.1);
+});
+
+test('LTR spread puts the earlier page on the left', async () => {
+  const { combineSpread } = await import('../src/lib/server/pageEdit');
+  const { imagePath } = await import('../src/lib/server/storage');
+  const seriesDoc = getDoc<Record<string, unknown>>('series:series', {});
+  const saved = putDoc(null, seriesDoc.id, { ...seriesDoc.data, direction: 'ltr' }, seriesDoc.revision);
+  try {
+    const ctx = await fixture(), id = ctx.episode.id;
+    for (const [pageId, color] of [[`${id}-p0`, '#ff0000'], [`${id}-p1`, '#0000ff']]) {
+      const row = db.select().from(images).where(eq(images.id, pageId)).get()!;
+      await writeFile(imagePath(s.slug, id, row.filename), await sharp({ create: {
+        width: 80, height: 100, channels: 3, background: color,
+      } }).png().toBuffer());
+    }
+    const spread = await combineSpread(ctx, [`${id}-p0`, `${id}-p1`]);
+    const pixels = await sharp(await readFile(imagePath(s.slug, id, spread.filename))).removeAlpha().raw().toBuffer();
+    assert.deepEqual([...pixels.subarray(0, 3)], [255, 0, 0]);
+    assert.deepEqual([...pixels.subarray(80 * 3, 80 * 3 + 3)], [0, 0, 255]);
+    assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l0`)).get()!.x, 0.05);
+    assert.equal(db.select().from(lines).where(eq(lines.id, `${id}-l1`)).get()!.x, 0.55);
+  } finally {
+    putDoc(null, saved.id, seriesDoc.data, saved.revision);
+  }
 });
 
 

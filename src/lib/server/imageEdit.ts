@@ -12,6 +12,7 @@ import { imageEditModelFiles, type ImageEditModelFiles } from './imageEditModels
 import { aliasFromArgs, flagValue, occupantOnPort, type PortOccupant } from './residentInference';
 import { listManagedStatuses, operateManagedModel, waitManagedOperation } from './managedModels';
 import { ROOT } from './paths';
+import { directorContext, directorEvent } from './directorAudit';
 import { devicePref, estimateNeedMiB, ggmlDevices, resolveDevice } from './computeDevices';
 import type { ResolvedDevice } from '../computeDevices';
 
@@ -585,21 +586,43 @@ async function service(abort: AbortSignal, id: ImageEditModelId): Promise<Servic
   if (state.service && (await serving(state.service.url, abort))) return state.service;
   // The editor shares its card with a chat model. Claiming the card first is what lets the
   // weights sit in VRAM instead of being streamed from RAM on every step.
-  if (gpuOn(id)) await releaseCardForImageEdit(id);
+  if (gpuOn(id)) await releaseCardForImageEdit(id, abort);
   return start(abort, id);
 }
 
 /** Unload the chat models on this editor's device before it claims the card. */
-export async function releaseCardForImageEdit(id?: ImageEditModelId): Promise<string[]> {
+export async function releaseCardForImageEdit(id?: ImageEditModelId, signal?: AbortSignal): Promise<string[]> {
   const model = current(id);
   const displaced = displacedChatModels(model);
   for (const chatId of displaced) {
-    operateManagedModel(chatId, 'stop');
-    await waitManagedOperation(chatId);
+    await releaseManagedChatForImageEdit(chatId,signal);
   }
   // Remembered so Admin → Models can hand the card back to the chat model.
   if (displaced.length) modelState(model).evicted = displaced;
   return displaced;
+}
+
+/** Device handoff waits for real calls, but a Director may release its own idle reservation. */
+export async function releaseManagedChatForImageEdit(chatId:string,signal?:AbortSignal):Promise<void> {
+    const ctx=directorContext();
+    const deadline=Date.now()+60_000;
+    let notified=false;
+    while(true) {
+      signal?.throwIfAborted();
+      try {
+        // The current Director will load its chat model again after image editing.
+        // Ignore only that reservation; active calls and other jobs still own the card.
+        operateManagedModel(chatId,'stop',signal,false,{ignoreJobIds:ctx?[ctx.runId]:[]});
+        await waitManagedOperation(chatId);
+        break;
+      } catch(error) {
+        if(!(error instanceof Error)||! /Model is busy|lifecycle operation is in progress/.test(error.message)) throw error;
+        if(Date.now()>=deadline) throw failure(`Image editor could not acquire the device: ${chatId} is still busy after 60 seconds`);
+        if(ctx&&!notified) {notified=true;directorEvent(ctx.runId,ctx.episodeId,ctx.imageId||null,'clean:waiting',{model:chatId,reason:'Waiting for another active model use before switching to the image editor'});}
+        await delay(250,undefined,{signal});
+      }
+    }
+
 }
 
 /** The reverse toggle: a chat model claiming an editor's device stops that editor. */

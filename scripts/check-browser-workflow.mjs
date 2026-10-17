@@ -72,6 +72,16 @@ try {
     // the point: scaling by the long edge (the old rule) collapsed a tall strip to a few
     // dozen pixels across, and the canvas then stretched that over the whole column.
     const state = await (await context.request.get(`${base}/api/episodes/fixture-episode/workflow`)).json();
+    const setMode = async (pageMode, expectedRevision) => {
+      const response = await context.request.post(`${base}/api/episodes/fixture-episode/workflow`, {
+        data: { action: 'preferences', scope: 'series', expectedRevision, data: { pageMode } },
+      });
+      if (!response.ok()) throw new Error(`Could not switch to ${pageMode} mode: ${await response.text()}`);
+      return (await response.json()).doc.revision;
+    };
+    const stripRevision = await setMode('strip', state.seriesDefaults.revision);
+    await page.reload();
+    await page.waitForFunction(() => document.body.dataset.studioReady === "1");
     const source = state.images[1];
     await page.getByRole("complementary", { name: "Pages in chapter order" }).getByRole("button", { name: "Open page 2", exact: true }).click();
     await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Reslice strips", exact: true }).click();
@@ -95,6 +105,9 @@ try {
     await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Select (V)", exact: true }).click();
     await expect.poll(async () => (await artwork.getAttribute("src"))?.slice(0, 22)).not.toBe("data:image/jpeg;base64");
     await expect(page.locator(".reslice-current-band")).toHaveCount(0);
+    await setMode('pages', stripRevision);
+    await page.reload();
+    await page.waitForFunction(() => document.body.dataset.studioReady === "1");
   }
   await page.getByRole("navigation", { name: "Chapter workflow" }).getByRole("button", { name: "Translate", exact: true }).click();
   await page.locator(".pages > button").first().click();
@@ -183,13 +196,17 @@ try {
   await page.unroute("**/api/episodes/fixture-episode/ai-transcribe");
   await page.getByRole("navigation", { name: "Chapter workflow" }).getByRole("button", { name: "Prepare", exact: true }).click();
   await expect(page.locator(".pages > button").first()).toHaveAttribute("aria-label", "Open page 1");
+  page.once('dialog', dialog => dialog.accept());
   await page
     .getByRole("button", { name: "Renumber pages", exact: true })
     .click();
-  await page.getByText("Numbering is current.", { exact: false }).waitFor();
+  await expect.poll(async () => {
+    const current = await (await context.request.get(`${base}/api/episodes/fixture-episode/workflow`)).json();
+    return current.issues.some(issue => issue.code === 'numbering');
+  }).toBe(false);
   await page.getByRole("tab", { name: "Credits", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Series credits" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add credits to this chapter" })).toBeDisabled();
+  await expect(page.getByText(/included in every chapter export automatically/)).toBeVisible();
   await page
     .getByRole("navigation", { name: "Chapter workflow" })
     .getByRole("button", { name: "Translate", exact: true })

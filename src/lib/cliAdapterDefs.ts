@@ -11,6 +11,7 @@ export const CLI_CHAT_OPERATIONS = [
 	'proofreadEnglish',
 	'chapterReview',
 	'advisory',
+	'director',
 	'compactNotes',
 	'alternatives',
 	'pageImageProofread',

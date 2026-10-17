@@ -12,6 +12,7 @@ import {
   type FontAsset,
 } from "../workflow";
 import { hasTextWarp, isTextWarpStyle, layoutWarpBox, warpFontPath } from "../textWarp";
+import { effectiveTextRotation } from "../textRotation";
 import { sqlite } from "./db";
 import { readAsset, storeAsset, hash, WorkflowError } from "./workflowStore";
 import { unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
@@ -259,6 +260,9 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
   if (typeof s.fontId !== "string") s.fontId = "";
   return s;
 }
+export function effectiveLayoutStyle(region: RegionData, style: TextStyle): TextStyle {
+  return { ...style, rotation: effectiveTextRotation(region.geometryRotation, style.rotation) };
+}
 export function regionPolygon(
   line: LineRow,
   region: RegionData,
@@ -369,7 +373,7 @@ export async function fitText(
   input: Partial<TextStyle>,
   dpi: number,
 ): Promise<FittedLayout> {
-  const style = validateStyle(input);
+  const style = effectiveLayoutStyle(region, validateStyle(input));
   if (!Number.isFinite(dpi) || dpi < 10 || dpi > 2400)
     throw new WorkflowError("DPI must be between 10 and 2400");
   if (line.body.length > 12000)

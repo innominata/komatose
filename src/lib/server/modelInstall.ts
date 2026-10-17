@@ -841,7 +841,7 @@ function ensureQwen3VlManaged() {
 			contextSize: 16384,
 			gpuLayers: 999,
 			slots: 2,
-			startOnBoot: true,
+			startOnBoot: false,
 			extraArgs: [],
 		});
 		upsertRegistryRow({

@@ -42,6 +42,7 @@ import { readModelDefaults, setModelDefault, type DefaultJob } from '$lib/server
 import { INSTALL_GROUPS } from '$lib/installCatalog';
 import { detectorDefaults, saveDetectorDefaults } from '$lib/server/detectorConfig';
 import { nvtopStatus, startNvtopBuild } from '$lib/server/nvtopBuild';
+import { gpuWorkerRows, stopOneGpu, stopOtherGpuModels } from '$lib/server/gpuRelease';
 
 const DEFAULT_JOBS = new Set<string>([...PROVIDER_OPERATIONS, 'detect', 'transcribe']);
 
@@ -116,6 +117,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			managed: listManagedStatuses(),
 			reviewServers: await listReviewServerStatuses(),
 			editors: imageEditStatuses(),
+			workers: gpuWorkerRows(),
 			environments,
 			groups: INSTALL_GROUPS,
 			defaults: readModelDefaults().defaults,
@@ -146,6 +148,8 @@ function deviceState() {
  *   { action: 'set-torch-variant', variant }    auto | cpu | cuda | rocm
  *   { action: 'refresh-hardware' }              force a fresh device probe
  *   { action: 'build-nvtop' }                   download, patch, and build nvtop into data/tools/nvtop
+ *   { action: 'stop-gpu', scope: 'others' }     stop every Komatose model and worker on the GPUs
+ *   { action: 'stop-gpu', scope: 'one', kind, id, pid?, label? }
  */
 export const POST: RequestHandler = async ({ locals, request }) => {
 	try {
@@ -196,6 +200,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		}
 		if (action === 'build-nvtop') {
 			return json({ ok: true, nvtop: startNvtopBuild() });
+		}
+		if (action === 'stop-gpu') {
+			const result = body.scope === 'one'
+				? await stopOneGpu({
+					kind: String(body.kind || ''),
+					id: String(body.id || ''),
+					pid: body.pid,
+					label: body.label == null ? undefined : String(body.label),
+				})
+				: await stopOtherGpuModels();
+			return json({ ok: true, ...result, workers: gpuWorkerRows() });
 		}
 		return fail(400, 'Unknown action');
 	} catch (e) {

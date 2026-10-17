@@ -10,6 +10,7 @@
 
 	let { data, form } = $props();
 	let typeRevision = $state(data.typeRevision);
+	let backingUp = $state(false);
 
 	function openTypeSettings() {
 		document.querySelector<HTMLButtonElement>('[data-type-settings-trigger]')?.click();
@@ -187,6 +188,33 @@
 		</div>
 	</div>
 	<div class="col-lg-4">
+		{#if data.canUpload}
+			<section class="hud-card mb-3" aria-label="Series backups">
+				<div class="hud-kicker mb-2">Backups</div>
+				<p class="small text-secondary">Save every chapter, image, translation, layout, and undo history before testing.</p>
+				<form method="POST" action="?/backup" use:enhance={() => {
+					backingUp = true;
+					return async ({ update }) => { try { await update(); } finally { backingUp = false; } };
+				}} class="d-grid gap-2">
+					<label class="small">Backup name <input class="form-control" name="label" placeholder="Before testing" maxlength="120" disabled={backingUp} /></label>
+					<button class="btn-hud" type="submit" disabled={backingUp}>{backingUp ? 'Saving backup…' : 'Back up series'}</button>
+				</form>
+				{#if form?.backupId}<p class="small mt-2" role="status">{form.message} <a href="/api/series-backups/{form.backupId}" download>Download ZIP</a></p>{/if}
+				<a class="d-inline-block mt-2 small" href="/backups?series={data.series.id}">Manage backups &amp; restore</a>
+			</section>
+		{/if}
+		<div class="hud-card mb-3">
+			<div class="hud-kicker mb-2">Series format</div>
+			{#if data.canEdit}
+				<form method="POST" action="?/pageMode" use:enhance class="d-grid gap-2">
+					<input type="hidden" name="expectedRevision" value={data.typeRevision} />
+					<label>Page mode<select class="form-control" name="pageMode" value={data.pageMode}>
+						<option value="pages">Pages · manga</option><option value="strip">Strip · webtoon</option>
+					</select></label>
+					<button class="btn-hud" type="submit">Save format</button>
+				</form>
+			{:else}<div>{data.pageMode === 'strip' ? 'Strip · webtoon' : 'Pages · manga'}</div>{/if}
+		</div>
 		<div class="hud-card mb-3">
 			<div class="d-flex justify-content-between">
 				<div class="hud-kicker">General notes</div>

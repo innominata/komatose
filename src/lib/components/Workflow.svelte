@@ -29,6 +29,8 @@
   import RegionColorDialog from "./RegionColorDialog.svelte";
   import { type PaletteId } from "./ToolPalette.svelte";
   import JobsPanel from "./JobsPanel.svelte";
+  import DirectorPanel from './DirectorPanel.svelte';
+  import DirectorMemory from './DirectorMemory.svelte';
   import StudioToasts from "./workflow/StudioToasts.svelte";
   import StudioTopBar from "./workflow/StudioTopBar.svelte";
   import StageBar from "./workflow/StageBar.svelte";
@@ -59,6 +61,7 @@
     cssDeltaTransform,
     draggedSkew,
     polygonEdgeHandle,
+    rotateNormalizedPoints,
   } from "$lib/textTransform";
   import { pageWriteConflict } from "$lib/pageConflict";
   import { SaveQueue } from "$lib/saveQueue";
@@ -177,8 +180,11 @@
     "Export",
   ];
   let scope = $state<"page" | "chapter">("page");
+  let directorOpen = $state(false);
   let prepView = $state<"grid" | "page">("grid");
   let settingsSection = $state<string | null>(null);
+  let directorModels = $state<{id:string;name:string;model:string}[]>([]);
+  let directorLocked = $state(false);
   let modelsTab = $state("");
   let finderOpen = $state(false);
   let finderQuery = $state("");
@@ -204,11 +210,14 @@
     ["queued", "running", "cancelling"].includes(job.state)) ?? false));
   let saveVersion = $state(0);
   let compare = $state(false);
+  let reviewView = $state<"normal" | "raw" | "side-by-side">("normal");
   let showMask = $state(true);
-  let showRegions = $state(true);
+  let regionVisibility = $state<"shown" | "ghost" | "off">("shown");
+  const showRegions = $derived(regionVisibility !== "off");
   let tool = $state("select");
   let reorderFromId = $state("");
   let radius = $state(8);
+  let feather = $state(100);
   let brushSizeOpen = $state(false);
   let growAmount = $state(MASK_GROW_DEFAULT);
   let growToolbarDismissed = $state(false);
@@ -238,7 +247,7 @@
     regionId?: string;
     corner?: number;
     regionRevision?: number;
-    rotation?: { initial: number; angle: number; center: Point; style: TextStyle };
+    rotation?: { center: Point; polygon: Point[]; initial: number };
     skew?: { axis: "x" | "y"; initial: number; angle: number; center: Point; style: TextStyle };
     polygonDrag?: boolean;
   } | null>(null);
@@ -264,7 +273,6 @@
   let blurEpoch = $state(0);
   let restoreEpoch = $state(0);
   let pendingFiles = $state<File[]>([]);
-  let stitch = $state(false);
   let duplicateWarning = $state("");
   let jobsPanel = $state<"collapsed" | "shown" | "maximized">("collapsed");
   let jobsFlash = $state(0);
@@ -290,7 +298,7 @@
   const pageProofreadReplies = $derived((studioState?.jobs ?? []).filter(job =>
     job.kind === 'page-proofread' && job.state === 'completed' && !!job.progress?.critique &&
     job.payload?.imageId === page?.id));
-  let resliceSizing = $state<ResliceSizing>("pages");
+  let resliceSizing = $state<ResliceSizing>("strips");
   let resliceMaxHeight = $state<number | undefined>(2048);
   const resliceSizeValid = $derived(resliceSizing !== "custom" || validSliceHeight(resliceMaxHeight));
   let reslicePreview = $state<null | {
@@ -799,7 +807,21 @@
         proofreadJobId = result.jobId;
       }
       await refresh();
-      notify('The proofreader reply will be saved in this page’s Review replies and Jobs. You can close the modal and keep editing.');
+      notify('The proofreader reply will be saved in this page’s Review replies and Jobs. You can keep editing with the window open.');
+    } catch (e) { error = String(e); }
+    finally { reviewImageBusy = false; }
+  }
+  async function proofreadAllRaw() {
+    if (!studioState || reviewImageBusy || !canEdit || !rawProofreadGate.ok) return;
+    reviewImageBusy = true;
+    error = '';
+    try {
+      if (!(await saves.flushAll())) throw new Error('Resolve unsaved drafts first');
+      const result = await request(`${apiBase}/page-proofread`, {
+        scope: 'chapter', mode: 'raw', model: aiModels.proofread,
+      });
+      await refresh();
+      notify(`Proofreading ${result.total} unfinished Review page${result.total === 1 ? '' : 's'} in order. Replies will be saved in Review and Jobs.`);
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
@@ -851,6 +873,11 @@
     selectedPageIds = ordered.filter(page => selected.has(page));
     menu = null;
   }
+  const pageMode = $derived(studioState?.preferences.pageMode ?? "pages");
+  $effect(() => {
+    if (step === "Prepare" && (pageMode === "strip" ? pageTool === "split" : pageTool === "reslice"))
+      pageTool = "select";
+  });
   const canCombinePages = $derived(selectedPageIds.length === 2 && !!studioState &&
     studioState.images.some((image, index, all) => image.id === selectedPageIds[0] &&
       all[index + 1]?.id === selectedPageIds[1] &&
@@ -858,12 +885,12 @@
       all[index + 1].role !== "pre-credits" && all[index + 1].role !== "post-credits"));
   async function combineSelectedPages() {
     if (!canCombinePages || pageSelectionBusy) return;
-    const result = await pageOperation({ op: "combine", imageIds: [...selectedPageIds] });
+    const result = await pageOperation({ op: pageMode === "strip" ? "join-strip" : "combine", imageIds: [...selectedPageIds] });
     if (result) {
       selectedPageIds = [];
       pageSelectionAnchor = "";
       choosePage(result.image.id);
-      notify("Combined pages into an RTL spread. Undo page edit restores the halves.");
+      notify(pageMode === "strip" ? "Joined strips. Undo page edit restores both." : "Combined pages into a spread. Undo page edit restores the halves.");
     }
   }
   async function deleteSelectedPages() {
@@ -1780,7 +1807,10 @@
     pageTool = "select";
     polygonDraft = [];
     error = "";
-    if (next === "Review") compare = false;
+    if (next === "Review") {
+      compare = false;
+      reviewView = "normal";
+    }
     if (
       ["Clean", "Typeset"].includes(next) &&
       page &&
@@ -1810,7 +1840,7 @@
   }
   function startPolygon() {
     if (!selected || !canClean || regionDoc?.data.locked) return;
-    showRegions = true;
+    regionVisibility = "shown";
     tool = "polygon";
     pageTool = "select";
     polygonDraft = [];
@@ -1828,7 +1858,7 @@
       action: "region",
       id,
       expectedRevision: regionDoc?.revision ?? 0,
-      data: { polygon: regionRectangle(selected), geometryApproved: true },
+      data: { polygon: regionRectangle(selected), geometryRotation: 0, geometryApproved: true },
     });
     if (!result?.doc) return;
     if (result.doc.data.layout && selected?.id === id) {
@@ -1853,6 +1883,7 @@
       expectedRevision: regionDoc?.revision ?? 0,
       data: {
         polygon: kind === "oval" ? regionOval(bounds) : regionRectangle(bounds),
+        geometryRotation: 0,
         geometryApproved: true,
       },
     });
@@ -1874,7 +1905,7 @@
       action: "region",
       id,
       expectedRevision: polygonRevision,
-      data: { polygon: polygonDraft, geometryApproved: true },
+      data: { polygon: polygonDraft, geometryRotation: 0, geometryApproved: true },
     });
     if (!result?.doc) return;
     if (result.doc.data.layout && selected?.id === id) {
@@ -1961,7 +1992,7 @@
       notify("Select a region to mask its text.");
       return;
     }
-    if (["region", "read-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) showRegions = true;
+    if (["region", "read-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) regionVisibility = "shown";
     if ((tool === "rectangle" || tool === "oval") && (!selected || regionDoc?.data.locked)) {
       notify(regionDoc?.data.locked
         ? "Unlock this layout before changing its shape."
@@ -2035,7 +2066,7 @@
   }
   function rotationAngle(d: NonNullable<typeof drawing>) {
     const r = d.rotation!;
-    return draggedRotation(r.initial, d.start, d.end, r.center, page!.width, page!.height);
+    return draggedRotation(0, d.start, d.end, r.center, page!.width, page!.height);
   }
   function skewAngle(d: NonNullable<typeof drawing>) {
     const s = d.skew!;
@@ -2043,8 +2074,6 @@
   }
   function overlayStyle(l: LineRow, layout: { style: TextStyle }) {
     if (drawing?.regionId !== l.id) return undefined;
-    if (drawing.rotation)
-      return `transform:rotate(${rotationAngle(drawing) - layout.style.rotation}deg);transform-origin:${drawing.rotation.center.x * 100}% ${drawing.rotation.center.y * 100}%`;
     if (drawing.skew) {
       const next = {
         ...drawing.skew.style,
@@ -2074,13 +2103,13 @@
   }
   function startRotation(e: PointerEvent) {
     e.stopPropagation();
-    if (e.button !== 0 || !selected || !regionDoc || !canClean || busy || tool !== "select" || regionDoc.data.locked) return;
+    if (e.button !== 0 || step !== "Typeset" || !selected || !regionDoc || !canClean || busy || tool !== "select" || regionDoc.data.locked) return;
     e.preventDefault();
     svgEl!.setPointerCapture(e.pointerId);
     const p = coords(e);
-    const style = shownStyle(selected.lineType, regionDoc.data);
     drawing = { start: p, end: p, points: [], regionId: selected.id, revision: regionDoc.revision,
-      rotation: { initial: style.rotation, angle: style.rotation, center: rotationCenter(selected), style } };
+      rotation: { center: rotationCenter(selected), polygon: selectedPolygon.map(point => ({...point})),
+        initial: regionDoc.data.geometryRotation ?? 0 } };
   }
   function startSkew(axis: "x" | "y", e: PointerEvent) {
     e.stopPropagation();
@@ -2108,18 +2137,79 @@
       styleRevision = result.doc.revision;
     }
   }
+  async function saveGeometryRotation(id: string, revision: number, polygon: Point[], center: Point, initial: number, angle: number) {
+    if (!angle || !page) return;
+    await act({ action: "region", id, expectedRevision: revision,
+      data: { polygon: rotateNormalizedPoints(polygon, center, angle, page.width, page.height),
+        geometryRotation: normalizeRotation(initial + angle), geometryApproved: false } });
+  }
+  type RegionKeyMove = { id: string; pageId: string; dx: number; dy: number; angle: number };
+  const regionKeyMoves: RegionKeyMove[] = [];
+  let regionKeyRunning = false;
+  async function runRegionKeyMoves() {
+    if (regionKeyRunning) return;
+    regionKeyRunning = true;
+    try {
+      while (regionKeyMoves.length) {
+        const move = regionKeyMoves.shift()!;
+        const line = studioState?.lines.find(l => l.id === move.id);
+        const doc = studioState?.regions[move.id];
+        const image = studioState?.images.find(p => p.id === move.pageId);
+        if (!line || !doc || !image || pageId !== move.pageId || line.imageId !== move.pageId || doc.data.locked) continue;
+        if (move.angle) {
+          const polygon = doc.data.polygon?.length ? doc.data.polygon : regionRectangle(line);
+          const result = await act({ action: "region", id: line.id, expectedRevision: doc.revision,
+            data: { polygon: rotateNormalizedPoints(polygon, rotationCenter(line), move.angle, image.width, image.height),
+              geometryRotation: normalizeRotation((doc.data.geometryRotation ?? 0) + move.angle), geometryApproved: false } });
+          if (!result) regionKeyMoves.length = 0;
+        } else {
+          const x = Math.max(0, Math.min(1, (line.x ?? 0) + move.dx / image.width));
+          const y = Math.max(0, Math.min(1, (line.y ?? 0) + move.dy / image.height));
+          if (x === (line.x ?? 0) && y === (line.y ?? 0)) continue;
+          const result = await act({ action: "transform-text", id: line.id, expectedRevision: line.revision,
+            expectedRegionRevision: doc.revision, x, y });
+          if (!result) regionKeyMoves.length = 0;
+        }
+      }
+    } finally {
+      regionKeyRunning = false;
+    }
+  }
+  function regionKeyMove(e: KeyboardEvent) {
+    if (!selected || !regionDoc || !page || selected.imageId !== page.id ||
+      regionDoc.data.locked || drawing || step === "Prepare" ||
+      (!canEdit && !canClean) || (busy && !regionKeyRunning) ||
+      e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+    const delta: Record<string, [number, number, number]> = {
+      ArrowLeft: [-1, 0, 0], ArrowRight: [1, 0, 0],
+      ArrowUp: [0, -1, 0], ArrowDown: [0, 1, 0],
+      PageUp: [0, 0, -0.1], PageDown: [0, 0, 0.1],
+    };
+    const move = delta[e.key];
+    if (!move || (move[2] && !canClean)) return false;
+    e.preventDefault();
+    regionKeyMoves.push({ id: selected.id, pageId: page.id, dx: move[0], dy: move[1], angle: move[2] });
+    void runRegionKeyMoves();
+    return true;
+  }
   async function saveRotation(id: string, revision: number, style: TextStyle, angle: number) {
-    await savePlacedTransform(id, revision, style, { rotation: angle });
+    const next = { ...style, rotation: angle };
+    const result = await act(next.fontId ? { action: "fit", id, expectedRevision: revision, style: next }
+      : { action: "region", id, expectedRevision: revision, data: { style: next } });
+    if (result?.doc && selected?.id === id) {
+      styleRevision = result.doc.revision;
+      regionStyle = shownStyle(selected.lineType, result.doc.data);
+    }
   }
 
   function rotationKey(e: KeyboardEvent) {
-    if (!selected || !regionDoc || busy || !canClean || regionDoc.data.locked) return;
+    if (step !== "Typeset" || !selected || !regionDoc || busy || !canClean || regionDoc.data.locked) return;
     if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
-    const style = shownStyle(selected.lineType, regionDoc.data);
-    const angle = normalizeRotation(style.rotation + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 15 : 1));
-    void saveRotation(selected.id, regionDoc.revision, style, angle);
+    const angle = (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 15 : 1);
+    void saveGeometryRotation(selected.id, regionDoc.revision, selectedPolygon, rotationCenter(selected),
+      regionDoc.data.geometryRotation ?? 0, angle);
   }
   function skewKey(axis: "x" | "y", e: KeyboardEvent) {
     if (!selected || !regionDoc || busy || !canClean || regionDoc.data.locked) return;
@@ -2147,7 +2237,8 @@
     const d = drawing;
     drawing = null;
     if (d.rotation && d.regionId) {
-      await saveRotation(d.regionId, d.revision!, d.rotation.style, rotationAngle(d));
+      await saveGeometryRotation(d.regionId, d.revision!, d.rotation.polygon, d.rotation.center,
+        d.rotation.initial, rotationAngle(d));
       return;
     }
     if (d.skew && d.regionId) {
@@ -2231,7 +2322,7 @@
         action: "restore-brush",
         imageId: page.id,
         expectedRevision: pageDoc?.revision,
-        strokes: [{ points: d.points, radius }],
+        strokes: [{ points: d.points, radius, feather }],
       });
       if (result) notify("Restored from the previous save. Undo saved edit restores the previous artwork.");
       else restoreEpoch += 1;
@@ -2243,7 +2334,7 @@
         action: "raw-brush",
         imageId: page.id,
         expectedRevision: pageDoc?.revision,
-        strokes: [{ points: d.points, radius }],
+        strokes: [{ points: d.points, radius, feather }],
       });
       if (result) notify("Painted raw source pixels. Undo saved edit restores the previous artwork.");
       else restoreEpoch += 1;
@@ -2702,7 +2793,7 @@
     error = "";
     const form = new FormData();
     pendingFiles.forEach((f) => form.append("files", f));
-    form.append("stitch", String(stitch));
+    form.append("stitch", String(pageMode === "strip"));
     for (const [key, value] of Object.entries(insertPosition))
       if (value) form.append(key, value);
     try {
@@ -2806,14 +2897,6 @@
     if (!selected || !regionDoc || !canClean || busy || regionDoc.data.locked) return;
     const id = selected.id;
     if (scope === "region") {
-      const current = shownStyle(selected.lineType, regionDoc.data);
-      const rotationOnly = !!regionDoc.data.layout && Number.isFinite(regionStyle.rotation)
-        && regionStyle.rotation !== current.rotation
-        && STYLE_KEYS.every((key) => key === "rotation" || regionStyle[key] === current[key]);
-      if (rotationOnly) {
-        await savePlacedTransform(id, styleRevision, current, { rotation: regionStyle.rotation });
-        return;
-      }
       const style = pickStyle(regionStyle);
       const result = await act(regionStyle.fontId ? {
         action: "fit", id, expectedRevision: styleRevision, style,
@@ -3173,6 +3256,24 @@
       busy = false;
     }
   }
+  async function uploadChapterCredit(kind: CreditKind, file: File) {
+    error = "";
+    busy = true;
+    try {
+      const body = new FormData();
+      body.set("creditKind", kind);
+      body.set("files", file);
+      const res = await fetch(`${apiBase}/images`, { method: "POST", body });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not save chapter credits");
+      await refresh();
+      notify(`Saved this chapter’s ${kind === "pre" ? "pre-credits" : "post-credits"} override. Renumber pages before export.`);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
   async function clearSeriesCredit(kind: CreditKind) {
     if (!window.confirm(`Remove the saved ${kind === 'pre' ? 'pre-credits' : 'post-credits'} page from this series? Existing copies in chapters stay, but the series credit image will be removed.`)) return;
     error = "";
@@ -3316,7 +3417,7 @@
       styleBrush = null;
       pageTool = 'select';
       tool = id;
-      showRegions = true;
+      regionVisibility = "shown";
       if (assignmentCharacterId === null) assignmentCharacterId = characters[0]?.id || '';
       notify(characters.length ? 'Choose a character, then click regions to assign their speaker.' : 'Add a character in the series glossary, then assign their dialogue.');
       return;
@@ -3336,6 +3437,7 @@
         sourceId: selected.id,
         style: {
           ...layout.style,
+          rotation: shownStyle(selected.lineType, regionDoc?.data).rotation,
           size: layout.size,
           // Preserve the rendered colors instead of recalculating them on each bubble.
           autoContrast: false,
@@ -3345,7 +3447,7 @@
       drawing = null;
       pageTool = "select";
       tool = id;
-      showRegions = true;
+      regionVisibility = "shown";
       notify(`Copied ${layout.size} pt style. Click regions to apply; press Esc to stop.`);
       setBrushSizeOpen(false);
       return;
@@ -3379,7 +3481,7 @@
         return;
       }
       tool = id;
-      showRegions = true;
+      regionVisibility = "shown";
       setBrushSizeOpen(false);
       return;
     }
@@ -3415,7 +3517,7 @@
         notify("Paint to copy uncleaned source pixels onto the working page. The brush has a soft edge like Restore.");
     }
     if (id === "reorder") {
-      showRegions = true;
+      regionVisibility = "shown";
       const selectedId = pageLines.some((line) => line.id === lineId) ? lineId : "";
       reorderFromId = selectedId;
       if (selectedId) notify("Click the next region in reading order.");
@@ -3606,6 +3708,13 @@
     const regions = lines.map((line) => ({ id: line.id, data: studioState?.regions[line.id]?.data }));
     return doc.data.completed?.[kind] === pageStepStamp(kind, doc.data, lines, comments, regions);
   }
+  const nextUnfinishedId = $derived(
+    pageId && ["Translate", "Review", "Clean", "Typeset"].includes(step)
+      ? nextUnfinishedPage(studioState?.images ?? [], pageId, (id) => pageStepDone(id, step.toLowerCase() as PageStep))?.id
+      : undefined,
+  );
+  const rawBatchCount = $derived(studioState?.images.filter(image =>
+    studioState!.lines.some(line => line.imageId === image.id) && !pageStepDone(image.id, 'review')).length ?? 0);
   function pageMark(imageId: string): "done" | "check" | "todo" | "running" {
     const jobs = studioState?.jobs ?? [];
     const live = jobs.some((job) => {
@@ -3619,7 +3728,7 @@
     const codes: Record<string, string[]> = {
       Review: ["review", "english"],
       Clean: ["cleaning", "prepared"],
-      Typeset: ["font", "layout", "stale", "glyphs", "overflow", "geometry"],
+      Typeset: ["font", "layout", "stale", "glyphs", "overflow", "geometry", "render-review"],
       Translate: ["review", "english"],
     };
     if ((studioState?.issues ?? []).some((issue) => issue.imageId === imageId && (codes[step] ?? []).includes(issue.code)))
@@ -3729,6 +3838,7 @@
     if (finderOpen) return;
     if ((e.target as HTMLElement)?.closest("input,textarea,select,[contenteditable],dialog"))
       return;
+    if (regionKeyMove(e)) return;
     const shortcut = e.ctrlKey || e.metaKey;
     if ((e.key === "z" || e.key === "Z") && shortcut) {
       e.preventDefault();
@@ -3869,6 +3979,7 @@
     {pageDoc}
     pageId={page?.id ?? ""}
     {step}
+    {pageMode}
     {canEdit}
     {canUpload}
     {canClean}
@@ -3955,6 +4066,8 @@
     onresetzoom={() => (zoom = 100)}
     onshortcuts={() => (keysOpen = true)}
   >
+    <DirectorPanel {apiBase} {scope} pageId={page?.id??null} canEdit={canUpload} {busy} bind:open={directorOpen} bind:models={directorModels} bind:locked={directorLocked} onsettings={()=>settingsSection="director"}
+      onnavigate={(id,region,stage)=>{choosePage(id);void switchStep(stage==='clean'?'Clean':stage==='classify'||stage==='typeset'?'Typeset':stage==='prepare'?'Prepare':'Review');if(region)selectLine(region);}} />
     <button class="ed-btn" type="button" data-find="palette" aria-label="Find an action" onclick={() => (finderOpen = true)}><i class="bi bi-search" aria-hidden="true"></i><span class="txt">Find an action</span><kbd aria-hidden="true">Ctrl K</kbd></button>
   </StudioTopBar>
   <StudioToasts {error} {toasts} ondismisserror={() => (error = "")} ondismiss={dismissToast} />
@@ -4003,11 +4116,13 @@
             </div>
             <span class="vsep"></span>
             <span class="group-label">Whole chapter</span>
-            <button type="button" class="ed-btn" data-find="split-spreads" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "split" })}>Split spreads</button>
+            {#if pageMode === "pages"}<button type="button" class="ed-btn" data-find="split-spreads" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "split" })}>Split spreads</button>{/if}
             <button type="button" class="ed-btn" data-find="auto-crop" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "auto-crop" })}>Auto-crop</button>
             <button type="button" class="ed-btn" data-find="auto-align" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "auto-align" })}>Auto-align</button>
-            <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
-            <button type="button" class="ed-btn" data-find="auto-reslice" disabled={busy || aiRunning || !canUpload || !resliceSizeValid} onclick={() => applyReslice()}>Split strips</button>
+            {#if pageMode === "strip"}
+              <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
+              <button type="button" class="ed-btn" data-find="auto-reslice" disabled={busy || aiRunning || !canUpload || !resliceSizeValid} onclick={() => applyReslice()}>Split strips</button>
+            {/if}
           {:else if step === "Translate"}
             <button type="button" class="ed-btn primary" data-find="transcribe" aria-label={scope === "chapter" ? "Transcribe chapter" : "Transcribe page"} disabled={busy || !canUpload || (scope === "page" && !page)} onclick={() => scope === "chapter" || !page ? runAI("transcribe") : transcribePage(page.id)}><i class="bi bi-chat-square-text" aria-hidden="true"></i> Transcribe</button>
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
@@ -4015,6 +4130,7 @@
           {:else if step === "Review"}
             {#if scope === "chapter"}
               <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
+              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount} title={rawProofreadGate.reason || 'Send unfinished Review pages with regions to the proofreader, one at a time.'} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
             {:else}
               <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
               <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
@@ -4112,7 +4228,7 @@
             {#if step === "Prepare" && canUpload && selectedPageIds.length && prepView !== "grid"}
               <div class="page-selection-actions" role="region" aria-label="Selected page actions">
                 <strong>{selectedPageIds.length} selected</strong>
-                {#if canCombinePages}<button class="ed-btn" data-find="combine-spread" disabled={pageSelectionBusy} onclick={combineSelectedPages}>Combine into spread</button>{/if}
+                {#if canCombinePages}<button class="ed-btn" data-find="combine-spread" disabled={pageSelectionBusy} onclick={combineSelectedPages}>{pageMode === "strip" ? "Join strips" : "Combine into spread"}</button>{/if}
                 <button class="ed-btn" disabled={pageSelectionBusy} onclick={extractSelectedPages}>Extract to chapter…</button>
                 <button class="ed-btn danger" disabled={!canEdit || pageSelectionBusy || !selectedPageRegionCount} onclick={removeSelectedPageRegions}>Remove all regions…</button>
                 <button class="ed-btn danger" disabled={pageSelectionBusy} onclick={deleteSelectedPages}>Delete selected pages…</button>
@@ -4152,6 +4268,7 @@
             {busy}
             numberingStale={studioState.issues.some((issue) => issue.code === "numbering")}
             credits={studioState.credits ?? series.credits}
+            {pageMode}
             seriesId={series.id}
             onopen={choosePage}
             onselect={selectPageThumbnail}
@@ -4161,7 +4278,6 @@
             }}
             onreorder={reorderImages}
             onaddfiles={addFiles}
-            onaddcredits={() => pageOperation({ op: "add-credits" })}
             {canCombinePages}
             oncombine={combineSelectedPages}
             onextract={extractSelectedPages}
@@ -4213,7 +4329,7 @@
                       ? "Prepare"
                       : ["cleaning", "prepared"].includes(issue.code)
                         ? "Clean"
-                        : ["font", "layout", "stale", "glyphs", "overflow", "geometry"].includes(issue.code)
+                        : ["font", "layout", "stale", "glyphs", "overflow", "geometry", "render-review"].includes(issue.code)
                           ? "Typeset"
                           : "Review";
                 }}
@@ -4230,6 +4346,7 @@
             onmanagecharacters={() => { inspectorOpen = true; inspectorTab = 'glossary'; }}
             onstopcharacter={() => choosePalette('select')}
             bind:radius
+            bind:feather
             bind:growAmount
             polygonCount={polygonDraft.length}
             canCompletePolygon={polygonDraft.length >= 3}
@@ -4245,6 +4362,7 @@
               {canEdit}
               {canClean}
               {canUpload}
+              {pageMode}
               showPolygon={!!selected && step === "Typeset"}
               canCopyStyle={!!selected && !!regionDoc?.data.layout && !busy}
               onselect={choosePalette}
@@ -4258,13 +4376,17 @@
               {zoom}
               {zooming}
               {compare}
+              reviewSideBySide={step === "Review" && reviewView === "side-by-side"}
+              rawPageImage={asset(pageDoc?.data.prepared) || (page ? `/api/images/${page.id}?v=${page.updatedAt}` : "")}
               {showMask}
               {showRegions}
+              ghostRegions={regionVisibility === "ghost"}
               {canEdit}
               {canClean}
               {busy}
               {lineId}
               {radius}
+              {feather}
               {regionLabelScale}
               {colorFor}
               {labelFor}
@@ -4291,7 +4413,7 @@
               {reslicePreview}
               {selectedPolygon}
               scrollAction={canvasScroll}
-              regionLayout={(id: string) => studioState?.regions[id]?.data.layout}
+              regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:studioState?.regions[id]?.data.layout}
               regionTextMask={(id: string) => studioState?.regions[id]?.data.textMask}
               {overlayStyle}
               {adjustedBounds}
@@ -4337,20 +4459,26 @@
             <ViewBar
               pageIndex={page ? studioState.images.indexOf(page) + 1 : 0}
               pageCount={studioState.images.length}
-              {showRegions}
+              {regionVisibility}
               {showMask}
               {compare}
+              reviewView={step === "Review" ? reviewView : undefined}
               maskLabel={step === "Typeset" ? "Display text mask" : "Display mask"}
-              compareLabel={step === "Review" ? (compare ? "Show typeset" : "Show raw") : compare ? "Show result" : "Compare source"}
+              compareLabel={compare ? "Show result" : "Compare source"}
               {zoom}
               showRegionsToggle={step !== "Prepare"}
               showMaskToggle={step === "Clean" || step === "Typeset"}
               showCompareToggle={step !== "Prepare"}
               maskStaysWithCompare={step === "Clean"}
               onpage={shiftPage}
-              onregions={() => (showRegions = !showRegions)}
+              onregions={() => (regionVisibility = regionVisibility === "shown" ? "ghost" : regionVisibility === "ghost" ? "off" : "shown")}
               onmask={() => setMaskVisibility(!(showMask && !compare))}
-              oncompare={() => (compare = !compare)}
+              oncompare={() => {
+                if (step === "Review") {
+                  reviewView = reviewView === "normal" ? "raw" : reviewView === "raw" ? "side-by-side" : "normal";
+                  compare = reviewView === "raw";
+                } else compare = !compare;
+              }}
               onzoom={(next) => { zoom = next === "fit" ? 100 : clamp(next, 25, 2000); }}
             />
             </div>
@@ -4378,6 +4506,8 @@
             onredo={() => pageSavedHistory("redo")}
             onmark={() => void forgetPageHistory()}
             onnext={() => shiftPage(1)}
+            nextUnfinishedAvailable={!!nextUnfinishedId}
+            onnextunfinished={() => { if (nextUnfinishedId) choosePage(nextUnfinishedId); }}
           />
           </div>
         {/if}
@@ -4655,6 +4785,8 @@
             fitting={typesetRunning()}
             onfit={() => selected && regionDoc && act({ action: "fit", id: selected.id, expectedRevision: regionDoc.revision })}
             tab={activeTab === "style" || activeTab === "shape" ? activeTab : "text"}
+            onrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderEnabled:regionDoc.data.renderEnabled===false}})}
+            onconfirmrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderReviewConfirmed:true}})}
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
             onrectangle={() => void rectanglePolygon()}
             onfitbubble={() => selected && page && act({ action: "geometry", imageId: page.id, lineId: selected.id, expectedRevision: pageDoc?.revision ?? 0, method: "opencv" })}
@@ -4701,6 +4833,10 @@
         {:else if id === "chapter"}{@render prepareSettings("defaults")}
         {:else if id === "detection"}{@render translationSettings("detection")}
         {:else if id === "models"}{@render translationSettings("models")}
+        {:else if id === "director"}
+          <h2>Director settings</h2>
+          <p>Series memory and defaults for unattended runs.</p>
+          <DirectorMemory {apiBase} models={directorModels} disabled={directorLocked||!canUpload}/>
         {:else if id === "guide"}{@render translationSettings("guide")}
         {:else if id === "credits"}{@render prepareSettings("credits")}
         {:else if id === "typography"}
@@ -4746,7 +4882,6 @@
       {duplicateWarning}
       numberingStale={studioState.issues.some((issue) => issue.code === "numbering")}
       bind:pendingFiles
-      bind:stitch
       bind:chapterDpi
       bind:resliceSizing
       bind:resliceMaxHeight
@@ -4768,6 +4903,7 @@
       onsaveseriesprefs={(data) => act({ action: "preferences", scope: "series", expectedRevision: studioState!.seriesDefaults.revision, data })}
       onsavedpi={() => act({ action: "preferences", expectedRevision: preferenceRevision, data: { dpi: chapterDpi ? Number(chapterDpi) : null } })}
       onuploadcredit={uploadSeriesCredit}
+      onuploadchaptercredit={uploadChapterCredit}
       onclearcredit={clearSeriesCredit}
     />
   {/if}

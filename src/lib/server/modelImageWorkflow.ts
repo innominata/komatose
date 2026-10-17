@@ -25,3 +25,9 @@ export function imageWorkflowChoices() {
     tasks: (['detect', 'textMask', 'segmentBubble', 'inpaint', 'cleaning'] as ModelTaskId[]).filter(task => rowHasOperation(row, task)),
   })).filter(row => row.tasks.length);
 }
+
+/** Instruction editors can preserve artwork inside a broad text-removal selection. */
+export function cleaningFallbackModel(id: string): ModelRow | undefined {
+  const row = imageWorkflowModel(id);
+  return row && !row.disabled && rowHasOperation(row, 'cleaning') ? row : undefined;
+}

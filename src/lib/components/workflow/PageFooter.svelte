@@ -16,6 +16,8 @@
     onredo,
     onmark,
     onnext,
+    onnextunfinished,
+    nextUnfinishedAvailable = false,
   }: {
     pageNumber: string | number;
     info: string;
@@ -33,6 +35,8 @@
     onredo: () => void;
     onmark: () => void;
     onnext: () => void;
+    onnextunfinished: () => void;
+    nextUnfinishedAvailable?: boolean;
   } = $props();
 </script>
 
@@ -56,6 +60,9 @@
       {/if}
     {/if}
     <button type="button" class="pf-btn" onclick={onnext}>Next page <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+    {#if showMark}
+      <button type="button" class="pf-btn icon-only" data-find="next-unfinished" disabled={!nextUnfinishedAvailable} title={nextUnfinishedAvailable ? `Next unfinished page in ${stepLabel}` : `No other unfinished pages in ${stepLabel}`} aria-label={`Next unfinished page in ${stepLabel}`} onclick={onnextunfinished}><i class="bi bi-skip-forward" aria-hidden="true"></i></button>
+    {/if}
   </div>
 </div>
 

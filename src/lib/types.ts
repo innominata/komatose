@@ -13,7 +13,7 @@ export type EpisodeStatus = 'raws' | 'translating' | 'proofing' | 'cleaning' | '
 export type GlossaryTerm = {
 	id?: string;
 	kind?: 'character';
-	/** Alternate English spellings to recognize, not alternate output spellings. */
+	/** Alternate English forms accepted by glossary warnings; the translation remains preferred for model output. */
 	aliases?: string[];
 	notes?: string;
 	source: string;
@@ -194,6 +194,7 @@ export type OcrLangInfo = {
 export type WsEvent =
 	| { type: 'workflow:changed'; id: string; revision: number }
 	| { type: 'job:changed'; id: string }
+	| { type: 'director:changed'; runId: string; eventId?: number }
 	| { type: 'suggestion:changed'; lineId: string }
 	| { type: 'presence'; users: PublicUser[] }
 	| { type: 'line:upsert'; line: LineRow }

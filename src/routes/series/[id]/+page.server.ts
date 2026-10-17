@@ -1,4 +1,4 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { renderSafeMarkdown } from '$lib/safeMarkdown';
 import { canCreateSeries, canClean, canEditStickies, canEditTranslations, canUpload, hasSeriesAccess, isTestSeries } from '$lib/server/access';
@@ -11,12 +11,13 @@ import { duplicateEpisode, moveEpisode, setEpisodeTitle, setSeriesTitle, deleteE
 import { parseGlossary, serializeGlossary } from '$lib/glossary';
 import { listFonts, uploadFont } from '$lib/server/typesetting';
 import { getDoc } from '$lib/server/workflowStore';
-import { saveSeriesTypeSettings } from '$lib/server/workflowService';
+import { saveSeriesReadingPreferences, saveSeriesTypeSettings } from '$lib/server/workflowService';
 import { allTypeStyles, type Preferences } from '$lib/workflow';
 import { activeRegionKinds } from '$lib/regionCatalog';
 import { messageOf, statusOf } from '$lib/server/http';
 import { EPISODE_STATUSES } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
+import { createSeriesBackup } from '$lib/server/seriesBackups';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	const user = locals.user!;
@@ -41,6 +42,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		typeStyles: allTypeStyles(typeDoc.data),
 		typeStyle: allTypeStyles(typeDoc.data)['""'],
 		regionKinds: activeRegionKinds(typeDoc.data.regionKinds),
+		pageMode: typeDoc.data.pageMode === 'strip' ? 'strip' : 'pages',
 		canUpload: canUpload(user),
 		canRename: canUpload(user) && (user.role === 'admin' || !isTestSeries(s)),
 		canEdit: canEditTranslations(user),
@@ -52,6 +54,26 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
+	backup: async ({ request, locals, params }) => {
+		try {
+			const form = await request.formData();
+			const backup = await createSeriesBackup(params.id, locals.user!, String(form.get('label') || ''));
+			return { message: `Backup saved: ${backup.label}.`, backupId: backup.id };
+		} catch (e) { return fail(statusOf(e), { error: messageOf(e) }); }
+	},
+	pageMode: async ({ request, locals, params }) => {
+		const user = locals.user!;
+		if (!canEditTranslations(user) || !(await hasSeriesAccess(user, params.id))) return fail(403, { error: 'Forbidden' });
+		const form = await request.formData();
+		try {
+			saveSeriesReadingPreferences(params.id, Number(form.get('expectedRevision')), { pageMode: form.get('pageMode') });
+			await logActivity({ seriesId: params.id, userId: user.id, action: 'updated_series_page_mode',
+				payload: { pageMode: form.get('pageMode') } });
+			return { ok: true };
+		} catch (e) {
+			return fail(statusOf(e), { error: messageOf(e) });
+		}
+	},
 	rename: async ({ request, locals, params }) => {
 		const user = locals.user!;
 		if (!canUpload(user)) return fail(403, { error: 'Forbidden' });
@@ -193,19 +215,13 @@ export const actions: Actions = {
 		if (!ep || ep.seriesId !== params.id) return fail(404, { error: 'Chapter not found' });
 		const s = await getSeries(params.id);
 		if (!s) return fail(404, { error: 'Series not found' });
+		let result: Awaited<ReturnType<typeof duplicateEpisode>>;
 		try {
-			const result = await duplicateEpisode({ series: s, episode: toEpisode(ep), user });
-			await logActivity({
-				seriesId: params.id,
-				episodeId: result.id,
-				userId: user.id,
-				action: 'duplicated_episode',
-				payload: { sourceId: episodeId, title: result.title }
-			});
-			return { ok: true };
+			result = await duplicateEpisode({ series: s, episode: toEpisode(ep), user });
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Duplicate failed' });
 		}
+		redirect(303, `/series/${params.id}/episodes/${result.id}`);
 	},
 	uploadFont: async ({ request, locals, params }) => {
 		const user = locals.user!;

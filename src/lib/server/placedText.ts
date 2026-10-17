@@ -1,7 +1,7 @@
 import type { ImageRow, LineRow } from "../types";
-import { regionRectangle } from "../regionGeometry";
 import type { RegionData } from "../workflow";
-import { deltaTextTransform, rotateNormalizedPoints } from "../textTransform";
+import { effectiveTextRotation } from "../textRotation";
+import { deltaTextTransform } from "../textTransform";
 import { layoutKey, regionPolygon } from "./typesetting";
 
 /** Transform existing glyphs without changing their font size or line breaks. */
@@ -20,17 +20,8 @@ export function transformPlacedText(
   const poly = regionPolygon(line, region, page);
   const cx = (Math.min(...poly.map(p => p.x)) + Math.max(...poly.map(p => p.x))) / 2;
   const cy = (Math.min(...poly.map(p => p.y)) + Math.max(...poly.map(p => p.y))) / 2;
-  // Turn the bubble with the text. Refitting into the unrotated polygon would
-  // rewrap the lines and change the font size.
-  const previousRotation = region.layout?.style.rotation ?? region.style?.rotation ?? 0;
-  const spin = rotation !== undefined ? rotation - previousRotation : 0;
-  const source = region.polygon?.length ? region.polygon : spin ? regionRectangle(line) : null;
-  if (source) {
-    const turned = spin
-      ? rotateNormalizedPoints(source, { x: cx / page.width, y: cy / page.height }, spin, page.width, page.height)
-      : source;
-    next.polygon = turned.map(p => ({ x: p.x + dx, y: p.y + dy }));
-  }
+  if (region.polygon?.length && (dx || dy))
+    next.polygon = region.polygon.map(p => ({ x: p.x + dx, y: p.y + dy }));
   if (rotation !== undefined || skewX !== undefined || skewY !== undefined)
     next.style = {
       ...region.style,
@@ -42,7 +33,7 @@ export function transformPlacedText(
     const old = region.layout;
     const style = {
       ...old.style,
-      ...(rotation !== undefined ? { rotation } : {}),
+      ...(rotation !== undefined ? { rotation: effectiveTextRotation(region.geometryRotation, rotation) } : {}),
       ...(skewX !== undefined ? { skewX } : {}),
       ...(skewY !== undefined ? { skewY } : {}),
     };

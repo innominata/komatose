@@ -5,6 +5,9 @@
 
 	let { data, form } = $props();
 	let newTitle = $state('');
+	let newSeriesDialog: HTMLDialogElement;
+	let newLang = $state('japanese');
+	let newDirection = $state('rtl');
 	let addingTestPages = $state(false);
 
 	function addTestPagesEnhance() {
@@ -25,16 +28,11 @@
 		<div class="hud-kicker">Library</div>
 		<h2 class="mb-0">Series</h2>
 		<a href="/settings">Shared font library</a>
+		{#if data.canBackup}<span class="text-secondary"> · </span><a href="/backups">Series backups</a>{/if}
 	</div>
 	{#if data.canCreate}
 		<div class="d-flex flex-column align-items-end gap-2">
-			<form method="POST" action="?/create" use:enhance class="d-flex flex-column align-items-end gap-2">
-				<div class="d-flex gap-2">
-					<input class="form-control" name="title" placeholder="New series title" bind:value={newTitle} required />
-					<button class="btn-hud-primary" type="submit">Add</button>
-				</div>
-				<WorkCredit title={newTitle} />
-			</form>
+			<button class="btn-hud-primary" type="button" onclick={() => newSeriesDialog.showModal()}>New series</button>
 			<form method="POST" action="?/addTestPages" use:enhance={addTestPagesEnhance}>
 				<button class="btn-hud" type="submit" disabled={addingTestPages}>
 					{addingTestPages ? 'Adding test pages…' : 'Add Test Pages'}
@@ -44,9 +42,43 @@
 	{/if}
 </div>
 
+{#if data.canCreate}
+	<dialog bind:this={newSeriesDialog} class="hud-card new-series-dialog">
+		<form method="POST" action="?/create" enctype="multipart/form-data" use:enhance={() => async ({ result, update }) => {
+			await update({ reset: false });
+			if (result.type === 'success') newSeriesDialog.close();
+		}}>
+			<h2 class="h4">New series</h2>
+			{#if form?.error}<div class="alert-hud" role="alert">{form.error}</div>{/if}
+			<label>Name<input class="form-control" name="title" bind:value={newTitle} required /></label>
+			<div class="new-series-pair">
+				<label>Format<select class="form-control" name="pageMode" required><option value="pages">Pages · manga</option><option value="strip">Strip · webtoon</option></select></label>
+				<label>Source language<select class="form-control" name="lang" bind:value={newLang} onchange={() => (newDirection = newLang === 'korean' ? 'ltr' : 'rtl')}><option value="japanese">Japanese</option><option value="korean">Korean</option></select></label>
+			</div>
+			<label>Reading direction<select class="form-control" name="direction" bind:value={newDirection}><option value="rtl">Right to left</option><option value="ltr">Left to right</option></select></label>
+			<div class="new-series-pair">
+				<label>Pre-credits image <small>(optional)</small><input class="form-control" name="pre" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+				<label>Post-credits image <small>(optional)</small><input class="form-control" name="post" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+			</div>
+			<p class="small mb-0">Series credits appear in every chapter export. A chapter can use its own credits image.</p>
+			<WorkCredit title={newTitle} />
+			<div class="d-flex justify-content-end gap-2"><button class="btn-hud" type="button" onclick={() => newSeriesDialog.close()}>Cancel</button><button class="btn-hud-primary" type="submit">Create series</button></div>
+		</form>
+	</dialog>
+{/if}
+
 {#if form?.error}
 	<div class="alert-hud mb-3">{form.error}</div>
 {/if}
+
+<style>
+	.new-series-dialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; color: var(--text); }
+	.new-series-dialog::backdrop { background: rgba(0, 0, 0, .7); }
+	.new-series-dialog form { display: grid; gap: 14px; }
+	.new-series-dialog label { display: grid; gap: 5px; }
+	.new-series-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+	@media (max-width: 550px) { .new-series-pair { grid-template-columns: 1fr; } }
+</style>
 {#if form?.testPages}
 	<div class="hud-card mb-3">
 		{form.testPages.added

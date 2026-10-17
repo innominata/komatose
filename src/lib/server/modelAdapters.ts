@@ -54,7 +54,7 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
       case 'chapterReview': return cli.reviewChapterWithCli(engine as any, opts as any);
       case 'proofreadEnglish': return cli.proofreadScriptWithCli(engine as any, input.items, opts as any);
       case 'alternatives': return cli.suggestAlternativesWithCli(engine as any, opts as any);
-      case 'sourceReview': case 'advisory': case 'pageImageProofread':
+      case 'sourceReview': case 'advisory': case 'director': case 'pageImageProofread':
         return cli.advisoryWithCli(engine, opts as any);
       case 'cleaning': {
         if (engine !== 'codex') return unsupported(task);
@@ -80,14 +80,14 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
       case 'chapterReview': return llm.reviewChapterScript(opts as any);
       case 'proofreadEnglish': return llm.proofreadScript(input.items, opts as any);
       case 'alternatives': return llm.suggestAlternativesScript(opts as any);
-      case 'sourceReview': case 'advisory': case 'pageImageProofread': case 'detect': {
+      case 'sourceReview': case 'advisory': case 'director': case 'pageImageProofread': case 'detect': {
         const images: Buffer[] = input.images || (input.jpeg ? [input.jpeg] : []);
         const messages: any[] = [
           { role: 'system', content: input.system || 'Locate lettering regions. Return JSON {"regions":[{"x":0.1,"y":0.1,"w":0.2,"h":0.2}]} using normalized coordinates.' },
           { role: 'user', content: [{ type: 'text', text: input.prompt || 'Locate text in this image.' },
             ...images.map(bytes => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${bytes.toString('base64')}` } }))] },
         ];
-        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: 6000,
+        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: 6000, thinking: input.thinking,
           schema: input.schema ? { type: 'json_schema', json_schema: { name: task, strict: true, schema: input.schema } } : undefined });
         return llm.extractJsonObject(output);
       }

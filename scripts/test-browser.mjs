@@ -58,6 +58,15 @@ const model = createHttpServer(async (req, res) => {
     }) } }] }));
   }
   const system = String(payload.messages?.[0]?.content || '');
+  if (/^You are a (Japanese|Korean) scanlation proofreader\./.test(system)) {
+    const content = payload.messages[1]?.content;
+    if (!Array.isArray(content) || content.filter(part => part.type === 'image_url').length !== 1) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ error: 'Raw proofreader needs one image' }));
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ critique: 'Raw lettering checked.' }) } }] }));
+  }
   if (system.startsWith('You are an independent Japanese/Korean visual transcription reviewer')) {
     return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
       status: 'readable', source: '待って', translation: '', answer: 'The crop reads 待って.',

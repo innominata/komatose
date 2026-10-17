@@ -275,3 +275,10 @@ export async function startTranslationModel(id: string, signal?: AbortSignal) {
 export function translationModelRunning(id: string) {
   return state.service?.model === id && state.service.child.exitCode === null;
 }
+
+export function translationWorkerStatus(): { running: boolean; pid?: number; detail?: string } {
+  const service = state.service;
+  const running = Boolean(service && service.child.exitCode === null && service.child.signalCode === null && !service.child.killed);
+  const model = running ? translationModel(service!.model) : undefined;
+  return { running, pid: running ? service!.child.pid : undefined, detail: model?.label };
+}

@@ -310,6 +310,12 @@ export function workflowWorkerRunning() {
   return Boolean(worker && !worker.proc.killed && worker.proc.exitCode === null);
 }
 
+export function workflowWorkerStatus(): { running: boolean; pid?: number } {
+  const worker = global.__scanWorkflowWorker;
+  const running = Boolean(worker && !worker.proc.killed && worker.proc.exitCode === null);
+  return { running, pid: running ? worker!.proc.pid : undefined };
+}
+
 export async function warmupWorkflow() {
   if (!komatoseGpuEnabled()) return;
   if (warmupInFlight) return warmupInFlight;

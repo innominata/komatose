@@ -42,7 +42,8 @@ import { activeRegionKinds, isBuiltinRegionKind, normalizeRegionKinds, regionKin
 import { LINE_TYPES } from "../types";
 import { isCreditsPage } from "../credits";
 import type { Episode, Series, ImageRow, LineRow } from "../types";
-import { fitText, layoutKey, listFonts, validateStyle, regionPolygon } from "./typesetting";
+import { fitText, layoutKey, listFonts, validateStyle, regionPolygon, effectiveLayoutStyle } from "./typesetting";
+import { effectiveTextRotation } from "../textRotation";
 import { cleaningDeviceLabel, localOperation } from "./localWorker";
 import { detectorDefaults, resolveDetector } from "./detectorConfig";
 import { gpuClientStatus } from "./gpuMode";
@@ -165,7 +166,7 @@ export function keepCurrentLayouts(episodeId: string): number {
           line,
           doc.data,
           img,
-          style,
+          effectiveLayoutStyle(doc.data, style),
           effectiveDpi(page, img, prefs),
         );
         if (layout.key === key) continue;
@@ -191,6 +192,7 @@ export function preferences(episodeId: string, seriesId: string): Preferences {
     ...c,
     lang: s.lang ?? DEFAULT_PREFERENCES.lang,
     direction: s.direction ?? DEFAULT_PREFERENCES.direction,
+    pageMode: s.pageMode === "strip" ? "strip" : "pages",
     regionAi: s.regionAi ?? c.regionAi,
     regionKinds: s.regionKinds,
     style: { ...s.style },
@@ -296,7 +298,8 @@ function pinExistingTypeStyle(
   for (const row of rows) {
     const doc = getDoc<RegionData>(`region:${row.id}`, {});
     const frozen = doc.data.layout?.style
-      ? validateStyle({ ...DEFAULT_STYLE, ...doc.data.layout.style })
+      ? validateStyle({ ...DEFAULT_STYLE, ...doc.data.layout.style,
+          rotation: effectiveTextRotation(-(doc.data.geometryRotation ?? 0), doc.data.layout.style.rotation) })
       : validateStyle({ ...previous, ...pickStyle(doc.data.style) });
     if (sameStyle(frozen, next)) continue;
     if (sameStyle(pickStyle(doc.data.style), pickStyle(frozen))) continue;
@@ -327,11 +330,14 @@ export function ensureOwnRegionStyles(
     let stamped = 0;
     for (const row of rows) {
       const doc = getDoc<RegionData>(`region:${row.id}`, {});
-      if (styleIsOwned(doc.data.style)) continue;
+      if (doc.data.styleFromSeries || styleIsOwned(doc.data.style)) continue;
+      const layoutStyle = pickStyle(doc.data.layout?.style);
+      if (layoutStyle.rotation !== undefined)
+        layoutStyle.rotation = effectiveTextRotation(-(doc.data.geometryRotation ?? 0), layoutStyle.rotation);
       const style = pickStyle(validateStyle({
         ...seriesTypeStyle(seriesId, row.lineType),
         ...pickStyle(doc.data.style),
-        ...pickStyle(doc.data.layout?.style),
+        ...layoutStyle,
       }));
       try {
         putDoc(episodeId, doc.id, { ...doc.data, style }, doc.revision);
@@ -435,14 +441,16 @@ export function saveSeriesRegionAi(
 export function saveSeriesReadingPreferences(
   seriesId: string,
   expectedRevision: number,
-  input: { lang?: unknown; direction?: unknown },
+  input: { lang?: unknown; direction?: unknown; pageMode?: unknown },
 ) {
-  if (Object.keys(input).some(key => key !== "lang" && key !== "direction"))
-    throw new WorkflowError("Save language and reading direction separately from other settings");
+  if (Object.keys(input).some(key => key !== "lang" && key !== "direction" && key !== "pageMode"))
+    throw new WorkflowError("Save series format, language and reading direction separately from other settings");
   if ("lang" in input && input.lang !== "japanese" && input.lang !== "korean")
     throw new WorkflowError("Invalid language");
   if ("direction" in input && input.direction !== "rtl" && input.direction !== "ltr")
     throw new WorkflowError("Invalid reading direction");
+  if ("pageMode" in input && input.pageMode !== "pages" && input.pageMode !== "strip")
+    throw new WorkflowError("Invalid page mode");
   const doc = sqlite.transaction(() => {
     const current = getDoc<Partial<Preferences>>(`series:${seriesId}`, {});
     const saved = putDoc(null, current.id, { ...current.data, ...input }, expectedRevision);
@@ -639,18 +647,6 @@ export function readiness(
       code: "numbering",
       message: "Renumber pages in chapter order",
     });
-  if (series.credits?.pre && !imgs.some((img) => img.role === "pre-credits"))
-    issues.push({
-      code: "credits",
-      severity: "warning",
-      message: "Chapter is missing the series pre-credits page",
-    });
-  if (series.credits?.post && !imgs.some((img) => img.role === "post-credits"))
-    issues.push({
-      code: "credits",
-      severity: "warning",
-      message: "Chapter is missing the series post-credits page",
-    });
   const prefs = preferences(episode.id, series.id);
   const comments = sqlite
     .prepare(
@@ -701,6 +697,12 @@ export function readiness(
           pageLabel: pageLabel(img),
           regionLabel: regionLabel(img, line, live),
         });
+      const rendering=getDoc<RegionData>(`region:${line.id}`,{}).data;
+      if(rendering.renderEnabled===false) {
+        if(rendering.directorRenderingReview&&!rendering.directorRenderingReview.reviewed)
+          add("render-review","Review the Director decision to turn rendering off");
+        continue;
+      }
       if (!line.source?.trim() || line.sourceState !== "read")
         add("source", "Review unreadable source");
       if (!line.body.trim())
@@ -720,7 +722,7 @@ export function readiness(
       else {
         if (
           layout.key !==
-          layoutKey(line, region, img, style, effectiveDpi(p, img, prefs))
+          layoutKey(line, region, img, effectiveLayoutStyle(region, style), effectiveDpi(p, img, prefs))
         )
           add(
             "stale",
@@ -823,7 +825,7 @@ export async function fitRegion(
   episode: Episode,
   id: string,
   expected: number,
-  opts: { resetStyle?: boolean; style?: Partial<TextStyle> } = {},
+  opts: { resetStyle?: boolean; style?: Partial<TextStyle>; inheritStyle?: boolean; preserveStyle?: boolean } = {},
 ) {
   const line = (await listLines(episode.id)).find((l) => l.id === id);
   if (!line) throw new WorkflowError("Region not found", 404);
@@ -836,10 +838,14 @@ export async function fitRegion(
     throw new WorkflowError("Unlock this layout before fitting");
   const p = getDoc<PageData>(`page:${img.id}`, {}).data;
   let data = { ...doc.data };
-  if (opts.resetStyle) delete data.style;
-  if (opts.style !== undefined) data.style = pickStyle(opts.style);
+  if (!opts.preserveStyle) {
+    if (opts.resetStyle) delete data.style;
+    if (opts.style !== undefined) data.style = pickStyle(opts.style);
+    if (opts.inheritStyle) data.styleFromSeries = true;
+    else delete data.styleFromSeries;
+  }
   const style = resolveStyle(line, data, episode.id, series.id);
-  if (style.autoContrast !== false) {
+  if (!opts.preserveStyle && style.autoContrast !== false) {
     const background = p.cleaned || p.cleanBase || p.prepared;
     const bytes = background ? await readAsset(background) : await readWorkingOrOrig(series.slug, episode.slug, img.filename);
     if (!bytes) throw new WorkflowError("Page image is missing");
@@ -847,7 +853,7 @@ export async function fitRegion(
     style.fill = await contrastingText(bytes, polygon);
     style.outline = style.fill === "#000000" ? "#ffffff" : "#000000";
   }
-  data = { ...data, style: pickStyle(style) };
+  if (!opts.preserveStyle) data = { ...data, style: opts.inheritStyle ? pickStyle(opts.style) : pickStyle(style) };
   if (!listFonts(series.id).some((f) => f.id === style.fontId))
     throw new WorkflowError("Font does not belong to this series");
   const layout = await fitText(
@@ -955,7 +961,7 @@ export async function typesetRegions(
     errors: string[];
   }) => void,
   operation = localOperation,
-  opts: { savedStyle?: boolean } = {},
+  opts: { savedStyle?: boolean; preserveStyle?: boolean } = {},
 ) {
   const geometryLines = opts.savedStyle ? [] : await listLines(episode.id);
   const errors: string[] = [];
@@ -966,7 +972,7 @@ export async function typesetRegions(
     await (async () => {
       try {
         let region = getDoc<RegionData>(`region:${line.id}`, {});
-        if (region.data.locked) {
+        if (region.data.locked || region.data.renderEnabled===false) {
           skipped++;
           return;
         }
@@ -1028,8 +1034,8 @@ export async function typesetRegions(
             const value = region.data.style?.[key];
             if (value !== undefined) Object.assign(style, { [key]: value });
           }
-          await fitRegion(series, episode, line.id, region.revision, { style });
-        } else await fitRegion(series, episode, line.id, region.revision);
+          await fitRegion(series, episode, line.id, region.revision, { style, inheritStyle: true });
+        } else await fitRegion(series, episode, line.id, region.revision, { preserveStyle: opts.preserveStyle });
         completed++;
       } catch (e) {
         errors.push(

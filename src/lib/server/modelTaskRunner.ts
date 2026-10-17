@@ -7,6 +7,7 @@ import { modelPackage, modelPackageError, fingerprint, type DiscoveredPackage } 
 import { invokePackage, superviseModel } from './modelSupervisor';
 import { invokeBuiltinAdapter, type TaskInput } from './modelAdapters';
 import { isDiagnosticRun } from './assistantRoute';
+import { directorContext, directorEvent, directorTraceValue } from './directorAudit';
 
 /** Transport-only defaults for operator-created HTTP and CLI instances. */
 export function packageForRow(row: ModelRow): DiscoveredPackage {
@@ -43,7 +44,11 @@ export async function executeModelTask(row: ModelRow, task: ModelTaskId, input: 
       translation: '', answer: reading.source.trim() ? 'Independent transcription.' : 'No text returned.' };
   }
   const pkg = packageForRow(row);
-  return superviseModel(pkg, async () => {
+  const director=directorContext();
+  if (director && task !== 'director') directorEvent(director.runId,director.episodeId,director.imageId||null,'model:request',
+    {task,row:row.id,input:await directorTraceValue(input,director.runId)});
+  try {
+  const result=await superviseModel(pkg, async () => {
     let output;
     const releases: Array<() => void> = [];
     try {
@@ -86,4 +91,12 @@ export async function executeModelTask(row: ModelRow, task: ModelTaskId, input: 
   return output;
     } finally { for (const release of releases.reverse()) release(); }
   }, opts.abort);
+  if (director && task !== 'director') directorEvent(director.runId,director.episodeId,director.imageId||null,'model:response',
+    {task,row:row.id,output:await directorTraceValue(result,director.runId)});
+  return result;
+  } catch(error) {
+    if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'model:error',
+      {task,row:row.id,error:error instanceof Error?error.message:String(error)});
+    throw error;
+  }
 }

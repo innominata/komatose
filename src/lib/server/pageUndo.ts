@@ -72,7 +72,7 @@ export function pageUndoSummary(op: PageUndoOp | undefined, images: readonly Ima
 			ids = [op.originalId, op.createdId]; break;
 		case 'combine':
 			label = 'Combine pages into a spread';
-			effect = 'Restore the two separate pages, their saved artwork, region positions and lettering.';
+			effect = 'Restore the two separate images, their saved artwork, region positions and lettering.';
 			ids = [op.originalId]; break;
 		case 'reorder':
 			label = 'Reorder chapter pages'; effect = 'Restore the previous chapter page order.';

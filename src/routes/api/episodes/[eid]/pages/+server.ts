@@ -14,6 +14,7 @@ import { isRegionQueueBusy } from '$lib/server/aiTranslate';
 import { parseTranslateEngine } from '$lib/server/cliTranslate';
 import {
 	combineSpread,
+	joinStrip,
 	autoAlignPages,
 	autoCropPages,
 	addSeriesCredits,
@@ -120,6 +121,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		}
 
 		if (op === 'combine') return json({ ok: true, image: await combineSpread(ctx, body.imageIds) });
+		if (op === 'join-strip') return json({ ok: true, image: await joinStrip(ctx, body.imageIds) });
 		if (op === 'delete') return json({ ok: true, ...await deletePages(ctx, body.imageIds) });
 		if (op === 'extract') return json({ ok: true, chapter: await extractPages(ctx, body.imageIds, body.chapterNumber) }, { status: 201 });
 		if (op === 'add-credits') return json({ ok: true, ...await addSeriesCredits(ctx) });

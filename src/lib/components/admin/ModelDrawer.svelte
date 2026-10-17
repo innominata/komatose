@@ -70,6 +70,9 @@
 	let testing = $state<string>('');
 	let launchPresets = $state<Record<string, ManagedLaunch>>({});
 	let cliSeeded = '';
+	let renaming = $state(false);
+	let nameDraft = $state('');
+	let renameFor = '';
 
 	$effect(() => {
 		const id = managedPresetId;
@@ -84,6 +87,14 @@
 		return () => {
 			live = false;
 		};
+	});
+
+	$effect(() => {
+		const id = row?.id || '';
+		if (id === renameFor) return;
+		renameFor = id;
+		renaming = false;
+		nameDraft = '';
 	});
 
 	$effect(() => {
@@ -115,6 +126,29 @@
 		await run(async () => {
 			await apiPost('/api/admin/model-hub', { action: 'set-device', id: deviceKind!.key, choice });
 			toast(`${entry!.name} → ${choice === 'auto' ? 'Auto' : choice}`);
+			await refreshHub();
+		});
+	}
+	function startRename() {
+		if (!row) return;
+		nameDraft = row.name;
+		renaming = true;
+	}
+	async function saveName() {
+		if (!row) return;
+		const name = nameDraft.trim();
+		if (!name) {
+			toast('Enter a name', 'bad');
+			return;
+		}
+		if (name === row.name) {
+			renaming = false;
+			return;
+		}
+		await run(async () => {
+			await apiPost('/api/admin/models', { action: 'update', id: row!.id, name });
+			renaming = false;
+			toast('Name saved');
 			await refreshHub();
 		});
 	}
@@ -232,7 +266,18 @@
 				<span class="src"><i class="bi {entry.source === 'remote' ? 'bi-cloud' : entry.source === 'cli' ? 'bi-terminal' : entry.source === 'service' ? 'bi-plug' : 'bi-hdd'}"></i>{entry.sourceLabel}</span>
 				<button class="icon-btn" onclick={() => openDrawer(null)} aria-label="Close"><i class="bi bi-x-lg"></i></button>
 			</div>
-			<h2 style="margin-top:.3rem">{entry.name}</h2>
+			{#if row && renaming}
+				<form class="rename" onsubmit={(e) => { e.preventDefault(); void saveName(); }}>
+					<input type="text" bind:value={nameDraft} aria-label="Model name" maxlength="120" autofocus onkeydown={(e) => { if (e.key === 'Escape') renaming = false; }} />
+					<button class="btn sm" type="submit" disabled={!!busy || !nameDraft.trim()}>Save</button>
+					<button class="btn ghost sm" type="button" disabled={!!busy} onclick={() => (renaming = false)}>Cancel</button>
+				</form>
+			{:else}
+				<div class="name-line">
+					<h2>{entry.name}</h2>
+					{#if row}<button type="button" class="icon-btn" aria-label="Rename {entry.name}" title="Rename" disabled={!!busy} onclick={startRename}><i class="bi bi-pencil"></i></button>{/if}
+				</div>
+			{/if}
 			<div class="row" style="margin-top:.3rem">
 				<span class="status tone-{st.tone}"><span class="dot {st.dot || st.tone}"></span>{st.label}</span>
 				<span class="muted small">· {entry.sub}</span>

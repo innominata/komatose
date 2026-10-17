@@ -11,6 +11,7 @@ import { INSTALL_TARGETS, type InstallTarget } from '$lib/installCatalog';
 import { shownDevice, type GpuUsage, type HardwareSnapshot, type ResolvedDevice } from '$lib/computeDevices';
 import type { NvtopStatus } from '$lib/nvtopStatus';
 import { nameResidents, type KnownProcess } from '$lib/gpuResidents';
+import { collectGpuServices, residentControl, type GpuStop, type GpuWorkerRow } from '$lib/gpuRelease';
 import type { DetectorDefaults } from '$lib/detectorSetup';
 
 /**
@@ -113,6 +114,8 @@ export type HubData = {
 	gpuMode?: { komatose: boolean; source: 'env' | 'setting' | 'default' };
 	/** The cleaning worker's saved choice and where `auto` lands right now. */
 	cleaningWorker?: { choice: string; resolved: ResolvedDevice };
+	/** Cleaning, OCR, and translation workers. A running worker can be stopped from Hardware. */
+	workers?: GpuWorkerRow[];
 	defaults: Record<string, string>;
 	/** The text detector setup chapters use unless they pick their own. */
 	detector?: DetectorDefaults;
@@ -522,6 +525,8 @@ export type DeviceUser = {
 	pid?: number;
 	vramMiB?: number;
 	gttMiB?: number;
+	/** Present when this resident can be stopped. */
+	stop?: GpuStop;
 };
 export type DeviceRow = {
 	name: string;
@@ -572,6 +577,11 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 	for (const editor of data.editors) {
 		if (editor.pid && editor.state === 'running') knownProcesses.push({ pid: editor.pid, label: editor.label, kind: 'edit' });
 	}
+	for (const worker of data.workers || []) {
+		if (worker.pid && worker.running) knownProcesses.push({ pid: worker.pid, label: worker.label, kind: 'venv' });
+	}
+	const services = collectGpuServices(data);
+	const decorate = (users: DeviceUser[]) => users.map((user) => ({ ...user, ...residentControl(user, services) }));
 
 	const rows: DeviceRow[] = [];
 	const seen = new Set<string>();
@@ -585,7 +595,7 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 			totalMiB: usage.totalMiB,
 			usedMiB: usage.usedMiB,
 			integrated: usage.integrated ?? known?.integrated ?? false,
-			users: residents || usersByDevice.get(title(usage.name)) || [],
+			users: decorate(residents || usersByDevice.get(title(usage.name)) || []),
 		});
 	}
 	for (const device of ggml) {
@@ -596,7 +606,7 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 			totalMiB: device.totalMiB,
 			usedMiB: Math.max(0, device.totalMiB - device.freeMiB),
 			integrated: device.integrated,
-			users: usersByDevice.get(title(device.name)) || [],
+			users: decorate(usersByDevice.get(title(device.name)) || []),
 		});
 	}
 	const slot = (name: string) => Number(/^GPU (\d+)$/.exec(name)?.[1] || 999);

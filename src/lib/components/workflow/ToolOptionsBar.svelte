@@ -9,6 +9,7 @@
     onmanagecharacters,
     onstopcharacter,
     radius = $bindable(24),
+    feather = $bindable(100),
     growAmount = $bindable(10),
     polygonCount = 0,
     canCompletePolygon = false,
@@ -30,6 +31,7 @@
     onmanagecharacters?: () => void;
     onstopcharacter?: () => void;
     radius?: number;
+    feather?: number;
     growAmount?: number;
     polygonCount?: number;
     canCompletePolygon?: boolean;
@@ -56,7 +58,7 @@
     "bubble-fill": { icon: "bi-paint-bucket", label: "Fill speech bubble", hint: "Click inside an enclosed balloon. Fills it with the sampled background, leaving the outline." },
     "clone-stamp": { icon: "bi-copy", label: "Clone stamp", hint: "Right-click to set the source, click to lock the offset, then drag to paint." },
     blur: { icon: "bi-droplet-half", label: "Blur", hint: "Paint to blend an inpainted patch into the surrounding gradient." },
-    restore: { icon: "bi-clock-history", label: "Restore", hint: "Paint the previous saved artwork back with a soft edge." },
+    restore: { icon: "bi-clock-history", label: "Restore", hint: "Paint the previous saved artwork back. Adjust feather for a hard or soft edge." },
     raw: { icon: "bi-image", label: "Paint raw", hint: "Paint the uncleaned prepared pixels back onto the working page." },
     polygon: { icon: "bi-pentagon", label: "Draw polygon", hint: "Click to add points. Shift-click a point to remove it. Enter saves." },
     "style-brush": { icon: "bi-brush-fill", label: "Style brush", hint: "Click other regions to apply the copied style. Esc stops." },
@@ -101,6 +103,12 @@
           <button type="button" aria-label={`Brush ${preset} pixels`} aria-pressed={radius === preset} onclick={() => (radius = preset)}>{preset}</button>
         {/each}
       </div>
+    {/if}
+    {#if tool === 'restore' || tool === 'raw'}
+      <label>Feather
+        <input type="range" min="0" max="100" step="1" bind:value={feather} aria-label="Brush feather" />
+        <span class="feather-value">{feather}%</span>
+      </label>
     {/if}
     {#if tool === "mask-grow"}
       <label>Grow amount
@@ -153,7 +161,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    max-width: min(460px, calc(100% - 80px));
+    max-width: min(700px, calc(100% - 80px));
     padding: 8px 14px;
     border: 1px solid var(--hud-line);
     border-radius: 999px;
@@ -170,6 +178,7 @@
   .tool-options input[type="range"] { width: 110px; padding: 0; accent-color: var(--hud-teal-ink); }
   .tool-options label { display: inline-flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; color: var(--hud-text); }
   .tool-options input[type="number"] { width: 60px; }
+  .feather-value { min-width: 34px; text-align: right; }
   .tool-options button {
     border: 1px solid var(--hud-line);
     background: var(--hud-hover);

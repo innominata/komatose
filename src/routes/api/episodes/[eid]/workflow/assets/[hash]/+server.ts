@@ -23,7 +23,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
           : "font/ttf"
         : url.searchParams.has("download")
           ? "application/zip"
-          : "image/png",
+          : bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : "image/png",
       "cache-control": "private, max-age=31536000, immutable",
       ...(url.searchParams.has("download")
         ? {

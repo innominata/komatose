@@ -2,10 +2,11 @@
   import type { Snippet } from "svelte";
 
   const SECTIONS: [string, string, string][] = [
-    ["series", "Series", "Language & reading"],
+    ["series", "Series", "Format, language & reading"],
     ["chapter", "Chapter", "This chapter"],
     ["detection", "Text detection", "This chapter"],
     ["models", "AI models", "Series"],
+    ["director", "Director", "Series"],
     ["guide", "Translation guide", "Chapter + series"],
     ["typography", "Typography", "Series"],
     ["colors", "Region types & colours", "Series + just you"],

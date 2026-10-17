@@ -513,8 +513,14 @@ test('a diagnostic holds its model until parsing finishes and releases it on fai
   manager.operateManagedModel(row.id, 'start');
   await manager.waitManagedOperation(row.id);
   let finish!: () => void;
+  let pause = true;
   const pending = probeModelRow(row, 'translate', {
-    translate: async () => { await new Promise<void>(resolve => { finish = resolve; }); throw new Error('fixture parse failure'); },
+    translate: async () => {
+      // Translation probes may try both Japanese and Korean after a failure.
+      // Hold the first call only; subsequent fixtures must also be allowed to fail.
+      if (pause) { pause = false; await new Promise<void>(resolve => { finish = resolve; }); }
+      throw new Error('fixture parse failure');
+    },
   });
   while (!finish) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(usage.activeModelUses(row.id) > 0);
@@ -522,6 +528,14 @@ test('a diagnostic holds its model until parsing finishes and releases it on fai
   finish();
   assert.equal((await pending).ok, false);
   assert.equal(usage.activeModelUses(row.id), 0);
+});
+
+test("startup leaves a start-with-app model stopped", async () => {
+  const row = await managed("stay-stopped");
+  assert.equal(row.managedLaunch?.startOnBoot, true);
+  await manager.startManagedModels();
+  assert.equal(manager.managedModelStatus(row).state, "stopped");
+  assert.equal(manager.launchPreset("qwen38").startOnBoot, false);
 });
 
 test("a stopped managed model loads when a task needs it and unloads after idle", async () => {
@@ -560,4 +574,44 @@ test("a stopped managed model loads when a task needs it and unloads after idle"
   } finally {
     delete process.env.SCAN_MANAGED_IDLE_SECONDS;
   }
+});
+
+
+test('Director device handoff ignores only its own reservation and reloads on demand',async()=>{
+  const row=await managed('director-handoff');
+  await manager.ensureManagedModel(row.id);
+  usage.reserveModelJob(row.id,'director-current');
+  try {
+    assert.throws(()=>manager.operateManagedModel(row.id,'stop'),/busy/);
+    const release=usage.acquireModelUse(row.id);
+    assert.throws(()=>manager.operateManagedModel(row.id,'stop',undefined,false,{ignoreJobIds:['director-current']}),/busy/);
+    release();
+    usage.reserveModelJob(row.id,'other-job');
+    assert.throws(()=>manager.operateManagedModel(row.id,'stop',undefined,false,{ignoreJobIds:['director-current']}),/busy/);
+    usage.releaseModelJob('other-job');
+    const {releaseManagedChatForImageEdit}=await import('../src/lib/server/imageEdit');
+    const {withDirector}=await import('../src/lib/server/directorAudit');
+    await withDirector({runId:'director-current',episodeId:'fixture'},()=>releaseManagedChatForImageEdit(row.id));
+    assert.equal(manager.managedModelStatus(row).state,'stopped');
+    assert.equal(usage.activeModelUses(row.id),1,'The Director reservation must remain intact');
+    await manager.ensureManagedModel(row.id);
+    assert.equal(manager.managedModelStatus(row).state,'running');
+  } finally {usage.releaseModelJob('director-current');usage.releaseModelJob('other-job');}
+});
+
+
+test('image-editor handoff waits for active calls and supports cancellation',async()=>{
+  const {releaseManagedChatForImageEdit}=await import('../src/lib/server/imageEdit');
+  const row=await managed('handoff-wait');
+  await manager.ensureManagedModel(row.id);
+  const release=usage.acquireModelUse(row.id);
+  const abort=new AbortController();
+  const cancelled=releaseManagedChatForImageEdit(row.id,abort.signal);
+  abort.abort();
+  await assert.rejects(cancelled,/abort/i);
+  assert.equal(manager.managedModelStatus(row).state,'running');
+  const pending=releaseManagedChatForImageEdit(row.id);
+  release();
+  await pending;
+  assert.equal(manager.managedModelStatus(row).state,'stopped');
 });

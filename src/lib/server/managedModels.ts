@@ -532,6 +532,7 @@ export function operateManagedModel(
   action: "start" | "stop" | "restart",
   signal = new AbortController().signal,
   explicit = true,
+  opts?: { ignoreJobIds?: readonly string[] },
 ) {
   const row = findRegistryRow(id);
   if (!row) throw failure("Model not found", 404);
@@ -553,10 +554,10 @@ export function operateManagedModel(
     }
     return managedModelStatus(row);
   }
+  const unlock = lockModelLifecycle(id, { ignoreJobReservations: action === "start" && !explicit, ignoreJobIds: opts?.ignoreJobIds });
   clearManagedIdle(e);
   if (action === "stop" || !explicit) e.explicit = false;
   else e.explicit = true;
-  const unlock = lockModelLifecycle(id, { ignoreJobReservations: action === "start" && !explicit });
   e.operationId = randomUUID();
   e.error = undefined;
   e.state = action === "stop" ? "stopping" : "starting";
@@ -629,14 +630,14 @@ export function holdManagedModel(
   if (!managed || managedReadyNow(id)) return acquireModelUse(id, jobId, managed);
   return ensureManagedModel(id, signal).then(() => acquireModelUse(id, jobId, managed));
 }
+/** Reattach models that are already running. A restart never launches a new one. */
 export async function startManagedModels() {
   await Promise.allSettled(
     listRegistryRows()
       .filter(
         (row) =>
           row.managedLaunch &&
-          (row.managedLaunch.startOnBoot ||
-            Boolean(readOwner(row.id) && owned(readOwner(row.id)!))),
+          Boolean(readOwner(row.id) && owned(readOwner(row.id)!)),
       )
       .map(async (row) => {
         operateManagedModel(row.id, "start");

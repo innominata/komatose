@@ -74,6 +74,7 @@
     pageDoc,
     pageId,
     step,
+    pageMode = "pages",
     canEdit,
     canUpload,
     canClean,
@@ -100,6 +101,7 @@
     pageDoc: WorkflowDoc<PageData> | undefined;
     pageId: string;
     step: string;
+    pageMode?: "pages" | "strip";
     canEdit: boolean;
     canUpload: boolean;
     canClean: boolean;
@@ -175,7 +177,7 @@
               { ...ops.inheritedStyle(target.lineType), ...doc?.data.style },
               0,
             );
-          }}>Reset rotation</button
+          }}>Reset text rotation</button
         >
         {#if step === "Typeset"}
           <button
@@ -411,15 +413,15 @@
             menu = null;
           }}>Crop page…</button
         >
-        <button
+        {#if pageMode === "pages"}<button
           role="menuitem"
           disabled={!canUpload || busy}
           onclick={() => {
             pageTool = "split";
             menu = null;
           }}>Split page…</button
-        >
-        <button
+        >{/if}
+        {#if pageMode === "strip"}<button
           role="menuitem"
           disabled={!canUpload || busy}
           onclick={() => {
@@ -427,7 +429,7 @@
             pageTool = "reslice";
             menu = null;
           }}>Reslice strips…</button
-        >
+        >{/if}
         <button
           role="menuitem"
           disabled={!canUpload || busy}

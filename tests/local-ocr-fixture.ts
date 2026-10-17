@@ -16,9 +16,10 @@ export async function fixturePasses(id: string, operations: import('../src/lib/m
 }
 
 /** Stand-in for CTD: keep the centre of each region, with no installed model dependency. */
-export async function localMaskFixture() {
+export async function localMaskFixture(opts: { flatClean?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'scan-mask-fixture-'));
   const worker = join(root, 'worker.py'), log = join(root, 'calls.jsonl');
+  await writeFile(log, '');
   await writeFile(worker, `#!/usr/bin/python3
 import sys,json,struct,zlib
 if '-c' in sys.argv:
@@ -29,15 +30,34 @@ def chunk(kind,data):
     return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
 for line in sys.stdin:
     msg=json.loads(line)
-    assert msg['cmd']=='mask' and msg['detect']
+    if ${opts.flatClean ? 'True' : 'False'} and (msg['cmd']=='clean-flat' or (msg['cmd']=='clean' and msg.get('method')=='lama')):
+        # Blank-page Director fixtures need no model to restore a flat interior.
+        import shutil
+        shutil.copyfile(msg['path'],msg['out'])
+        print(json.dumps({'ok':True,'remaining':0,'method':'lama' if msg['cmd']=='clean' else 'flat','backend':'fixture'}),flush=True)
+        continue
+    if ${opts.flatClean ? 'True' : 'False'} and msg['cmd']=='geometry':
+        # Blank pages retain the submitted text-box geometry during fitting.
+        x,y,w,h=msg['box']
+        poly=msg.get('polygon') or [{'x':x,'y':y},{'x':x+w,'y':y},{'x':x+w,'y':y+h},{'x':x,'y':y+h}]
+        print(json.dumps({'ok':True,'polygon':poly,'confidence':1,'split':False}),flush=True)
+        continue
+    assert msg['cmd']=='mask' and (msg.get('detect') or msg.get('regionMask'))
     with open(${JSON.stringify(log)},'a') as f: f.write(json.dumps(msg)+'\\n')
     with open(msg['path'],'rb') as f: width,height=struct.unpack('>II',f.read(24)[16:24])
     pixels=bytearray(width*height)
+    inset=.2 if msg.get('detect') else 0
     for poly in msg['regions']:
         x0,x1=min(p['x'] for p in poly)*width,max(p['x'] for p in poly)*width
         y0,y1=min(p['y'] for p in poly)*height,max(p['y'] for p in poly)*height
-        for y in range(max(0,int(y0+(y1-y0)*.2)),min(height,int(y1-(y1-y0)*.2))):
-            for x in range(max(0,int(x0+(x1-x0)*.2)),min(width,int(x1-(x1-x0)*.2))): pixels[y*width+x]=255
+        for y in range(max(0,int(y0+(y1-y0)*inset)),min(height,int(y1-(y1-y0)*inset))):
+            for x in range(max(0,int(x0+(x1-x0)*inset)),min(width,int(x1-(x1-x0)*inset))): pixels[y*width+x]=255
+    for poly in msg.get('excludeRegions', []):
+        if len(poly)<3: continue
+        x0,x1=min(p['x'] for p in poly)*width,max(p['x'] for p in poly)*width
+        y0,y1=min(p['y'] for p in poly)*height,max(p['y'] for p in poly)*height
+        for y in range(max(0,int(y0)),min(height,int(y1)+1)):
+            for x in range(max(0,int(x0)),min(width,int(x1)+1)): pixels[y*width+x]=0
     rows=b''.join(b'\\0'+pixels[y*width:(y+1)*width] for y in range(height))
     png=b'\\x89PNG\\r\\n\\x1a\\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',width,height,8,0,0,0,0))+chunk(b'IDAT',zlib.compress(rows))+chunk(b'IEND',b'')
     with open(msg['out'],'wb') as f: f.write(png)
@@ -47,8 +67,9 @@ for line in sys.stdin:
   process.env.SCAN_WORKFLOW_PYTHON = worker;
   process.env.SCAN_GPU_MODE = 'cpu';
   await fixturePasses('koharu', ['textMask']);
+  if (opts.flatClean) await fixturePasses('lama-manga', ['inpaint']);
   return {
-    calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line)),
+    calls: async () => (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)),
     restore() {
       if (oldPython === undefined) delete process.env.SCAN_WORKFLOW_PYTHON;
       else process.env.SCAN_WORKFLOW_PYTHON = oldPython;

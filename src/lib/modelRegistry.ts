@@ -389,6 +389,11 @@ export function hostOf(row: ModelRow): AssistantHost {
 export function rowHasOperation(row: ModelRow, operation: ProviderOperation | readonly ProviderOperation[]): boolean {
 	const list = typeof operation === 'string' ? [operation] : operation;
 	return list.some((item) => {
+		if (item === 'director') {
+			if (row.qualificationAdapter === 'general')
+				return qualificationAllowsUse(row, 'conversation') && qualificationAllowsUse(row, 'imageUnderstanding');
+			return rowHasOperation(row, 'advisory') && rowHasOperation(row, 'describe');
+		}
 		if (row.implementedTasks && !row.implementedTasks.includes(item)) return false;
 		if (item === 'sourceReview') return rowHasOperation(row, 'vision');
 		const required = row.qualificationAdapter && row.qualificationAdapter !== 'direct' ? CAPABILITY_REQUIREMENTS[item] : undefined;

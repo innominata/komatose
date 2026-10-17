@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseGlossary, serializeGlossary, mergeGlossaryLists, glossaryPrompt, glossaryHits, upsertGlossary } from '../src/lib/glossary';
+import { parseGlossary, serializeGlossary, mergeGlossaryLists, glossaryPrompt, glossaryHits, glossaryMismatches, upsertGlossary } from '../src/lib/glossary';
 import { characterLabel, glossaryCharacters, resolveCharacter } from '../src/lib/characters';
 import { pageStepStamp, PAGE_STEPS } from '../src/lib/workflow';
 import type { GlossaryTerm } from '../src/lib/types';
@@ -59,6 +59,19 @@ test('character metadata survives glossary serialization, merges, hits and locke
   assert.match(prompt, /Speaks gently/);
   const unnamed = { ...character, id: 'anonymous', source: '', translation: 'The shopkeeper' };
   assert.equal(mergeGlossaryLists([unnamed, { ...unnamed, id: 'unknown', translation: 'The stranger' }]).length, 2);
+});
+
+test('glossary warnings accept character aliases and Korean given names', () => {
+  const term: GlossaryTerm = { kind: 'character', source: '김재훈', translation: 'Kim Jae-Hoon',
+    aliases: ['Kim Jaehoon'], edited: true };
+  assert.deepEqual(glossaryMismatches('김재훈이 왔다', 'Jae-Hoon is here.', [term]), []);
+  assert.deepEqual(glossaryMismatches('김재훈이 왔다', 'Kim Jaehoon is here.', [term]), []);
+  assert.deepEqual(glossaryMismatches('김재훈이 왔다', 'Kim Jae-Hoon is here.', [term]), []);
+  assert.deepEqual(glossaryMismatches('김재훈이 왔다', 'Someone is here.', [term]), [term]);
+  const place: GlossaryTerm = { source: '서울역', translation: 'Seoul Station', edited: true };
+  assert.deepEqual(glossaryMismatches('서울역에 갔다', 'Station is closed.', [place]), [place]);
+  assert.deepEqual(glossaryMismatches('서울역에 갔다', 'Seoul Rail Terminal is closed.',
+    [{ ...place, aliases: ['Seoul Rail Terminal'] }]), []);
 });
 
 test('assigning speakers preserves text, geometry, style, layouts and page completions', async () => {

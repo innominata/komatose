@@ -33,6 +33,7 @@
     canEdit = true,
     canClean = true,
     canUpload = true,
+    pageMode = "pages",
     showPolygon = false,
     canCopyStyle = false,
     onselect,
@@ -42,6 +43,7 @@
     canEdit?: boolean;
     canClean?: boolean;
     canUpload?: boolean;
+    pageMode?: "pages" | "strip";
     showPolygon?: boolean;
     canCopyStyle?: boolean;
     onselect: (id: PaletteId) => void;
@@ -50,7 +52,7 @@
   const tools = $derived.by((): ToolDef[] => {
     const zoom = ALL.zoom;
     if (step === "Prepare")
-      return [ALL.select, ...(canUpload ? [ALL.crop, ALL.split, ALL.reslice] : []), zoom];
+      return [ALL.select, ...(canUpload ? [ALL.crop, pageMode === "strip" ? ALL.reslice : ALL.split] : []), zoom];
     if (step === "Translate" || step === "Review")
       return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), zoom] : [ALL.select, zoom];
     if (step === "Clean")

@@ -9,6 +9,8 @@
 
 import { isProofreaderId, proofreaderLabel, proofreaderOnlyMessage, PROOFREADER_IDS, type ProofreaderId } from '../proofreaders';
 import { WorkflowError } from './workflowStore';
+import { storeAsset } from './workflowStore';
+import { directorAsset, directorContext, directorEvent } from './directorAudit';
 import { readUserSettings } from './userSettings';
 
 export type ProofreaderStatus = {
@@ -109,6 +111,14 @@ export async function proofreadWithService(opts: {
 	followUp?: boolean;
 	abort?: AbortSignal;
 }): Promise<{ critique: string; context: string }> {
+	const director = directorContext();
+	if (director) {
+		const hashes = await Promise.all(opts.images.map(storeAsset));
+		for (const hash of hashes) directorAsset(director.runId, hash);
+		directorEvent(director.runId, director.episodeId, director.imageId || null, 'proofreader:request', {
+			proofreader: opts.proofreader, mode: opts.mode, prompt: opts.prompt || '', followUp: opts.followUp === true, images: hashes,
+		});
+	}
 	const payload = await request<{ critique?: unknown; context?: unknown }>(
 		'/v1/proofread',
 		{
@@ -124,6 +134,8 @@ export async function proofreadWithService(opts: {
 		},
 		15 * 60_000,
 	);
+	if (director) directorEvent(director.runId, director.episodeId, director.imageId || null,
+		'proofreader:response', { critique: payload.critique });
 	return {
 		critique: String(payload.critique || ''),
 		context: typeof payload.context === 'string' ? payload.context : '',

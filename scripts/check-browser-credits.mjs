@@ -45,18 +45,19 @@ try {
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Chapter workflow" })
     .getByRole("button", { name: "Export", exact: true }).click();
-  await expect(page.getByText("Chapter is missing the series pre-credits page")).toBeVisible();
+  await expect(page.getByText("Chapter is missing the series pre-credits page")).toHaveCount(0);
   await page.getByRole("navigation", { name: "Chapter workflow" })
     .getByRole("button", { name: "Prepare", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Series credits", exact: true }).click();
-  await page.getByRole("button", { name: "Add credits to this chapter" }).click();
-  await expect(page.getByRole("button", { name: /pre-credits/ })).toBeVisible();
   await page.getByLabel("Upload post-credits page").setInputFiles({
     name: "post.png", mimeType: "image/png", buffer: post,
   });
-  await page.getByRole("button", { name: "Add credits to this chapter" }).click();
-  await expect(page.getByRole("button", { name: /post-credits/ })).toBeVisible();
+  await expect(page.getByText("Included automatically in this chapter’s exports.")).toHaveCount(2);
+  await page.getByLabel("Override in this chapter").first().setInputFiles({
+    name: "chapter-pre.png", mimeType: "image/png", buffer: pre,
+  });
+  await expect(page.getByText("This chapter has its own credits image.")).toBeVisible();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Chapter workflow" })
     .getByRole("button", { name: "Export", exact: true }).click();

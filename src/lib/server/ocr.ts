@@ -212,6 +212,12 @@ export function ocrWorkerRunning() {
 	return Boolean(g.__scanOcr && !g.__scanOcr.proc.killed && g.__scanOcr.proc.exitCode === null);
 }
 
+export function ocrWorkerStatus(): { running: boolean; pid?: number } {
+	const state = g.__scanOcr;
+	const running = Boolean(state && !state.proc.killed && state.proc.exitCode === null);
+	return { running, pid: running ? state!.proc.pid : undefined };
+}
+
 /** Load the detector and the recogniser up front so the first page is not slow. */
 export function warmupOcr(targets: ('detect' | 'ocr')[] = ['detect', 'ocr']) {
 	void (async () => {
@@ -255,6 +261,22 @@ export function stopWorker() {
 	}
 	state.proc.kill('SIGTERM');
 	g.__scanOcr = null;
+}
+
+/** Hardware → Stop. The process is gone before the GPU snapshot is read again. */
+export async function retireOcrWorker() {
+	const state = g.__scanOcr;
+	stopWorker();
+	if (!state || state.proc.exitCode !== null || state.proc.signalCode) return;
+	await new Promise<void>((resolve) => {
+		const force = setTimeout(() => {
+			try { state.proc.kill('SIGKILL'); } catch { /* already gone */ }
+		}, 2000);
+		state.proc.once('exit', () => {
+			clearTimeout(force);
+			resolve();
+		});
+	});
 }
 
 process.once('exit', stopWorker);

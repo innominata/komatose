@@ -12,6 +12,90 @@ workflow=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
 
 class Cleaning(unittest.TestCase):
+    def test_editor_region_mask_fills_and_expands_without_glyph_detection(self):
+        img = np.zeros((100, 100, 3), np.uint8)
+        region = [{'x': .4, 'y': .4}, {'x': .6, 'y': .4}, {'x': .6, 'y': .6}, {'x': .4, 'y': .6}]
+        req = {'regionMask': True, 'regions': [region], 'expansion': 5}
+        mask = workflow.removal_mask(img, req)
+        self.assertEqual(mask[50, 50], 255)
+        self.assertEqual(mask[50, 36], 255)
+        self.assertEqual(mask[50, 30], 0)
+        self.assertEqual(req['_maskMeta']['engine'], 'region')
+        with self.assertRaisesRegex(ValueError, 'Define a region'):
+            workflow.removal_mask(img, {'regionMask': True, 'regions': []})
+
+    def test_region_masks_preserve_excluded_completed_regions(self):
+        img = np.zeros((100, 100, 3), np.uint8)
+        outer = [{'x': .1, 'y': .1}, {'x': .9, 'y': .1}, {'x': .9, 'y': .9}, {'x': .1, 'y': .9}]
+        inner = [{'x': .4, 'y': .4}, {'x': .6, 'y': .4}, {'x': .6, 'y': .6}, {'x': .4, 'y': .6}]
+        mask = workflow.removal_mask(img, {'regionMask': True, 'regions': [outer], 'excludeRegions': [inner]})
+        self.assertEqual(mask[20, 20], 255)
+        self.assertEqual(mask[50, 50], 0)
+
+    def test_strict_balloon_fill_refuses_protected_text(self):
+        img = np.full((300, 400, 3), 80, np.uint8)
+        cv2.ellipse(img, (200, 150), (130, 100), 0, 0, 360, (250,)*3, -1)
+        cv2.ellipse(img, (200, 150), (130, 100), 0, 0, 360, (0,)*3, 4)
+        cv2.putText(img, 'TEXT', (140, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,)*3, 3)
+        before = img.copy()
+        protected = [{'x': .4, 'y': .4}, {'x': .6, 'y': .4}, {'x': .6, 'y': .6}, {'x': .4, 'y': .6}]
+        with self.assertRaisesRegex(ValueError, 'locked or already cleaned'):
+            workflow.bubble_fill(img, {'px': .5, 'py': .5, 'strict': True, 'excludeRegions': [protected]})
+        np.testing.assert_array_equal(img, before)
+
+    def test_strict_balloon_fill_refuses_border_crossing_strokes(self):
+        img = np.full((220, 220, 3), 230, np.uint8)
+        cv2.ellipse(img, (110, 110), (28, 46), 0, 0, 360, (6,)*3, -1)
+        cv2.line(img, (82, 86), (138, 86), (255,)*3, 5)
+        before = img.copy()
+        with self.assertRaisesRegex(ValueError, 'touches the balloon border'):
+            workflow.bubble_fill(img, {'px': .5, 'py': 130 / 220, 'strict': True})
+        np.testing.assert_array_equal(img, before)
+
+    def test_strict_fill_cleans_connected_balloons_and_preserves_neighbour_pixels(self):
+        img = np.full((360, 500, 3), 90, np.uint8)
+        interior = np.zeros(img.shape[:2], np.uint8)
+        cv2.ellipse(interior, (150, 170), (90, 75), 0, 0, 360, 255, -1)
+        cv2.ellipse(interior, (310, 170), (90, 75), 0, 0, 360, 255, -1)
+        img[interior > 0] = 250
+        contours, _ = cv2.findContours(interior, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(img, contours, -1, (0,)*3, 4)
+        cv2.putText(img, 'LEFT', (95, 180), cv2.FONT_HERSHEY_SIMPLEX, .8, (0,)*3, 2)
+        cv2.putText(img, 'KEEP', (265, 180), cv2.FONT_HERSHEY_SIMPLEX, .8, (0,)*3, 2)
+        # A coloured pixel in the protected lobe must survive exactly, even
+        # though the shared flood fill would otherwise flatten it.
+        img[195, 320] = (245, 249, 251)
+        left = [{'x': 80/500, 'y': 125/360}, {'x': 220/500, 'y': 125/360},
+                {'x': 220/500, 'y': 220/360}, {'x': 80/500, 'y': 220/360}]
+        right = [{'x': 245/500, 'y': 125/360}, {'x': 385/500, 'y': 125/360},
+                 {'x': 385/500, 'y': 220/360}, {'x': 245/500, 'y': 220/360}]
+        before = img.copy()
+        self.assertEqual(workflow.bubble_fill(img, {'px': .3, 'py': 170/360,
+            'strict': True, 'excludeRegions': [right]}), 'bubble')
+        self.assertTrue(np.all(img[155:185, 90:205] == 250))
+        np.testing.assert_array_equal(img[125:221, 245:386], before[125:221, 245:386])
+        np.testing.assert_array_equal(img[interior == 0], before[interior == 0])
+        self.assertTrue(np.all(img[170, 60] == 0), 'Keep the outer border')
+        # The next region can use the same method, retaining the first clean.
+        first = img.copy()
+        self.assertEqual(workflow.bubble_fill(img, {'px': .62, 'py': 170/360,
+            'strict': True, 'excludeRegions': [left]}), 'bubble')
+        self.assertTrue(np.all(img[155:185, 260:350] == 250))
+        np.testing.assert_array_equal(img[125:221, 80:221], first[125:221, 80:221])
+
+    def test_protection_does_not_make_an_open_connected_balloon_fillable(self):
+        img = np.full((360, 500, 3), 250, np.uint8)
+        # An open outline connected to the white page is still ineligible,
+        # even if exclusions could appear to close its missing side.
+        cv2.ellipse(img, (200, 170), (100, 75), 0, 30, 330, (0,)*3, 4)
+        cv2.putText(img, 'TEXT', (150, 180), cv2.FONT_HERSHEY_SIMPLEX, .8, (0,)*3, 2)
+        protected = [{'x': .56, 'y': .1}, {'x': .8, 'y': .1}, {'x': .8, 'y': .9}, {'x': .56, 'y': .9}]
+        before = img.copy()
+        with self.assertRaisesRegex(ValueError, 'bubble'):
+            workflow.bubble_fill(img, {'px': .4, 'py': 170/360,
+                'strict': True, 'excludeRegions': [protected]})
+        np.testing.assert_array_equal(img, before)
+
     def test_automask_clips_expansion_and_strokes_to_region_union(self):
         img = np.zeros((100, 120, 3), np.uint8)
         regions = [
@@ -630,6 +714,30 @@ class Cleaning(unittest.TestCase):
                 workflow.raw_brush(current.copy(), {'strokes': [{'points': [{'x': .5, 'y': .5}], 'radius': 8}]})
             with self.assertRaisesRegex(ValueError, 'raw'):
                 workflow.raw_brush(current.copy(), {'raw': raw_path, 'strokes': []})
+
+    def test_restore_and_raw_brush_feather_range(self):
+        current = np.zeros((80, 80, 3), np.uint8)
+        source = np.full_like(current, 200)
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = str(pathlib.Path(tmp) / 'source.png')
+            cv2.imwrite(source_path, source)
+            for brush, source_key in ((workflow.restore_brush, 'previous'),
+                                      (workflow.raw_brush, 'raw')):
+                edge_values = []
+                for feather in (0, 50, 100):
+                    out = current.copy()
+                    brush(out, {
+                        source_key: source_path,
+                        'strokes': [{'points': [{'x': .5, 'y': .5}],
+                                     'radius': 20, 'feather': feather}],
+                    })
+                    self.assertEqual(int(out[40, 40, 0]), 200)
+                    self.assertEqual(int(out[40, 61, 0]), 0)
+                    edge_values.append(int(out[40, 55, 0]))
+                self.assertEqual(edge_values[0], 200)
+                self.assertGreater(edge_values[0], edge_values[1])
+                self.assertGreater(edge_values[1], edge_values[2])
+                self.assertGreater(edge_values[2], 0)
 
     def test_blur_brush_coverage_falls_off_to_the_edge(self):
         img = np.zeros((80, 120, 3), np.uint8)

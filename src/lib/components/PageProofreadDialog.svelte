@@ -16,7 +16,9 @@
     onattachpage?: (variant: 'raw' | 'typeset') => Promise<Blob>;
   } = $props();
 
-  let dialog: HTMLDialogElement;
+  let x = $state(32);
+  let y = $state(32);
+  let dragging = $state<{ pointer: number; x: number; y: number } | null>(null);
   let prompt = $state('');
   let pasted = $state<{ mime: string; data: string; preview: string; label?: string }[]>([]);
   let sending = $state(false);
@@ -34,13 +36,6 @@
 
   let lastJobId = $state<string | undefined>(undefined);
   let imagesOpen = $state(false);
-
-  $effect(() => {
-    if (job && !dialog.open) {
-      imagesOpen = false;
-      dialog.showModal();
-    }
-  });
 
   $effect(() => {
     const id = job?.id;
@@ -154,18 +149,35 @@
       void sendFollowUp();
     }
   }
+
+  function startDrag(event: PointerEvent) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button, a, input')) return;
+    dragging = { pointer: event.pointerId, x: event.clientX - x, y: event.clientY - y };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function moveDrag(event: PointerEvent) {
+    if (!dragging || dragging.pointer !== event.pointerId) return;
+    x = Math.max(0, Math.min(window.innerWidth - 100, event.clientX - dragging.x));
+    y = Math.max(0, Math.min(window.innerHeight - 40, event.clientY - dragging.y));
+  }
+
+  function stopDrag(event: PointerEvent) {
+    if (dragging?.pointer === event.pointerId) dragging = null;
+  }
 </script>
 
-<dialog class="hud-dialog-controls page-proofread" bind:this={dialog} aria-labelledby="page-proofread-title" onclose={onclose}>
-  <header>
+{#if job}
+<div class="hud-dialog-controls page-proofread-window" role="dialog" aria-labelledby="page-proofread-title" style:left={`${x}px`} style:top={`${y}px`}>
+  <header role="toolbar" tabindex="0" aria-label="Move proofreader window" onpointerdown={startDrag} onpointermove={moveDrag} onpointerup={stopDrag} onpointercancel={stopDrag}>
     <div>
       <h2 id="page-proofread-title">{followUp ? 'Proofreader follow-up' : pageProofreadCall(job ?? { id: '', kind: '', state: '' }) === 'Raw' ? 'Proofread Raw' : 'Page proofreader'}</h2>
       <p>{job?.progress?.snapshot?.pageLabel ?? 'Page'} · {engineLabel} / {modelLabel}</p>
     </div>
-    <button type="button" aria-label="Close proofreader" onclick={() => dialog.close()}>Close</button>
+    <button type="button" aria-label="Close proofreader" onclick={onclose}>Close</button>
   </header>
   <div class="report-scroll">
-    <p class="hint">This reply is saved in this page’s Review replies and Jobs. Close it to edit; open it again from either place. Follow-ups reuse the same model conversation.</p>
+    <p class="hint">This reply is saved in this page’s Review replies and Jobs. You can keep this window open while editing, and reopen it from either place. Follow-ups reuse the same model conversation.</p>
     {#if followUp && job?.progress?.prompt}
       <section class="turn user-turn">
         <h3>You</h3>
@@ -248,13 +260,13 @@
         >{sending ? 'Sending…' : 'Send follow-up'}</button>
     </div>
   </footer>
-</dialog>
+</div>
+{/if}
 
 <style>
-  dialog { width: min(1100px, 96vw); max-height: 92vh; padding: 0; color: var(--hud-text); background: var(--hud-bg-2); border: 1px solid var(--hud-line); border-radius: 2px; }
-  dialog[open] { display: flex; flex-direction: column; }
-  dialog::backdrop { background: #0009; }
-  header { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 22px; border-bottom: 1px solid var(--hud-line); }
+  .page-proofread-window { position: fixed; z-index: 2150; width: min(960px, calc(100vw - 48px)); height: min(720px, calc(100vh - 48px)); min-width: min(320px, calc(100vw - 32px)); min-height: 240px; resize: both; overflow: hidden; display: flex; flex-direction: column; color: var(--hud-text); background: var(--hud-bg-2); border: 1px solid var(--hud-line); box-shadow: 0 12px 38px #0009; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 18px; border-bottom: 1px solid var(--hud-line); cursor: move; touch-action: none; user-select: none; }
+  header button { cursor: pointer; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-muted); }
   header p { margin: 6px 0 0; font-size: 12px; color: var(--hud-muted); }
@@ -274,11 +286,11 @@
   figcaption { margin-bottom: 8px; }
   img { width: 100%; height: auto; }
   summary { cursor: pointer; }
-  .composer { border-top: 1px solid var(--hud-line); padding: 14px 22px 18px; background: var(--hud-bg); }
+  .composer { border-top: 1px solid var(--hud-line); padding: 14px 22px 18px; background: var(--hud-bg); max-height: 50%; overflow: auto; flex-shrink: 0; }
   .composer-label { display: block; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-muted); margin-bottom: 8px; }
   .composer-box { border: 1px solid var(--hud-line); background: var(--hud-input-bg, var(--hud-bg-2)); padding: 8px; }
   .composer-box textarea { width: 100%; border: 0; background: transparent; color: inherit; resize: vertical; min-height: 4.5rem; }
-  .composer-actions { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-top: 10px; }
+  .composer-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; margin-top: 10px; }
   .attach-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
   .composer-actions .hint { margin: 0; flex: 1 1 12rem; }
   .paste-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }

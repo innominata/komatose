@@ -16,6 +16,10 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		const { episode, series } = await requireEpisodeAccess(user, params.eid);
 		const body = await request.json();
 		assertEpisodeIdle(episode.id);
+		if (typeof body.status === 'string') {
+			requireEdit(user);
+			if (!EPISODE_STATUSES.includes(body.status)) return fail(400, 'Invalid status');
+		}
 		const out: {
 			status?: string;
 			title?: string;
@@ -39,7 +43,6 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		}
 
 		if (typeof body.status === 'string') {
-			if (!EPISODE_STATUSES.includes(body.status)) return fail(400, 'Invalid status');
 			out.status = body.status;
 			await db
 				.update(episodes)

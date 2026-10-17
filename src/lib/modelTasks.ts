@@ -1,4 +1,5 @@
 import { validateTranscriptionChoice } from './decider';
+import { matchesContract, contractViolation } from './jsonContract';
 
 /** Application task contracts. No model names or capability declarations belong here. */
 export const MODEL_TASKS = [
@@ -13,6 +14,7 @@ export const MODEL_TASKS = [
   { id: 'chapterReview', label: 'Review Chapter', group: 'Review', description: 'Find chapter-wide issues and inconsistencies.' },
   { id: 'pageImageProofread', label: 'Proofread Page Images', group: 'Review', description: 'Compare source and typeset pages.' },
   { id: 'advisory', label: 'Enquire', group: 'Review', description: 'Answer an editor’s question.' },
+  { id: 'director', label: 'Director', group: 'Review', description: 'Choose source and English text corrections using page images and critique.' },
   { id: 'detect', label: 'Detect Text', group: 'Images', description: 'Locate lettering regions on a page.' },
   { id: 'textMask', label: 'Mask Text', group: 'Images', description: 'Return a pixel mask of lettering.' },
   { id: 'segmentBubble', label: 'Segment Bubble', group: 'Images', description: 'Return the interior mask of a speech bubble.' },
@@ -64,6 +66,11 @@ export function validateTaskOutput(task: ModelTaskId, output: unknown, schema?: 
       ? object(value) && schema.required.every(key => value[key] !== undefined)
       : object(value) && text(value.answer) && Array.isArray(value.suggestions)
       && value.suggestions.every((v: any) => object(v) && ['source', 'body'].includes(v.target) && object(v) && text(v.text) && typeof v.reason === 'string'); break;
+    case 'director': valid = (schema as any)?.properties
+      ? matchesContract(value, schema) : object(value) && text(value.reason) && typeof value.textComplete === 'boolean' && Array.isArray(value.edits)
+      && value.edits.every((edit: any) => object(edit) && text(edit.lineId) && text(edit.reason)
+        && (edit.source === null || typeof edit.source === 'string')
+        && (edit.english === null || typeof edit.english === 'string')); break;
     case 'pageImageProofread': valid = object(value) && text(value.critique); break;
     case 'detect': valid = object(value) && Array.isArray(value.regions) && value.regions.every((v: any) =>
       object(v) && ['x', 'y', 'w', 'h'].every(k => Number.isFinite(v[k])) && v.x >= 0 && v.y >= 0 && v.w > 0 && v.h > 0
@@ -72,5 +79,10 @@ export function validateTaskOutput(task: ModelTaskId, output: unknown, schema?: 
         object(p) && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 0 && p.y >= 0 && p.x <= 1.001 && p.y <= 1.001)))); break;
     default: valid = object(value) && (text(value.image) || text(value.mask));
   }
-  if (!valid) throw new ModelTaskError('failed_validation', `${taskLabel(task)} returned an invalid or incomplete result`);
+  if (!valid) {
+    if (task === 'director' && object(value))
+      throw new ModelTaskError('failed_validation',
+        `Director response failed validation: ${(schema as any)?.properties ? contractViolation(value,schema) : `expected reason, textComplete and edits; received keys: ${Object.keys(value).join(', ')}`}`);
+    throw new ModelTaskError('failed_validation', `${taskLabel(task)} returned an invalid or incomplete result`);
+  }
 }

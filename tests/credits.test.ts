@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
+import JSZip from "jszip";
 import { parseSeriesCredits, serializeSeriesCredits } from "../src/lib/credits";
 import { exportBlockers } from "../src/lib/workflow";
 
@@ -17,7 +18,11 @@ const { toEpisode, toSeries, listImages } = await import("../src/lib/server/quer
 const { saveSeriesCredit, clearSeriesCredit } = await import("../src/lib/server/seriesCredits");
 const { addSeriesCredits, autoAlignPages, autoCropPages, contentBBox } = await import("../src/lib/server/pageEdit");
 const { readiness, renumberPages } = await import("../src/lib/server/workflowService");
+const { captureExport, captureExportMetadata, buildExport } = await import("../src/lib/server/finishedExport");
 const { putDoc, storeAsset } = await import("../src/lib/server/workflowStore");
+const { getDoc } = await import("../src/lib/server/workflowStore");
+const { actions: libraryActions } = await import("../src/routes/+page.server");
+const { POST: uploadChapterImage } = await import("../src/routes/api/episodes/[eid]/images/+server");
 
 const user = { id: "editor", username: "editor", role: "admin" as const };
 db.insert(users).values({ ...user, passwordHash: "unused", createdAt: 1 }).run();
@@ -87,6 +92,22 @@ test("series credits JSON keeps only valid pre/post pages", () => {
   });
 });
 
+test("new series saves format, language, direction and both credits images", async () => {
+  const form = new FormData();
+  form.set('title', 'New webtoon');
+  form.set('pageMode', 'strip');
+  form.set('lang', 'korean');
+  form.set('direction', 'ltr');
+  form.set('pre', new File([await png(60, 20, '#112233')], 'opening.png', { type: 'image/png' }));
+  form.set('post', new File([await png(60, 20, '#334455')], 'closing.png', { type: 'image/png' }));
+  const result = await libraryActions.create({ locals: { user }, request: new Request('http://test/', { method: 'POST', body: form }) } as any) as { seriesId: string };
+  assert.ok(result.seriesId);
+  assert.deepEqual(getDoc(`series:${result.seriesId}`, {}).data, { pageMode: 'strip', lang: 'korean', direction: 'ltr' });
+  const created = toSeries(db.select().from(series).where(eq(series.id, result.seriesId)).get()!);
+  assert.ok(created.credits.pre);
+  assert.ok(created.credits.post);
+});
+
 test("upload series credits, add to chapter, skip a second add", async () => {
   const ctx = await chapter();
   await addPage(ctx, { id: `${ctx.episode.id}-p0`, width: 80, height: 100, color: "#445566", sortOrder: 0 });
@@ -111,7 +132,7 @@ test("upload series credits, add to chapter, skip a second add", async () => {
   assert.equal((await listImages(ctx.episode.id)).length, 4);
 });
 
-test("export warns when the chapter is missing series credits", async () => {
+test("series credits appear automatically in exports and chapter pages replace them", async () => {
   const ctx = await chapter();
   await addPage(ctx, { id: `${ctx.episode.id}-p`, width: 40, height: 50, color: "#808080", sortOrder: 0 });
   await saveSeriesCredit(ctx.series.id, "pre", "pre.png", await png(40, 20, "#111111"));
@@ -119,17 +140,41 @@ test("export warns when the chapter is missing series credits", async () => {
   const withCredits = toSeries(db.select().from(series).where(eq(series.id, s.id)).get()!);
   const missing = readiness(withCredits, ctx.episode, await listImages(ctx.episode.id), []);
   const credits = missing.filter((issue) => issue.code === "credits");
-  assert.equal(credits.length, 2);
-  assert.ok(credits.every((issue) => issue.severity === "warning"));
-  assert.ok(credits.some((issue) => /pre-credits/.test(issue.message)));
-  assert.ok(credits.some((issue) => /post-credits/.test(issue.message)));
+  assert.equal(credits.length, 0);
   assert.deepEqual(exportBlockers(credits), []);
+  const automatic = captureExportMetadata(withCredits, ctx.episode);
+  assert.deepEqual(automatic.pages.map((page) => page.image.role), ["pre-credits", "page", "post-credits"]);
+  assert.deepEqual(automatic.pages.map((page) => page.image.pageNumber), [1, 2, 3]);
+  assert.ok(automatic.pages[0].image.id.startsWith('series-credit:'));
+  const zip = await JSZip.loadAsync(await buildExport(await captureExport(withCredits, ctx.episode, 'png', true)));
+  assert.deepEqual(Object.keys(zip.files).filter((name) => name.endsWith('.png')).sort(), ['1.png', '2.png', '3.png']);
+  assert.equal((await sharp(await zip.file('1.png')!.async('nodebuffer')).metadata()).width, 40);
   ctx.series = withCredits;
   await addSeriesCredits(ctx);
+  const overridden = captureExportMetadata(withCredits, ctx.episode);
+  assert.equal(overridden.pages.length, 3);
+  assert.ok(overridden.pages.every((page) => !page.image.id.startsWith('series-credit:')));
   const present = readiness(withCredits, ctx.episode, await listImages(ctx.episode.id), []);
   assert.equal(present.filter((issue) => issue.code === "credits").length, 0);
   await clearSeriesCredit(s.id, "pre");
   await clearSeriesCredit(s.id, "post");
+});
+
+test("chapter credits upload overrides the series default without changing it", async () => {
+  const ctx = await chapter();
+  await addPage(ctx, { id: `${ctx.episode.id}-story`, width: 80, height: 100, sortOrder: 0 });
+  await saveSeriesCredit(ctx.series.id, 'pre', 'series.png', await png(80, 20, '#112233'));
+  const form = new FormData();
+  form.set('creditKind', 'pre');
+  form.set('files', new File([await png(80, 30, '#cc3344')], 'guest.png', { type: 'image/png' }));
+  const response = await uploadChapterImage({ locals: { user }, params: { eid: ctx.episode.id },
+    request: new Request('http://test/images', { method: 'POST', body: form }) } as any);
+  assert.equal(response.status, 200, await response.clone().text());
+  const saved = captureExportMetadata(ctx.series, ctx.episode);
+  assert.equal(saved.pages[0].image.role, 'pre-credits');
+  assert.equal(saved.pages[0].image.originalName, 'guest.png');
+  assert.equal(saved.pages.filter((page) => page.image.role === 'pre-credits').length, 1);
+  assert.equal(toSeries(db.select().from(series).where(eq(series.id, ctx.series.id)).get()!).credits.pre?.originalName, 'series.png');
 });
 
 test("credits pages do not need regions to export", async () => {

@@ -117,10 +117,14 @@ export function unreferencedAssets(db: Database.Database, hashes: string[]): str
   const font = db.prepare(
     "SELECT 1 FROM font_assets WHERE hash=? UNION ALL SELECT 1 FROM global_font_assets WHERE hash=? LIMIT 1",
   );
+  const director = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='director_assets'").get()
+    ? db.prepare('SELECT 1 FROM director_assets WHERE hash=? LIMIT 1') : null;
   const freed: string[] = [];
+  const memory = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='director_memory_assets'").get()
+    ? db.prepare('SELECT 1 FROM director_memory_assets WHERE hash=? LIMIT 1') : null;
   for (const hash of new Set(hashes)) {
     if (!/^[a-f0-9]{64}$/.test(hash)) continue;
-    if (font.get(hash, hash) || page.get(hash) || job.get(hash, hash)) continue;
+    if (font.get(hash, hash) || page.get(hash) || job.get(hash, hash) || director?.get(hash) || memory?.get(hash)) continue;
     freed.push(hash);
   }
   return freed;

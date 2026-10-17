@@ -24,6 +24,8 @@ import { runVisionRead, type VisionReadHandlers } from './visionRead';
 import { readBubbleWithCli } from './cliTranslate';
 import { extractJsonObject, parseReadPayload, readBubble, readBubbleCopy, READ_SCHEMA } from './llm';
 import { listRegistryRows } from './modelRegistryStore';
+import { directorAsset, directorContext, directorEvent } from './directorAudit';
+import { storeAsset } from './workflowStore';
 
 const OCR_CONCURRENCY = 3;
 /** One model reading one region. A hung remote call must not hold the chapter. */
@@ -142,16 +144,28 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
   hooks?: { onTranslate?: () => void; onDecide?: (modelId: string) => void; decider?: DeciderOptions }): Promise<OcrConsensus> {
   const ids = transcriptionModelIds(modelIds);
   const run = async (signal: AbortSignal) => {
+    const director=directorContext();
+    const cropHash=director ? await storeAsset(crop) : '';
+    if (director) directorAsset(director.runId,cropHash);
     const readings: OcrReading[] = await mapPool(ids, OCR_CONCURRENCY, async (id) => {
       signal.throwIfAborted();
       const timeout = AbortSignal.timeout(TRANSCRIPTION_READ_MS);
       const readSignal = AbortSignal.any([signal, timeout]);
-      try { return { model: id, source: (await read(id, crop, readSignal, lang)).trim() }; }
+      if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:request',
+        {model:id,lang,crop:cropHash});
+      try {
+        const source=(await read(id, crop, readSignal, lang)).trim();
+        if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:response',
+          {model:id,source});
+        return {model:id,source};
+      }
       catch (error) {
         signal.throwIfAborted();
         const message = timeout.aborted
           ? `Timed out after ${Math.round(TRANSCRIPTION_READ_MS / 1000)}s`
           : (error instanceof Error ? error.message : String(error));
+        if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:error',
+          {model:id,error:message});
         return { model: id, source: '', error: message };
       }
     });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 import { compareOcrReadings } from '../src/lib/ocrConsensus';
-import { DEFAULT_STYLE } from '../src/lib/workflow';
+import { DEFAULT_STYLE, pageStepStamp } from '../src/lib/workflow';
 
 process.env.SCAN_ROOT = await mkdtemp(join(tmpdir(), 'scan-review-workflow-'));
 process.env.DATABASE_URL = join(process.env.SCAN_ROOT, 'data/test.db');
@@ -17,7 +17,7 @@ const { getSeries, getEpisode, listLines } = await import('../src/lib/server/que
 const { getDoc, putDoc, storeAsset, readAsset } = await import('../src/lib/server/workflowStore');
 const { readOcrConsensus, saveOcrConsensus } = await import('../src/lib/server/ocrConsensus');
 const { capturePageImages } = await import('../src/lib/server/pageImages');
-const { startPageProofread, startPageProofreadFollowUp, cancelPageProofread, rememberProofread, resetProofreadCursor, proofreadCursor } = await import('../src/lib/server/pageProofread');
+const { startPageProofread, startPageProofreadFollowUp, startChapterRawProofread, chapterRawProofreadPages, cancelPageProofread, rememberProofread, resetProofreadCursor, proofreadCursor } = await import('../src/lib/server/pageProofread');
 const { listJobs } = await import('../src/lib/server/jobs');
 const { removeBlankRegions } = await import('../src/lib/server/workflowService');
 const { saveImageFile } = await import('../src/lib/server/storage');
@@ -421,6 +421,65 @@ test('Proofread Raw sends only the raw image to a vision proofreading model and 
   }
 });
 
+test('Proofread All Raw skips done and regionless pages and waits for each saved reply', async () => {
+  sqlite.prepare("INSERT INTO episodes(id,series_id,slug,title,created_at,updated_at) VALUES('batch-e','s','batch','Batch',1,1)").run();
+  const batchEpisode = (await getEpisode('batch-e'))!;
+  const raw = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'white' } }).png().toBuffer();
+  for (const [index, id] of ['batch-done', 'batch-blank', 'batch-first', 'batch-second'].entries()) {
+    const file = await saveImageFile({ seriesSlug: 's', episodeSlug: 'batch', sortOrder: index,
+      originalName: `${id}.png`, bytes: raw, mime: 'image/png' });
+    await db.insert(images).values({ id, episodeId: 'batch-e', ...file, originalName: `${id}.png`,
+      sortOrder: index, createdAt: 1, updatedAt: 1 });
+    if (id === 'batch-blank') continue;
+    await db.insert(lines).values({ id: `${id}-line`, episodeId: 'batch-e', imageId: id,
+      source: '待って', body: 'Wait', lineType: 'plain', sourceState: 'read',
+      updatedBy: 'human', sortOrder: 0, updatedAt: 1 });
+  }
+  const doneLine = (await listLines('batch-e')).find(line => line.imageId === 'batch-done')!;
+  const doneDoc = getDoc<any>('page:batch-done', {});
+  putDoc('batch-e', doneDoc.id, { completed: { review: pageStepStamp('review', doneDoc.data,
+    [doneLine], [], [{ id: doneLine.id, data: {} }]) } }, doneDoc.revision);
+  assert.deepEqual(await chapterRawProofreadPages('batch-e'), ['batch-first', 'batch-second']);
+
+  const originalFetch = globalThis.fetch;
+  const sent: Array<{ page: string; resolve: (response: Response) => void }> = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [] });
+    if (!String(url).endsWith('/chat/completions')) return Response.json({}, { status: 503 });
+    const payload = JSON.parse(String(init?.body));
+    assert.match(payload.messages[0].content, /Read the raw page image/);
+    assert.equal(payload.messages[1].content.filter((part: any) => part.type === 'image_url').length, 1);
+    return new Promise<Response>(resolve => sent.push({ page: payload.messages[1].content[0].text, resolve }));
+  };
+  const waitFor = async (condition: () => boolean) => {
+    for (let i = 0; i < 500; i++) {
+      if (condition()) return;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    throw new Error('Batch fixture timed out');
+  };
+  try {
+    const { jobId, total } = await startChapterRawProofread({ series, episode: batchEpisode,
+      model: { engine: 'qwen', model: 'proofreader-fixture' } });
+    assert.equal(total, 2);
+    await waitFor(() => sent.length === 1);
+    assert.match(sent[0].page, /Page 3/);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(sent.length, 1, 'second request waits for the first reply');
+    sent[0].resolve(Response.json({ choices: [{ message: { content: JSON.stringify({ critique: 'First reply' }) } }] }));
+    await waitFor(() => sent.length === 2);
+    assert.match(sent[1].page, /Page 4/);
+    assert.equal(listJobs('batch-e').filter(job => job.kind === 'page-proofread' && job.state === 'completed').length, 1);
+    sent[1].resolve(Response.json({ choices: [{ message: { content: JSON.stringify({ critique: 'Second reply' }) } }] }));
+    await waitFor(() => listJobs('batch-e').find(job => job.id === jobId)?.state === 'completed');
+    const jobs = listJobs('batch-e');
+    assert.deepEqual(jobs.filter(job => job.kind === 'page-proofread').map(job => job.payload.imageId).sort(),
+      ['batch-first', 'batch-second']);
+    assert.deepEqual(jobs.find(job => job.id === jobId)?.pages.map(page => page.state), ['completed', 'completed']);
+    assert.equal(jobs.find(job => job.id === jobId)?.progress.completed, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('proofreader follow-up creates a new critique from the parent job', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -515,6 +574,22 @@ test('proofreading service gets page images first and only the typed follow-up a
     assert.equal(bodies[3].mode, 'raw');
     assert.equal(bodies[3].followUp, false);
     assert.equal((bodies[3].images as unknown[]).length, 1);
+    assert.match(String(bodies[3].prompt),/exact original-language source AND a complete recommended English translation/);
+    const region=await sharp({create:{width:12,height:12,channels:3,background:'blue'}}).png().toBuffer();
+    const rawQuestion=startPageProofreadFollowUp({series,episode,parentJobId:rawJob.jobId,
+      prompt:'Can you give me the source and English translation for this region?',images:[region],includeParentContext:true});
+    const rawAnswer=await finished(rawQuestion.jobId);
+    assert.equal(rawAnswer.state,'completed',rawAnswer.error||'');
+    assert.equal(rawAnswer.payload.followUpOf,rawJob.jobId);
+    assert.equal(rawAnswer.payload.mode,'raw');
+    assert.equal(bodies[4].mode,'raw');
+    assert.equal(bodies[4].followUp,true);
+    assert.equal((bodies[4].images as unknown[]).length,2,'Whole raw page plus the requested region');
+    assert.match(String(bodies[4].prompt),/Your prior raw reading/);
+    assert.match(String(bodies[4].prompt),/Critique 4/);
+    assert.match(String(bodies[4].prompt),/source and English translation for this region/);
+
+
   } finally {
     globalThis.fetch = originalFetch;
     if (previousUrl == null) delete process.env.SCAN_PROOFREAD_SERVICE_URL;

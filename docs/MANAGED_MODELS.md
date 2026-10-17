@@ -32,7 +32,7 @@ agents, and specialist OCR services continue to use their existing adapters.
    either unloads the other on that device. Both editors also share port 18091
    and one resident process: loading one in **Admin → Setup → Local image editor**
    stops the other first.
-4. Choose whether to start with the app. Save, then press **Start model**.
+4. Save, then press **Start model**. Models stay stopped until they are started by hand or a task needs them. A rebuild does not start them.
 
 **Edit** re-expands a card and re-reads the saved recipe (collapse → expand
 always shows what is on disk). **Delete** asks for confirmation and removes the

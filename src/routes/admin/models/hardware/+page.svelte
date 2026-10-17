@@ -11,6 +11,7 @@
 	} from '$lib/components/admin/hub.svelte';
 	import { formatMiB, cardLabel, deviceOptions, shownDevice } from '$lib/computeDevices';
 	import { formatResidentMemory } from '$lib/gpuResidents';
+	import type { GpuWorkerRow } from '$lib/gpuRelease';
 	import type { DeviceUser } from '$lib/components/admin/hub.svelte';
 	import ModelPackTransfer from '$lib/components/ModelPackTransfer.svelte';
 
@@ -118,6 +119,49 @@
 		const timer = setInterval(() => void refreshHub(), 2000);
 		return () => clearInterval(timer);
 	});
+	function gpuPid(label: string, pid?: number): number | undefined {
+		for (const device of devices) {
+			for (const user of device.users) {
+				if (pid && user.pid === pid) return user.pid;
+				if (user.label === label && user.pid) return user.pid;
+			}
+		}
+		return undefined;
+	}
+	const workers = $derived<GpuWorkerRow[]>((data.workers || []).map((worker) => {
+		const pid = gpuPid(worker.label, worker.pid);
+		if (worker.running || !pid) return worker;
+		return { ...worker, running: true, pid };
+	}));
+	const canStopOthers = $derived(
+		devices.some((device) => device.users.some((user) => user.stop))
+		|| data.rows.some((row) => Boolean(row.managedLaunch) && (row.managed?.state === 'running' || row.managed?.state === 'starting'))
+		|| data.reviewServers.some((server) => server.state === 'running' || server.state === 'starting')
+		|| data.editors.some((editor) => editor.state === 'running' || editor.state === 'starting')
+		|| workers.some((worker) => worker.running),
+	);
+	async function stopGpu(body: Record<string, unknown>) {
+		busy = 'gpu:stop';
+		try {
+			const res = await fetch('/api/admin/model-hub', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ action: 'stop-gpu', ...body }),
+			});
+			const json = await res.json();
+			if (!res.ok || json.ok === false) throw new Error(json.error || 'Could not stop');
+			const stopped = (json.stopped || []) as string[];
+			const errors = (json.errors || []) as string[];
+			if (stopped.length) toast(`Stopped ${stopped.join(', ')}.`);
+			else if (!errors.length) toast('Nothing is running on the GPUs');
+			if (errors.length) toast(errors.join(' '), 'bad');
+			await refreshHub();
+		} catch (e) {
+			toast(String((e as Error).message), 'bad');
+		} finally {
+			busy = '';
+		}
+	}
 	async function installEnv(id: string, label: string) {
 		try {
 			await apiPost('/api/admin/setup-install', { action: 'start', ids: [id] });
@@ -137,6 +181,7 @@
 	</div>
 	<div class="nvtop-actions">
 		<div class="row">
+			<button class="btn danger" disabled={!!busy || !canStopOthers} onclick={() => void stopGpu({ scope: 'others' })}><i class="bi bi-stop-circle"></i> Stop GPU models</button>
 			<button class="btn ghost" onclick={() => void recheckDevices()}><i class="bi bi-arrow-repeat"></i> Recheck devices</button>
 			<button class="btn ghost" disabled={nvtop?.state === 'running'} aria-busy={nvtop?.state === 'running'} onclick={() => void buildNvtop()}>{nvtopLabel}</button>
 			<div class="help-wrap">
@@ -157,6 +202,7 @@
 				{/if}
 			</div>
 		</div>
+		<p class="muted small nvtop-note">Stops every Komatose model and worker on the GPUs, including Qwen 3.8 27B.</p>
 		{#if nvtopNote()}<p class="muted small nvtop-note">{nvtopNote()}</p>{/if}
 		{#if nvtop && (nvtop.state === 'running' || nvtop.state === 'failed') && nvtop.lines.length}
 			<pre class="build-log">{nvtop.lines.join('\n')}</pre>
@@ -176,7 +222,10 @@
 				{#each device.users as user (`${user.pid ?? user.label}:${user.vramMiB ?? 0}:${user.gttMiB ?? 0}`)}
 					<div class="resident small">
 						<span class="row"><i class="sw seg-{swatch(user.kind)}" style="width:10px;height:10px;display:inline-block"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
-						{#if formatResidentMemory(user)}<span class="muted mem">{formatResidentMemory(user)}</span>{/if}
+						<span class="actions">
+							{#if formatResidentMemory(user)}<span class="muted mem">{formatResidentMemory(user)}</span>{/if}
+							{#if user.stop}<button class="btn ghost sm" disabled={!!busy} onclick={() => void stopGpu({ scope: 'one', kind: user.stop?.kind, id: user.stop?.id, pid: user.pid, label: user.label })}>Stop</button>{/if}
+						</span>
 					</div>
 				{:else}
 					<span class="muted small">Nothing resident right now.</span>
@@ -192,7 +241,7 @@
 </div>
 
 <div class="section">
-	<div class="section-head"><h2>Services</h2><span class="muted small">Chat servers, OCR and translator services, and the image editor.</span></div>
+	<div class="section-head"><h2>Services</h2><span class="muted small">Chat servers, OCR and translator services, image editors, and workers.</span></div>
 	<div class="card" style="padding:0">
 		<table class="mtable svc-table">
 			<thead><tr><th>Service</th><th>Device</th><th>Port</th><th>Status</th><th></th></tr></thead>
@@ -203,6 +252,7 @@
 					{@const state = row.managed?.state || 'stopped'}
 					{@const up = state === 'running'}
 					{@const transition = state === 'starting' || state === 'stopping'}
+					{@const held = gpuPid(row.name, row.managed?.pid) || (row.slug ? gpuPid(row.slug) : undefined)}
 					<tr>
 						<td><button class="btn link" onclick={() => openDrawer(row.id)}>{row.name}</button></td>
 						<td class="muted">{residentPlace(row.managed?.pid) || shownDevice(data.hardware, row.managed?.device || row.managedLaunch?.device) || 'auto'}</td>
@@ -211,7 +261,7 @@
 						<td>
 							<div class="row">
 								<button class="btn ghost sm" disabled={!!busy || up || transition} onclick={() => void lifecycle('/api/admin/managed-models', { id: row.id, action: 'start' }, row.name, 'start')}>Start</button>
-								<button class="btn ghost sm" disabled={!!busy || !up} onclick={() => void lifecycle('/api/admin/managed-models', { id: row.id, action: 'stop' }, row.name, 'stop')}>Stop</button>
+								<button class="btn ghost sm" disabled={!!busy || (!up && !held)} onclick={() => void stopGpu({ scope: 'one', kind: 'managed', id: row.id, pid: held || row.managed?.pid, label: row.name })}>Stop</button>
 								<button class="btn ghost sm" disabled={!!busy || !up} onclick={() => void lifecycle('/api/admin/managed-models', { id: row.id, action: 'restart' }, row.name, 'restart')}>Restart</button>
 							</div>
 						</td>
@@ -220,15 +270,16 @@
 
 				<tr class="group"><td colspan="5"><b>OCR, vision & translator services</b></td></tr>
 				{#each data.reviewServers as server (server.id)}
+					{@const held = gpuPid(server.label, server.pid)}
 					<tr>
 						<td><button class="btn link" onclick={() => openDrawer(server.id)}>{server.label}</button>{#if !server.installed} <span class="chip muted">not installed</span>{/if}</td>
-						<td class="muted">{residentPlace(server.pid) || shownDevice(data.hardware, server.device) || '—'}</td>
+						<td class="muted">{residentPlace(server.pid || held) || shownDevice(data.hardware, server.device) || '—'}</td>
 						<td class="muted">{server.port || '—'}</td>
 						<td><span class="status tone-{server.state === 'running' ? 'ok' : server.state === 'error' ? 'bad' : 'idle'}"><span class="dot {server.state === 'running' ? 'ok' : server.state === 'error' ? 'bad' : 'idle'}"></span>{server.state}{server.served && server.served !== server.id ? ` · serving ${server.served}` : ''}</span></td>
 						<td>
 							<div class="row">
 								<button class="btn ghost sm" disabled={!!busy || !server.installed} onclick={() => void lifecycle('/api/admin/review-models', { id: server.id, action: 'start' }, server.label, 'start')}>Start</button>
-								<button class="btn ghost sm" disabled={!!busy || server.state !== 'running'} onclick={() => void lifecycle('/api/admin/review-models', { id: server.id, action: 'stop' }, server.label, 'stop')}>Stop</button>
+								<button class="btn ghost sm" disabled={!!busy || (server.state !== 'running' && server.state !== 'starting' && !held)} onclick={() => void stopGpu({ scope: 'one', kind: 'review', id: server.id, pid: held || server.pid, label: server.label })}>Stop</button>
 								<button class="btn ghost sm" disabled={!!busy || server.state !== 'running'} onclick={() => void lifecycle('/api/admin/review-models', { id: server.id, action: 'restart' }, server.label, 'restart')}>Restart</button>
 							</div>
 						</td>
@@ -239,6 +290,7 @@
 				{#each data.editors as editor (editor.id)}
 					{@const running = editor.state === 'running'}
 					{@const transition = editor.state === 'starting' || editor.state === 'stopping'}
+					{@const held = gpuPid(editor.label, editor.pid)}
 					{@const tone = running ? 'ok' : editor.state === 'error' ? 'bad' : transition || editor.busy ? 'busy' : 'idle'}
 					<tr>
 						<td>
@@ -257,9 +309,22 @@
 						<td>
 							<div class="row">
 								<button class="btn ghost sm" disabled={!!busy || transition || !editor.installed} onclick={() => void lifecycle('/api/admin/image-model', { action: 'start', model: editor.id }, editor.label, 'start')}>Start</button>
-								<button class="btn ghost sm" disabled={!!busy || !running} onclick={() => void lifecycle('/api/admin/image-model', { action: 'stop', model: editor.id }, editor.label, 'stop')}>Stop</button>
+								<button class="btn ghost sm" disabled={!!busy || (!running && !held)} onclick={() => void stopGpu({ scope: 'one', kind: 'editor', id: editor.id, pid: held || editor.pid, label: editor.label })}>Stop</button>
 								<button class="btn ghost sm" disabled={!!busy || !running} onclick={() => void lifecycle('/api/admin/image-model', { action: 'restart', model: editor.id }, editor.label, 'restart')}>Restart</button>
 							</div>
+						</td>
+					</tr>
+				{/each}
+
+				<tr class="group"><td colspan="5"><b>Workers</b></td></tr>
+				{#each workers as worker (worker.id)}
+					<tr>
+						<td>{worker.label}{#if worker.detail} <span class="muted">· {worker.detail}</span>{/if}</td>
+						<td class="muted">{residentPlace(worker.pid) || (worker.id === 'cleaning-worker' ? data.cleaningWorker?.resolved.label : '') || '—'}</td>
+						<td class="muted">—</td>
+						<td><span class="status tone-{worker.running ? 'ok' : 'idle'}"><span class="dot {worker.running ? 'ok' : 'idle'}"></span>{worker.running ? 'running' : 'stopped'}{worker.pid ? ` · pid ${worker.pid}` : ''}</span></td>
+						<td>
+							<button class="btn ghost sm" disabled={!!busy || !worker.running} onclick={() => void stopGpu({ scope: 'one', kind: 'worker', id: worker.id, pid: worker.pid, label: worker.label })}>Stop</button>
 						</td>
 					</tr>
 				{/each}
@@ -301,7 +366,7 @@
 			{#if data.gpuMode?.source === 'env'}<div class="muted small">Pinned by <code>SCAN_GPU_MODE</code> in the environment.</div>{/if}
 		</div>
 		<div class="card" style="margin-top:.75rem">
-			<h3 style="font-size:1rem">Cleaning worker</h3>
+			<div class="spread"><h3 style="font-size:1rem;margin:0">Cleaning worker</h3>{#if workers.find((worker) => worker.id === 'cleaning-worker')?.running}<button class="btn ghost sm" disabled={!!busy} onclick={() => void stopGpu({ scope: 'one', kind: 'worker', id: 'cleaning-worker', pid: workers.find((worker) => worker.id === 'cleaning-worker')?.pid, label: 'Cleaning worker' })}>Stop</button>{/if}</div>
 			<p class="muted small">Masking, inpainting and bubble geometry run through one PyTorch worker.</p>
 			<label class="field">
 				<span>Device</span>

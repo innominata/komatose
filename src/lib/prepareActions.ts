@@ -23,6 +23,7 @@ export function prepareActionConfirmation(body: Record<string, unknown>, images:
     case 'auto-crop': return `Auto-crop ${target}? Detected margins will be removed and saved region geometry and lettering will be adjusted.`;
     case 'auto-align': return `Auto-align ${target}? This changes page dimensions, padding, and saved region geometry and lettering.`;
     case 'combine': return `Combine ${target} into one spread? Their pixels, regions, and lettering will be moved onto one page.`;
+    case 'join-strip': return `Join ${target} into one vertical strip? Their pixels, regions, and lettering will be moved onto one image.`;
     case 'reslice': return `Split ${target} into ${Array.isArray(body.cuts) ? `${body.cuts.length + 1} page${body.cuts.length ? 's' : ''} using the previewed cuts` : 'new pages using automatic cuts'}? This replaces the current pages and changes boundaries, order, and region positions. Saved cleaning and lettering will be carried across. Later work can prevent Undo from safely restoring the old pages.`;
     case 'reorder': return 'Reorder these chapter pages? This changes the reading order and makes page numbering stale.';
     case 'delete': return `Delete ${target} and all their regions, comments, cleaning and typesetting? This cannot be undone.`;
