@@ -10,13 +10,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'ocr'))
-MODEL_IDS = ('lama-manga', 'big-lama', 'aot', 'sam', 'koharu', 'rtdetr',
+MODEL_IDS = ('lama-manga', 'aot', 'sam', 'koharu', 'rtdetr',
              'ctd', 'coo', 'hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en',
              'imsbee-ko-en-translator')
 GENERATIVE = {'hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en', 'imsbee-ko-en-translator'}
 HF_WEIGHTS = {
     'lama-manga': ('mayocream/lama-manga', 'f91c85b26913b3e83f9877867b4c336da3675238', 'lama-manga.safetensors', 'SCAN_LAMA_CHECKPOINT'),
-    'big-lama': ('dreMaz/AnimeMangaInpainting', '2953a4e935bf01ad1471f6cbfd26ab81abeeb92d', 'lama_large_512px.ckpt', 'SCAN_BIG_LAMA_CHECKPOINT'),
     'aot': ('ogkalu/aot-inpainting', '42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189', 'aot_traced.pt', ''),
     'rtdetr': ('ogkalu/comic-text-and-bubble-detector', '16e8a622f91fabc6b5b65c96d32d1183f8843546', 'model.safetensors', ''),
     'ctd': ('mayocream/comic-text-detector', '15ade029f4dabd502bc97af6051c8b9f2bec24d5', 'yolo-v5.safetensors', ''),
@@ -82,7 +81,7 @@ def stages(model_id, device='cpu'):
     def tensor(value):
         return torch.as_tensor(np.ascontiguousarray(value)).to(device)
 
-    if model_id in ('lama-manga', 'big-lama', 'aot'):
+    if model_id in ('lama-manga', 'aot'):
         x = tensor(page((512, 512))[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255)
         m = torch.zeros((1, 1, 512, 512), device=device)
         m[:, :, 180:330, 200:310] = 1
@@ -90,12 +89,6 @@ def stages(model_id, device='cpu'):
             import worker
             descriptor = worker._get_lama(device)
             model = descriptor.model
-        elif model_id == 'big-lama':
-            from spandrel import ModelLoader
-            state = torch.load(weight_path(model_id), map_location='cpu', weights_only=True)
-            state = state.get('gen_state_dict', state.get('state_dict', state))
-            state = {('generator.' + k if k.startswith('model.') else k): v for k, v in state.items()}
-            model = ModelLoader().load_from_state_dict(state).model.to(device).eval()
         else:
             model = torch.jit.load(str(weight_path(model_id)), map_location=device).eval()
             # torch.export cannot export ScriptModule. Attempt its documented

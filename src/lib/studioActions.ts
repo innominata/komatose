@@ -151,7 +151,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Brush size", "Tool options bar (any brush)", "Floating brush-size toolbar", { stage: "clean", tool: "brush" }, "tool-options"),
   A("Grow mask & grow amount", "Clean › Tool rail (G) · tool options bar", "Palette + floating grow toolbar", { stage: "clean", tool: "mask-grow" }, "tool-options"),
   A("Show mask overlay", "View bar › Mask", "Palette eye · Clean inspector checkbox", { stage: "clean" }, "view-mask"),
-  A("Clean with a method (Big-LaMa, AOT, Auto, LaMa, Telea, flat, clone, Codex, Qwen)", "Clean › Inspector step 2", "Palette Inpaint icons · page menu", { stage: "clean", tab: "clean" }, "clean-method", "inpaint"),
+  A("Clean with a method (AOT, Auto, LaMa, Telea, flat, clone, Codex, Qwen)", "Clean › Inspector step 2", "Palette Inpaint icons · page menu", { stage: "clean", tab: "clean" }, "clean-method", "inpaint"),
   A("Clone / patch offset", "Clean › step 2 (Clone / patch method)", "Clean inspector", { stage: "clean", tab: "clean" }, "clean-method"),
   A("Fill speech bubble", "Clean › Tool rail (F) · step 3", "Palette", { stage: "clean", tab: "clean", tool: "bubble-fill" }, "clean-touchup"),
   A("Clone stamp / Blur / Restore / Paint raw", "Clean › Tool rail · step 3", "Palette", { stage: "clean", tab: "clean", tool: "clone-stamp" }, "clean-touchup"),

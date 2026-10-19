@@ -12,6 +12,9 @@ process.env.DATABASE_URL = join(process.env.SCAN_ROOT, "data/test.db");
 await symlink(join(repo, "ocr"), join(process.env.SCAN_ROOT, "ocr"));
 process.env.SCAN_WORKFLOW_PYTHON = join(repo, ".venv-workflow/bin/python");
 process.env.LLAMASWAP_URL = "http://director.fixture/v1";
+// The read stage's region-extent check runs the real text detector; it is covered by
+// director-region-extent.test.ts with a fake one, so these workflow fixtures turn it off.
+process.env.SCAN_DIRECTOR_REGION_EXTENT = "0";
 process.env.LLAMASWAP_API_KEY = "fixture";
 const { sqlite } = await import("../src/lib/server/db");
 const { getDoc, putDoc } = await import("../src/lib/server/workflowStore");
@@ -1959,7 +1962,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     const boxes=[{x:.1,y:.1,w:.2,h:.12},{x:.1,y:.4,w:.2,h:.12},{x:.6,y:.7,w:.2,h:.12}];
     for(let i=0;i<ids.length;i++) {
       const b=boxes[i];
-      if(i) sqlite.prepare("INSERT INTO lines(id,episode_id,image_id,body,line_type,status,placed,x,y,w,h,sort_order,updated_at,updated_by,source,source_state) VALUES(?,?,?,'Hello','plain','none',1,?,?,?,?,?,1,'u','SFX','read')")
+      if(i) sqlite.prepare("INSERT INTO lines(id,episode_id,image_id,body,line_type,status,placed,x,y,w,h,sort_order,updated_at,updated_by,source,source_state) VALUES(?,?,?,'Hello','plain','none',1,?,?,?,?,?,1,'u','こんにちは','read')")
         .run(ids[i],page.episode.id,page.imageId,b.x,b.y,b.w,b.h,i);
       else sqlite.prepare('UPDATE lines SET x=?,y=?,w=?,h=? WHERE id=?').run(b.x,b.y,b.w,b.h,ids[i]);
       const doc=getDoc<any>(`region:${ids[i]}`,{});
@@ -2962,6 +2965,7 @@ test("mixed review findings produce one text pass, classification pass, cleaning
       };
     if (purpose === "check-page" && ++checks === 1)
       return {
+        textChanges: false,
         findings: ["text", "classify", "geometry", "detect", "typeset"].map(
           (repair) => ({
             lineId: repair === "detect" ? "" : page.lineId,
@@ -3441,7 +3445,7 @@ test('a missing raw reading is queried as a region follow-up, then frontier tran
     mode==='critique'?(++critiques===1?`In region ${id}, replace Swish. with Slide...`:'The adjusted translation is accurate.'):'unexpected raw request';
   respond=(purpose,data)=>{
     if(purpose==='correct-text' && data.critique.includes('replace Swish.')) return {textComplete:true,sourceReviewLineIds:[],reason:'Apply frontier critique',edits:[{lineId:id,source:null,english:'Slide...',reason:'The proofreader requested this localization'}]};
-    if(purpose==='check-page') {checks++;assert.equal(data.regions.find((r:any)=>r.id===id).english,'Slide...','Apply the frontier correction before Director visual QA');return {findings:[]};}
+    if(purpose==='check-page') {checks++;if(data.critique.includes('replace Swish.')) return {findings:[],textChanges:true};assert.equal(data.regions.find((r:any)=>r.id===id).english,'Slide...','Apply the frontier correction before the final visual QA');return {findings:[],textChanges:false};}
     return normal(purpose,data);
   };
   try {
@@ -3460,7 +3464,7 @@ test('a missing raw reading is queried as a region follow-up, then frontier tran
     assert.match(sent[0].prompt,/Previous critique/);
     assert.ok(result.overview.events.some(e=>e.kind==='proofreader:question'&&e.detail.lineId===id&&e.detail.parentJobId===parent&&e.detail.crop));
     assert.equal(result.overview.events.filter(e=>e.kind==='typeset:result').length,2);
-    assert.equal(checks,1,'The first critique is applied before a separate visual QA can veto it');
+    assert.equal(checks,2,'The first critique is applied directly; the visual QA only says it asks for a text change');
     assert.equal((await listLines(page.episode.id)).length,2);
     const again=await runPage(page);
     assert.equal(again.overview.pages[0].state,'passed',again.overview.pages[0].detail);

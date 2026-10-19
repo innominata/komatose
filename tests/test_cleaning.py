@@ -196,14 +196,14 @@ class Cleaning(unittest.TestCase):
         self.assertTrue(np.all(out[80:100, 150:180] == 77))
         np.testing.assert_array_equal(out[mask == 0], img[mask == 0])
 
-    def test_auto_on_cuda_uses_big_lama(self):
+    def test_auto_on_cuda_uses_lama_manga(self):
         img = np.full((100, 120, 3), 255, np.uint8)
         mask = np.zeros(img.shape[:2], np.uint8)
         mask[40:60, 50:70] = 255
         with patch.object(workflow, 'model_inpaint', side_effect=lambda crop, m, method, device: crop.copy()) as model:
             _, method = workflow.clean(img, mask, {'method': 'auto', 'device': 'cuda:0'})
-        self.assertEqual(method, 'big-lama')
-        self.assertEqual(model.call_args.args[2], 'big-lama')
+        self.assertEqual(method, 'lama')
+        self.assertEqual(model.call_args.args[2], 'lama')
         self.assertEqual(model.call_args.args[3], 'cuda:0')
 
     def test_enclosed_geometry_excludes_outline_and_reports_uncertainty(self):
@@ -474,6 +474,28 @@ class Cleaning(unittest.TestCase):
                                                [[.2, .4, .1, .2], [.8, .4, .1, .2]])
         self.assertFalse(split)
         np.testing.assert_array_equal(result, mask)
+
+    def test_bubble_fill_seals_small_break_in_outline(self):
+        img = np.full((300, 400, 3), 120, np.uint8)
+        # White art below the balloon that a leak would reach.
+        img[238:300, 150:250] = 250
+        cv2.ellipse(img, (200, 150), (110, 90), 0, 0, 360, (250,)*3, -1)
+        cv2.ellipse(img, (200, 150), (110, 90), 0, 0, 360, (0,)*3, 4)
+        # A 7px break in the bottom of the outline.
+        img[234:246, 196:203] = 250
+        cv2.putText(img, 'TEXT', (150, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,)*3, 3)
+        before = img.copy()
+        self.assertEqual(workflow.bubble_fill(img, {'px': .5, 'py': .4, 'strict': True}), 'bubble')
+        self.assertTrue(np.all(img[150, 200] >= 240))
+        # The fill stays inside the balloon; nothing below the break changes.
+        self.assertTrue(np.array_equal(img[250:], before[250:]))
+
+    def test_bubble_fill_rejects_margin_strip_on_page_edge(self):
+        img = np.full((300, 400, 3), 120, np.uint8)
+        img[280:, :] = 250
+        cv2.line(img, (0, 278), (399, 278), (0,)*3, 3)
+        with self.assertRaises(ValueError):
+            workflow.bubble_fill(img, {'px': .5, 'py': 290 / 300, 'strict': True})
 
     def test_bubble_fill_run_writes_filled_artwork(self):
         img = np.full((300, 400, 3), 80, np.uint8)

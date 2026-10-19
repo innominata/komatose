@@ -1428,7 +1428,7 @@ export function startAiTranscribe(opts: {
   lang?: OcrLang;
   model?: string;
   imageIds?: string[];
-}): AiJobSnapshot {
+}): AiJobSnapshot & { jobId: string } {
   const ocrIds = transcriptionIdsFor(opts.series.id, opts.episode.id);
   assertOcrConsensusInstalled(ocrIds);
   const lang = opts.lang || parseOcrLang(preferences(opts.episode.id, opts.series.id).lang);
@@ -1442,7 +1442,7 @@ export function startAiTranscribe(opts: {
     { jobId: job.id!, step: "transcribe", engine: job.engine, model: job.model },
     () => runTranscribeJob(job, opts),
   );
-  return jobSnapshot(opts.episode.id)!;
+  return { ...jobSnapshot(opts.episode.id)!, jobId: job.id! };
 }
 
 export function startAiTranslate(opts: {

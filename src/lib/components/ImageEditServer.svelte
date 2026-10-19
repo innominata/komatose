@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { IMAGE_EDIT_MODELS, type ImageEditModelId } from '$lib/imageEdit';
+  import { IMAGE_EDIT_MODELS, imageEditInstallArgs, type ImageEditModelId } from '$lib/imageEdit';
   type ModelStatus = {
     id: ImageEditModelId;
     label: string;
@@ -67,9 +67,7 @@
   }
   const settled = $derived(!model || !['starting', 'stopping'].includes(model.state));
   const installScript = (id: ImageEditModelId) =>
-    id === 'qwen-image-edit-2511-lightning'
-      ? 'scripts/install-image-edit-model.py --lightning'
-      : 'scripts/install-image-edit-model.py';
+    ['scripts/install-image-edit-model.py', ...imageEditInstallArgs(id)].join(' ');
 </script>
 
 <section class="image-edit mb-4" aria-label="Local image editor">

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = Path(os.environ.get("SCAN_REVIEW_MODELS_DIR", ROOT / "data/models/review"))
 os.environ.setdefault("HF_HOME", str(DEST / "hf-cache"))
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-from huggingface_hub import HfApi, snapshot_download
+from model_download_deps import require_hub
 
 MODELS = {
     "hayai-ocr-v2.5-nova": (
@@ -135,11 +135,12 @@ def retry(operation):
 
 
 def install_one(name, repo, revision, patterns):
+    hub = require_hub()
     import fnmatch
     print(f"Installing {name} at revision {revision}", flush=True)
-    retry(lambda: snapshot_download(repo, revision=revision, local_dir=DEST / name,
+    retry(lambda: hub.snapshot_download(repo, revision=revision, local_dir=DEST / name,
                                     allow_patterns=patterns, max_workers=1))
-    info = retry(lambda: HfApi().model_info(repo, revision=revision, files_metadata=True))
+    info = retry(lambda: hub.HfApi().model_info(repo, revision=revision, files_metadata=True))
     files = {}
     for f in info.siblings:
         if not any(fnmatch.fnmatch(f.rfilename, p) for p in patterns):
@@ -157,9 +158,10 @@ def install_one(name, repo, revision, patterns):
 
 
 def install_hayai_vision(installed):
+    hub = require_hub()
     repo = "google/siglip2-base-patch16-naflex"
-    revision = retry(lambda: HfApi().model_info(repo)).sha
-    retry(lambda: snapshot_download(repo, revision=revision, allow_patterns=["*.json", "*.model"], max_workers=1))
+    revision = retry(lambda: hub.HfApi().model_info(repo)).sha
+    retry(lambda: hub.snapshot_download(repo, revision=revision, allow_patterns=["*.json", "*.model"], max_workers=1))
     refs = Path(os.environ["HF_HOME"]) / "hub" / "models--google--siglip2-base-patch16-naflex" / "refs"
     refs.mkdir(parents=True, exist_ok=True)
     (refs / "main").write_text(revision)

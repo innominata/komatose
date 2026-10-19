@@ -17,8 +17,7 @@ export type BackendInfo = {
   }[];
   errors: string[];
   sam: boolean;
-  bigLama: boolean;
-  bigLamaDevice?: string | null;
+  lama: boolean;
   lamaDevice?: string | null;
   koharu: boolean;
   cpu: boolean;
@@ -52,7 +51,7 @@ const global = globalThis as typeof globalThis & { __scanWorkflowWorker?: Persis
 /** Device-preference key for the cleaning, masking and inpainting worker. */
 export const WORKFLOW_DEVICE_KEY = "cleaning-worker";
 
-/** Where Koharu, SAM, Big-LaMa and AOT run; Komatose GPU mode keeps its pinned card as Auto. */
+/** Where Koharu, SAM, LaMa Manga and AOT run; Komatose GPU mode keeps its pinned card as Auto. */
 export function workflowResolved(): ResolvedDevice {
   return resolveDevice("torch", devicePref(WORKFLOW_DEVICE_KEY), 2048, {
     env: "env-workflow",
@@ -279,7 +278,7 @@ async function rawProbe(): Promise<BackendInfo> {
       devices: [],
       cpu: false,
       sam: false,
-      bigLama: false,
+      lama: false,
       koharu: false,
       errors: [String(e)],
     };
@@ -341,7 +340,7 @@ export async function warmupWorkflow() {
 export function eligibleCleaningDevices(info: BackendInfo | null, method: unknown) {
   return info?.devices.filter(d => d.free > 2 * 1024 ** 3 ||
     (method === "lama" && d.id === info.lamaDevice) ||
-    ((method === "big-lama" || method === "auto") && d.id === info.bigLamaDevice)) ?? [];
+    (method === "auto" && d.id === info.lamaDevice)) ?? [];
 }
 
 export async function rawLocalOperation(
@@ -361,7 +360,6 @@ export async function rawLocalOperation(
   const cleanGpu =
     payload.method === "lama" ||
     payload.method === "sam" ||
-    payload.method === "big-lama" ||
     payload.method === "aot" ||
     (payload.method === "auto" && (komatoseGpuEnabled() || workflowResolved().kind === "gpu"));
   const info =

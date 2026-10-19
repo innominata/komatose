@@ -1,6 +1,6 @@
 export type CleanBackend = {
   models?: Array<{ id: string; label: string; tasks: string[] }>;
-  bigLama?: boolean;
+  lama?: boolean;
   sam?: boolean;
   codex?: { available?: boolean; reason?: string };
   /** One readiness entry per local artwork editor, keyed by clean-method id. */

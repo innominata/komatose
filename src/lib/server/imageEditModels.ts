@@ -9,8 +9,10 @@ import { imageEditModelDir, imageEditTextEncoderDir } from './gpuMode';
 export type ImageEditModelFiles = {
   id: ImageEditModelId;
   label: string;
-  /** Directory holding this editor's installed.json and its diffusion weights. */
+  /** Directory holding this editor's marker and its diffusion weights. */
   dir: string;
+  /** Marker the installer writes for this quant: installed.json for Q4_K_M. */
+  marker: string;
   /** Text encoder directory, and the files inside it the server loads. */
   encoderDir: string;
   encoderFile: string;
@@ -30,6 +32,7 @@ export function imageEditModelFiles(): Record<ImageEditModelId, ImageEditModelFi
       id: 'qwen-image-edit-2511',
       label: 'Qwen-Image-Edit 2511',
       dir: imageEditModelDir('qwen-image-edit-2511'),
+      marker: 'installed.json',
       // scripts/install-image-edit-model.py writes Qwen2.5-VL into the model's own directory.
       encoderDir: imageEditTextEncoderDir('qwen-image-edit-2511'),
       encoderFile: process.env.SCAN_IMAGE_EDIT_TEXT_ENCODER || 'Qwen2.5-VL-7B-Instruct.Q5_K_M.gguf',
@@ -46,6 +49,7 @@ export function imageEditModelFiles(): Record<ImageEditModelId, ImageEditModelFi
       label: 'Qwen-Image-Edit 2511 Lightning',
       // The LoRA is the only file Lightning owns. The 20B weights stay in the 2511 directory.
       dir: imageEditModelDir('qwen-image-edit-2511'),
+      marker: 'installed.json',
       encoderDir: imageEditTextEncoderDir('qwen-image-edit-2511'),
       encoderFile: process.env.SCAN_IMAGE_EDIT_TEXT_ENCODER || 'Qwen2.5-VL-7B-Instruct.Q5_K_M.gguf',
       encoderVisionFile: 'Qwen2.5-VL-7B-Instruct.mmproj-f16.gguf',
@@ -53,6 +57,24 @@ export function imageEditModelFiles(): Record<ImageEditModelId, ImageEditModelFi
       flags: ['--vae-tiling'],
       fallback: { diffusion: 'qwen-image-edit-2511-Q4_K_M.gguf', vae: join('VAE', 'Qwen_Image-VAE.safetensors') },
     },
+    'qwen-image-edit-2511-q3': quantVariant('qwen-image-edit-2511-q3', 'Qwen-Image-Edit 2511 Q3_K_M', 'q3_k_m', 'Q3_K_M'),
+    'qwen-image-edit-2511-q2': quantVariant('qwen-image-edit-2511-q2', 'Qwen-Image-Edit 2511 Q2_K', 'q2_k', 'Q2_K'),
+  };
+}
+
+/** A smaller diffusion quant in the 2511 directory, reusing its VAE and Qwen2.5-VL encoder. */
+function quantVariant(id: ImageEditModelId, label: string, quant: string, suffix: string): ImageEditModelFiles {
+  return {
+    id,
+    label,
+    dir: imageEditModelDir('qwen-image-edit-2511'),
+    marker: `installed-${quant}.json`,
+    encoderDir: imageEditTextEncoderDir('qwen-image-edit-2511'),
+    encoderFile: process.env.SCAN_IMAGE_EDIT_TEXT_ENCODER || 'Qwen2.5-VL-7B-Instruct.Q5_K_M.gguf',
+    encoderVisionFile: 'Qwen2.5-VL-7B-Instruct.mmproj-f16.gguf',
+    modelArgs: ['qwen_image_zero_cond_t=true'],
+    flags: ['--vae-tiling'],
+    fallback: { diffusion: `qwen-image-edit-2511-${suffix}.gguf`, vae: join('VAE', 'Qwen_Image-VAE.safetensors') },
   };
 }
 

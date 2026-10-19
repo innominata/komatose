@@ -363,19 +363,30 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		installsWith: ['qwen-image-edit-2511'],
 		unlocks: 'faster artwork editing in Clean',
 	},
+	{
+		id: 'qwen-image-edit-2511-q3',
+		group: 'image-edit',
+		label: 'Qwen-Image-Edit 2511 Q3_K_M',
+		summary:
+			'3-bit diffusion weights for the same editor, kept beside Q4_K_M for comparison. Shares its encoder and VAE, and downloads them when missing.',
+		diskBytes: 9_920_805_472,
+		memoryBytes: 16 * GB,
+		requires: ['env-workflow'],
+		unlocks: 'comparing a smaller editor quant in Clean',
+	},
+	{
+		id: 'qwen-image-edit-2511-q2',
+		group: 'image-edit',
+		label: 'Qwen-Image-Edit 2511 Q2_K',
+		summary:
+			'2-bit diffusion weights for the same editor, the smallest quant. Shares the 2511 encoder and VAE, and downloads them when missing.',
+		diskBytes: 7_468_022_368,
+		memoryBytes: 14 * GB,
+		requires: ['env-workflow'],
+		unlocks: 'comparing the smallest editor quant in Clean',
+	},
 
 	// --- Inpainting -----------------------------------------------------------
-	{
-		id: 'big-lama',
-		group: 'inpaint',
-		label: 'AnimeManga Big-LaMa',
-		summary:
-			'512px inpainting checkpoint (AnimeMangaInpainting) behind the “Big-LaMa” clean method.',
-		diskBytes: 205 * MB,
-		memoryBytes: 1 * GB,
-		requires: ['env-workflow'],
-		unlocks: 'Big-LaMa clean method',
-	},
 	{
 		id: 'aot',
 		group: 'inpaint',

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Prefetch pinned inpainting weights into their model-specific caches.
 
-Big-LaMa, AOT and LaMa Manga use the Hugging Face cache.
+AOT and LaMa Manga use the Hugging Face cache.
 Installing them up front means Cleaning works offline afterwards
 and Setup can show them as installed. Revisions are pinned to the tested files.
 
-    .venv-workflow/bin/python scripts/install-clean-models.py --model big-lama
+    .venv-workflow/bin/python scripts/install-clean-models.py --model lama-manga
     .venv-workflow/bin/python scripts/install-clean-models.py --model all
 """
 import sys
@@ -17,12 +17,6 @@ import time
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 MODELS = {
-    "big-lama": {
-        "repo": "dreMaz/AnimeMangaInpainting",
-        "revision": "2953a4e935bf01ad1471f6cbfd26ab81abeeb92d",
-        "files": ["lama_large_512px.ckpt"],
-        "label": "AnimeManga Big-LaMa 512px inpainting checkpoint",
-    },
     "aot": {
         "repo": "ogkalu/aot-inpainting",
         "revision": "42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189",
@@ -70,12 +64,8 @@ def main():
                         help="Which clean model to prefetch (default all)")
     args = parser.parse_args()
     names = list(MODELS) if args.model == "all" else [args.model]
-    try:
-        import huggingface_hub  # noqa: F401
-    except ImportError:
-        raise SystemExit(
-            "huggingface-hub is not installed for this Python. "
-            "Run: python3 scripts/setup-python-env.py --env workflow")
+    from model_download_deps import require_hub
+    require_hub()
     for name in names:
         install_one(name, MODELS[name])
 

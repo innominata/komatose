@@ -301,6 +301,8 @@ test('the editor loads its own weights, encoder and sampling defaults', async ()
   assert.deepEqual(editStatus.models.map((row) => [row.id, row.installed, row.active]), [
     ['qwen-image-edit-2511', true, true],
     ['qwen-image-edit-2511-lightning', false, false],
+    ['qwen-image-edit-2511-q3', false, false],
+    ['qwen-image-edit-2511-q2', false, false],
   ]);
   assert.equal(editStatus.quant, 'q4_k_m');
 });
@@ -369,6 +371,8 @@ test('a running 2511 server is reused for a Lightning clean', async () => {
     assert.deepEqual(lightning.models.map((row) => [row.id, row.installed, row.active]), [
       ['qwen-image-edit-2511', true, true],
       ['qwen-image-edit-2511-lightning', true, true],
+      ['qwen-image-edit-2511-q3', false, false],
+      ['qwen-image-edit-2511-q2', false, false],
     ]);
 
     process.env.SCAN_IMAGE_EDIT_LIGHTNING_CFG = '1.5';

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { LOCAL_REVIEW_MODELS, type LocalReviewModelId } from '../localReviewModels';
 import { DATA_DIR } from './paths';
+import { IMAGE_EDIT_MODELS, type ImageEditModelId } from '../imageEdit';
 
 export type GpuModeSource = 'env' | 'setting' | 'default';
 
@@ -240,17 +241,28 @@ export function imageEditVulkanDevice() {
   return process.env.SCAN_IMAGE_DEVICE || llmVulkanDevice();
 }
 
+/**
+ * One port per weight set: 2511 and Lightning share the base port, and each smaller
+ * quant takes the next one so it can run beside them for comparison.
+ */
 export function imageEditListenPort(id?: string) {
-  void id;
-  return Math.max(1, Number(process.env.SCAN_IMAGE_EDIT_PORT || process.env.SCAN_IMAGE_PORT) || 18092);
+  const base = Math.max(1, Number(process.env.SCAN_IMAGE_EDIT_PORT || process.env.SCAN_IMAGE_PORT) || 18092);
+  const host = IMAGE_EDIT_MODELS.find((model) => model.id === id)?.weightHost ?? id;
+  return base + Math.max(0, imageEditWeightHosts().indexOf(host as ImageEditModelId));
+}
+
+function imageEditWeightHosts(): ImageEditModelId[] {
+  return [...new Set(IMAGE_EDIT_MODELS.map((model) => model.weightHost ?? model.id))];
 }
 
 export function imageEditListenPorts(): number[] {
-  return [imageEditListenPort('qwen-image-edit-2511')];
+  return imageEditWeightHosts().map((id) => imageEditListenPort(id));
 }
 
+/** scripts/install-image-edit-model.py builds sd-server under data/tools/stable-diffusion.cpp. */
 export function sdServerBin() {
   return process.env.SCAN_IMAGE_SD_SERVER ||
+    firstExecutable(BUILD_DIRS.map((dir) => join(DATA_DIR, 'tools/stable-diffusion.cpp', dir, 'bin', 'sd-server'))) ||
     discoverBinary('stable-diffusion.cpp', 'sd-server') ||
     join(homedir(), 'stable-diffusion.cpp/build-vulkan/bin/sd-server');
 }
@@ -299,7 +311,7 @@ export function llamaServerEnv(executable: string, env: NodeJS.ProcessEnv = proc
   return next;
 }
 
-/** `cleaning` is where Koharu, SAM, Big-LaMa and AOT run — pass `cleaningDeviceLabel()`. */
+/** `cleaning` is where Koharu, SAM, LaMa Manga and AOT run — pass `cleaningDeviceLabel()`. */
 export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
   const models = managedRuntimeSummary();
   if (!komatoseGpuEnabled()) return {
@@ -316,7 +328,7 @@ export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
     models,
     llm: models.length ? models.map(m => `${m.name} on ${m.device}`).join(', ') : 'Managed local models (see Setup for per-model status)',
     ocr: `Hayai, PaddleOCR-VL, and Qwen3-VL on ${reviewVulkanDevice()}`,
-    cleaning: `Koharu SAM-TS-L, SAM, Big-LaMa, and AOT on ${cleaning}; LaMa Manga uses PyTorch on the cleaning device`,
+    cleaning: `Koharu SAM-TS-L, SAM, LaMa Manga, and AOT on ${cleaning}`,
   };
 }
 

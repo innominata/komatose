@@ -112,3 +112,9 @@ test('snapshots use the nvtop this install built, unless SCAN_NVTOP points at a 
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test('pacman installs only what it is given and never syncs on its own', () => {
+	const pacman = installCommands({ id: 'pacman', bin: 'pacman' }, ['cmake']);
+	assert.deepEqual(pacman, [['pacman', '-S', '--noconfirm', '--needed', 'cmake']]);
+	assert.ok(!installCommands({ id: 'pacman', bin: 'pacman' }).flat().includes('-Sy'));
+});

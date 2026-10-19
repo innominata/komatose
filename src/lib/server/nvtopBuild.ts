@@ -99,16 +99,19 @@ export function upgradedPackages(text: string): string[] {
 	return apt[1].split(/\s+/).map((name) => name.trim()).filter(Boolean);
 }
 
-/** Commands that install the build dependencies. apt and pacman refresh their index first. */
-export function installCommands(manager: PackageManager): string[][] {
-	const pkgs = packagesFor(manager.id);
+/**
+ * Commands that install the build dependencies. apt refreshes its index first.
+ * pacman never runs -Sy on its own: a sync without a full upgrade is a partial
+ * upgrade on Arch, and pulls in newer core packages such as systemd.
+ */
+export function installCommands(manager: PackageManager, pkgs = packagesFor(manager.id)): string[][] {
 	switch (manager.id) {
 		case 'dnf':
 			return [[manager.bin, '--setopt=skip_if_unavailable=true', 'install', '-y', ...pkgs]];
 		case 'apt':
 			return [[manager.bin, 'update'], [manager.bin, 'install', '-y', ...pkgs]];
 		case 'pacman':
-			return [[manager.bin, '-Sy', '--noconfirm'], [manager.bin, '-S', '--noconfirm', '--needed', ...pkgs]];
+			return [[manager.bin, '-S', '--noconfirm', '--needed', ...pkgs]];
 		case 'zypper':
 			return [[manager.bin, '--non-interactive', 'install', ...pkgs]];
 		case 'apk':
@@ -242,8 +245,13 @@ async function installPackages() {
 			'No supported package manager found (dnf, apt, pacman, zypper, apk, or xbps). Install a C++ compiler, CMake, make, pkg-config, patch, and the ncurses, libdrm, and libudev development packages, then press Build nvtop again.',
 		);
 	}
+	const pkgs = manager.id === 'pacman' ? missingPacmanPackages(manager) : packagesFor(manager.id);
+	if (!pkgs.length) {
+		log('Build packages are installed.');
+		return;
+	}
+	const commands = installCommands(manager, pkgs);
 	const prefix = privilegePrefix(canEscalate());
-	const commands = installCommands(manager);
 	const shown = commands.map((argv) => `sudo ${argv.join(' ')}`).join(' && ');
 	if (!prefix) {
 		throw new Error(`Installing build packages needs administrator permission. Run this, then press Build nvtop again:\n${shown}`);
@@ -265,6 +273,14 @@ async function installPackages() {
 		}
 		throw new Error(`Could not install build packages with ${manager.bin}. ${error instanceof Error ? error.message : String(error)}`);
 	}
+}
+
+/** Only the packages pacman reports as absent, so installed ones are never re-resolved against newer repos. */
+function missingPacmanPackages(manager: PackageManager): string[] {
+	const result = spawnSync(manager.bin, ['-T', ...packagesFor('pacman')], { encoding: 'utf8' });
+	if (result.status === 0) return [];
+	const missing = String(result.stdout || '').split(/\s+/).filter(Boolean);
+	return missing.length ? missing : packagesFor('pacman');
 }
 
 async function previewUpgrades(manager: PackageManager, prefix: string[]): Promise<string[]> {

@@ -1354,7 +1354,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         "auto",
         "flat",
         "lama",
-        "big-lama",
         "aot",
         "telea",
         "clone",

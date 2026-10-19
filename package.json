@@ -22,7 +22,7 @@
 		"diagnose:decider": "node --import tsx scripts/diagnose-decider.ts",
 		"evaluate:decider-korean": "node --import tsx scripts/evaluate-korean-decider.ts",
 		"smoke:decider": "node --import tsx scripts/smoke-decider.ts",
-		"test:director": "node --import tsx --test tests/director-workflow.test.ts tests/director-cleaning-residue.test.ts",
+		"test:director": "node --import tsx --test tests/director-workflow.test.ts tests/director-cleaning-residue.test.ts tests/director-warnings.test.ts",
 		"test:browser-director": "node scripts/test-browser.mjs scripts/check-browser-director.mjs",
 		"test:workflow": "node --import tsx tests/workflow.test.ts",
 		"test:unit": "node scripts/run-node-tests.mjs unit",

@@ -33,8 +33,8 @@
     cloneY?: number;
     backend: {
       models?: Array<{ id: string; label: string; tasks: string[] }>;
-      bigLama?: boolean;
-      bigLamaDevice?: string | null;
+      lama?: boolean;
+      lamaDevice?: string | null;
       sam?: boolean;
       koharu?: boolean;
       codex?: { available?: boolean; reason?: string };
@@ -131,10 +131,10 @@
   </section>
   <details class="sec hw">
     <summary><i class="bi bi-gpu-card" aria-hidden="true"></i> Hardware</summary>
-    {#if backend?.bigLamaDevice}
-      <p class="muted">AnimeManga Big-LaMa resident on {backend.bigLamaDevice}.</p>
-    {:else if backend?.bigLama}
-      <p class="muted">AnimeManga Big-LaMa is available and loads on first use.</p>
+    {#if backend?.lamaDevice}
+      <p class="muted">LaMa Manga resident on {backend.lamaDevice}.</p>
+    {:else if backend?.lama}
+      <p class="muted">LaMa Manga is available and loads on first use.</p>
     {/if}
     {#if backend?.gpu?.mode === "komatose"}
       <p class="muted">OCR/LLM: {backend.gpu.ocr}. {backend.gpu.llm}. Cleaner: {backend.gpu.cleaning}.</p>

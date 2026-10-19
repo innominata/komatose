@@ -122,5 +122,27 @@ class Geometry(unittest.TestCase):
         self.assertEqual(result['polygon'], points)
         self.assertFalse(result['split'])
 
+    def test_nested_duplicate_detection_does_not_split_its_bubble(self):
+        import tempfile
+        img = np.full((400, 400, 3), 90, np.uint8)
+        cv2.ellipse(img, (200, 200), (110, 150), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(img, (200, 200), (110, 150), 0, 0, 360, (0, 0, 0), 3)
+        for y in range(130, 280, 30):
+            cv2.rectangle(img, (175, y), (195, y + 20), (0, 0, 0), -1)
+            cv2.rectangle(img, (215, y), (235, y + 20), (0, 0, 0), -1)
+        bubble = [160 / 400, 120 / 400, 90 / 400, 170 / 400]
+        # A second detector's box around one column, centred off the bubble's centre.
+        column = [210 / 400, 125 / 400, 30 / 400, 160 / 400]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(pathlib.Path(tmp) / 'page.png')
+            cv2.imwrite(path, img)
+            result = workflow.run({'cmd': 'geometry-batch', 'path': path, 'method': 'opencv',
+                                   'regions': [{'box': bubble, 'kind': 'bubble'},
+                                               {'box': column, 'kind': 'free'}]})['regions'][0]
+        self.assertFalse(result['split'])
+        xs = [p['x'] * 400 for p in result['polygon']]
+        self.assertLess(min(xs), 100)
+        self.assertGreater(max(xs), 300)
+
 if __name__ == '__main__':
     unittest.main()

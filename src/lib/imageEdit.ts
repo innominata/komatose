@@ -1,5 +1,9 @@
 /** Local artwork editor: a resident sd-server driven by crop + prompt. */
-export type ImageEditModelId = 'qwen-image-edit-2511' | 'qwen-image-edit-2511-lightning';
+export type ImageEditModelId =
+  | 'qwen-image-edit-2511'
+  | 'qwen-image-edit-2511-lightning'
+  | 'qwen-image-edit-2511-q3'
+  | 'qwen-image-edit-2511-q2';
 
 /** 8-step distillation of Qwen-Image-Edit-2511. It is applied on top of the base weights. */
 export const IMAGE_EDIT_LIGHTNING_LORA = 'Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors';
@@ -32,6 +36,11 @@ export type ImageEditModel = {
   lora?: string;
   /** Another editor whose weights this one loads. Sampling and the LoRA stay its own. */
   weightHost?: ImageEditModelId;
+  /**
+   * Installer `--quant` for a smaller diffusion file kept beside the Q4_K_M weights. It
+   * shares their VAE and encoder but loads its own file, so it runs as its own sd-server.
+   */
+  quant?: string;
 };
 
 /** Qwen-Image-Edit-2511 is the local artwork editor: a 20B instruction model. */
@@ -57,6 +66,26 @@ export const IMAGE_EDIT_MODELS: ImageEditModel[] = [
     lora: IMAGE_EDIT_LIGHTNING_LORA,
     weightHost: 'qwen-image-edit-2511',
   },
+  {
+    id: 'qwen-image-edit-2511-q3',
+    label: 'Qwen-Image-Edit 2511 Q3_K_M',
+    method: 'qwen-image-edit-q3',
+    methodLabel: 'Qwen-Image-Edit 2511 Q3_K_M · edit artwork',
+    summary: 'Same editor at 3-bit (9.2 GiB). For comparing against Q4_K_M.',
+    envPrefix: 'SCAN_IMAGE_EDIT_Q3',
+    sampling: { steps: 20, cfg: 2.5, denoise: 1, flowShift: 3 },
+    quant: 'q3_k_m',
+  },
+  {
+    id: 'qwen-image-edit-2511-q2',
+    label: 'Qwen-Image-Edit 2511 Q2_K',
+    method: 'qwen-image-edit-q2',
+    methodLabel: 'Qwen-Image-Edit 2511 Q2_K · edit artwork',
+    summary: 'Same editor at 2-bit (7.0 GiB). Smallest; expect softer, less faithful edits.',
+    envPrefix: 'SCAN_IMAGE_EDIT_Q2',
+    sampling: { steps: 20, cfg: 2.5, denoise: 1, flowShift: 3 },
+    quant: 'q2_k',
+  },
 ];
 
 export const DEFAULT_IMAGE_EDIT_MODEL_ID: ImageEditModelId = 'qwen-image-edit-2511';
@@ -77,6 +106,13 @@ export function imageEditModelOf(id: unknown): ImageEditModel {
 /** The editor whose diffusion weights this one loads. Lightning hosts on 2511. */
 export function imageEditWeightHost(id: ImageEditModelId): ImageEditModelId {
   return imageEditModelOf(id).weightHost ?? id;
+}
+
+/** Arguments to scripts/install-image-edit-model.py that install this editor. */
+export function imageEditInstallArgs(id: ImageEditModelId): string[] {
+  const model = imageEditModelOf(id);
+  if (model.lora) return ['--lightning'];
+  return model.quant ? ['--quant', model.quant] : [];
 }
 
 /** Clean-method id used by the workflow API and the cleaning method list. */

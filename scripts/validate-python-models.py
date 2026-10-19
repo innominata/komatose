@@ -15,7 +15,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS = {'workflow': ['lama-manga', 'big-lama', 'aot', 'sam', 'koharu', 'rtdetr', 'ctd', 'coo'],
+MODELS = {'workflow': ['lama-manga', 'aot', 'sam', 'koharu', 'rtdetr', 'ctd', 'coo'],
           'review': ['hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en', 'imsbee-ko-en-translator']}
 sys.path.insert(0, str(ROOT / 'ocr'))
 
@@ -36,7 +36,6 @@ def available(model_id):
     from huggingface_hub import hf_hub_download
     weights = {
       'lama-manga': ('mayocream/lama-manga', 'lama-manga.safetensors', 'f91c85b26913b3e83f9877867b4c336da3675238', 'SCAN_LAMA_CHECKPOINT'),
-      'big-lama': ('dreMaz/AnimeMangaInpainting', 'lama_large_512px.ckpt', '2953a4e935bf01ad1471f6cbfd26ab81abeeb92d', 'SCAN_BIG_LAMA_CHECKPOINT'),
       'aot': ('ogkalu/aot-inpainting', 'aot_traced.pt', '42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189', ''),
       'sam': ('facebook/sam2.1-hiera-small', 'sam2.1_hiera_small.pt', None, 'SCAN_SAM_CHECKPOINT'),
       'rtdetr': ('ogkalu/comic-text-and-bubble-detector', 'model.safetensors', '16e8a622f91fabc6b5b65c96d32d1183f8843546', ''),
@@ -64,7 +63,7 @@ def probe(model_id, device):
     review = Path(os.environ.get('SCAN_REVIEW_MODELS_DIR', ROOT / 'data/models/review'))
     translation = Path(os.environ.get('SCAN_TRANSLATION_MODELS_DIR', ROOT / 'data/models/translation'))
     arrays, details = {}, {}
-    if model_id in ('lama-manga', 'big-lama', 'aot'):
+    if model_id in ('lama-manga', 'aot'):
         import workflow
         for index, size in enumerate([(320, 256), (512, 512)]):
             image = np.array(crop.resize(size))[:, :, ::-1].copy()

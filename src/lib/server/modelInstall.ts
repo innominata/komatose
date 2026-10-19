@@ -15,8 +15,8 @@ import { ROLES } from '../types';
 import { QWEN3_VL_ID, QWEN_38_27B_ID, QWEN_38_27B_LABEL } from '../qwenModels';
 import { koharuInstalled } from './detect';
 import { envVar } from './envFile';
-import { IMAGE_EDIT_LIGHTNING_LORA } from '../imageEdit';
-import { imageEditLorasDir, imageEditModelDir } from './gpuMode';
+import { IMAGE_EDIT_LIGHTNING_LORA, IMAGE_EDIT_MODELS, imageEditInstallArgs, type ImageEditModelId } from '../imageEdit';
+import { imageEditLorasDir, imageEditModelDir, sdServerBin } from './gpuMode';
 import { invalidateTorchProbe, torchVariantPref } from './computeDevices';
 import { launchPreset } from './managedModelConfig';
 import { findRegistryRow, listRegistryRows, removeOverlayRow, upsertRegistryRow } from './modelRegistryStore';
@@ -196,10 +196,11 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			args = script('install-image-edit-model.py');
 			break;
 		case 'qwen-image-edit-2511-lightning':
+		case 'qwen-image-edit-2511-q3':
+		case 'qwen-image-edit-2511-q2':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
-			args = script('install-image-edit-model.py', ['--lightning']);
+			args = script('install-image-edit-model.py', imageEditInstallArgs(target.id as ImageEditModelId));
 			break;
-		case 'big-lama':
 		case 'aot':
 		case 'lama-manga':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
@@ -283,12 +284,23 @@ function imageModelInstalled(id: string): boolean {
 	if (!existsSync(dir)) return false;
 	if (existsSync(join(dir, 'installed.json'))) return true;
 	try {
-		return readdirSync(dir).some(
-			(name) => name.toLowerCase().endsWith('.gguf') && statSync(join(dir, name)).size > 4,
-		);
+		// The Q3/Q2 compare quants and the Qwen2.5-VL encoder share this directory; only a
+		// diffusion file of its own counts for a hand-built 2511 install.
+		const others = IMAGE_EDIT_MODELS.flatMap((model) => (model.quant ? [`-${model.quant}.gguf`] : []));
+		return readdirSync(dir).some((name) => {
+			const lower = name.toLowerCase();
+			return lower.endsWith('.gguf') && !lower.startsWith('qwen2.5-vl') &&
+				!others.some((suffix) => lower.endsWith(suffix)) && statSync(join(dir, name)).size > 4;
+		});
 	} catch {
 		return false;
 	}
+}
+
+/** Marker a smaller 2511 quant writes beside installed.json, e.g. installed-q3_k_m.json. */
+function quantMarker(id: string): string | undefined {
+	const quant = IMAGE_EDIT_MODELS.find((model) => model.id === id)?.quant;
+	return quant ? `installed-${quant}.json` : undefined;
 }
 
 function llmChatInstalled(): boolean {
@@ -335,10 +347,6 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				hfCached('mayocream/comic-text-detector-onnx', 'comic-text-detector.onnx')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
-		case 'big-lama':
-			return hfCached('dreMaz/AnimeMangaInpainting', 'lama_large_512px.ckpt')
-				? { installed: true }
-				: { installed: false, detail: 'Not in the Hugging Face cache' };
 		case 'aot':
 			return hfCached('ogkalu/aot-inpainting', 'aot_traced.pt')
 				? { installed: true }
@@ -363,12 +371,23 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				? { installed: true }
 				: { installed: false, detail: 'Weights not downloaded' };
 		case 'qwen-image-edit-2511':
-			return imageModelInstalled(target.id)
+			if (!imageModelInstalled(target.id)) return { installed: false, detail: 'Weights not downloaded' };
+			return existsSync(sdServerBin())
 				? { installed: true }
-				: { installed: false, detail: 'Weights not downloaded' };
+				: { installed: false, detail: 'sd-server is not built' };
+		case 'qwen-image-edit-2511-q3':
+		case 'qwen-image-edit-2511-q2': {
+			const marker = quantMarker(target.id);
+			if (!marker || !existsSync(join(imageEditModelDir('qwen-image-edit-2511'), marker)))
+				return { installed: false, detail: 'Weights not downloaded' };
+			return existsSync(sdServerBin())
+				? { installed: true }
+				: { installed: false, detail: 'sd-server is not built' };
+		}
 		case 'qwen-image-edit-2511-lightning': {
 			if (!imageModelInstalled('qwen-image-edit-2511'))
 				return { installed: false, detail: 'Qwen-Image-Edit 2511 weights are not installed' };
+			if (!existsSync(sdServerBin())) return { installed: false, detail: 'sd-server is not built' };
 			const lora = join(imageEditLorasDir(), IMAGE_EDIT_LIGHTNING_LORA);
 			return existsSync(lora)
 				? { installed: true }
@@ -874,7 +893,6 @@ export type UninstallPlan = {
 const HF_REPOS: Record<string, string> = {
 	rtdetr: 'ogkalu/comic-text-and-bubble-detector',
 	ctd: 'mayocream/comic-text-detector',
-	'big-lama': 'dreMaz/AnimeMangaInpainting',
 	aot: 'ogkalu/aot-inpainting',
 	'lama-manga': 'mayocream/lama-manga',
 };
@@ -982,6 +1000,22 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		paths.push(describePath(imageEditModelDir(targetId), 'Image editor weights'));
 		warnings.push('A running editor must be stopped first.');
 		warnings.push('Qwen-Image-Edit 2511 Lightning uses these weights.');
+		warnings.push('The Q3_K_M and Q2_K editors live in this directory and are removed with it.');
+		return { paths, alsoRemoves, warnings };
+	}
+	const marker = quantMarker(targetId);
+	if (marker) {
+		const dir = imageEditModelDir('qwen-image-edit-2511');
+		const recorded = (() => {
+			try {
+				return String(JSON.parse(readFileSync(join(dir, marker), 'utf8'))?.diffusion?.file || '');
+			} catch {
+				return '';
+			}
+		})();
+		if (recorded) paths.push(describePath(join(dir, recorded), 'Diffusion weights for this quant'));
+		paths.push({ path: join(dir, marker), note: 'Install record for this quant', kind: 'marker' });
+		warnings.push('A running editor must be stopped first. The shared encoder and VAE stay for Qwen-Image-Edit 2511.');
 		return { paths, alsoRemoves, warnings };
 	}
 	if (targetId === 'qwen-image-edit-2511-lightning') {

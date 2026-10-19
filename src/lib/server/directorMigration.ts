@@ -81,7 +81,7 @@ function migrateDirectorAutomationV12(db: Database.Database) {
   })();
 }
 
-export function migrateDirectorAutomation(db: Database.Database) {
+function migrateDirectorAutomationV13(db: Database.Database) {
   migrateDirectorAutomationV12(db);
   if (db.prepare("SELECT 1 FROM schema_versions WHERE version=13").get())
     return;
@@ -93,5 +93,21 @@ export function migrateDirectorAutomation(db: Database.Database) {
       PRIMARY KEY(series_id,type_id,fingerprint)
     )`);
     db.prepare("INSERT INTO schema_versions VALUES(13,?)").run(Date.now());
+  })();
+}
+
+export function migrateDirectorAutomation(db: Database.Database) {
+  migrateDirectorAutomationV13(db);
+  if (db.prepare("SELECT 1 FROM schema_versions WHERE version=14").get())
+    return;
+  db.transaction(() => {
+    // Warnings a reviewer dismissed. Keyed by content so a changed warning shows again.
+    db.exec(`CREATE TABLE director_dismissals (
+      episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+      key TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY(image_id,key)
+    )`);
+    db.prepare("INSERT INTO schema_versions VALUES(14,?)").run(Date.now());
   })();
 }

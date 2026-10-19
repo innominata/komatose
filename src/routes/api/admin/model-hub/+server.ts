@@ -103,7 +103,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			devicePrefs: readDevicePrefs(),
 			/** Komatose owns the GPUs: the switch in Admin → Hardware & services. */
 			gpuMode: komatoseGpuState(),
-			/** What `auto` really means for Koharu, SAM, Big-LaMa and AOT right now. */
+			/** What `auto` really means for Koharu, SAM, LaMa Manga and AOT right now. */
 			cleaningWorker: { choice: devicePref('cleaning-worker'), resolved: workflowResolved() },
 			catalogs,
 			rows: await Promise.all(listRegistryRows().map(async row => {

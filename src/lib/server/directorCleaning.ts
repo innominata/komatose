@@ -2,7 +2,11 @@ import type { AutomationContext } from "./directorAutomation";
 import sharp from "sharp";
 import type { DirectorModelCall } from "./directorModel";
 import { objectSchema, requiredString } from "./directorModel";
-import { directorPolicy, currentDirectorPresentation } from "../director";
+import {
+  directorPolicy,
+  currentDirectorPresentation,
+  type CleanScope,
+} from "../director";
 import type { LineRow } from "../types";
 import { pageArtwork, type PageData, type RegionData } from "../workflow";
 import { maskInputs } from "../maskDiagnostics";
@@ -20,6 +24,7 @@ import { digest, regionCrop } from "./directorMemory";
 import { directorEvent, directorAsset } from "./directorAudit";
 import { auditedDirectorOperation, pageFingerprint } from "./directorState";
 import { maskedCleaning, runWorkflowPng } from "./workflowImages";
+import { preferences } from "./workflowService";
 import { cleaningFallbackModel } from "./modelImageWorkflow";
 import {
   cleaningResidueInspector,
@@ -48,10 +53,23 @@ const editorPrompt =
 export async function cleanDirectorPage(
   ctx: AutomationContext,
   imageId: string,
-  call: DirectorModelCall,
+  modelCall: DirectorModelCall,
   attempt: number,
   findings?: unknown,
+  scope: CleanScope = { easy: true, hard: true, sfx: true },
 ) {
+  // English lettering and numbers are left on the page (the Director removes
+  // their regions), so cleaning checks must not report them as remaining text.
+  const keepsEnglish = !preferences(ctx.episode.id, ctx.series.id).transcribeEnglish;
+  const call: DirectorModelCall = (purpose, system, ...rest) =>
+    modelCall(
+      purpose,
+      purpose === "inspect-cleaning" && keepsEnglish
+        ? `${system} Lettering already in English (Latin letters) and plain numbers is intentionally left in place: it is never remaining text or a cleaning failure.`
+        : system,
+      ...rest,
+    );
+  const fullScope = scope.easy && scope.hard && scope.sfx;
   const emit = (kind: string, detail: unknown) =>
     directorEvent(ctx.run.id, ctx.episode.id, imageId, kind, detail);
   const regionDoc = (id: string) => getDoc<RegionData>(`region:${id}`, {});
@@ -100,6 +118,11 @@ export async function cleanDirectorPage(
   );
   const bubbleToolsOnly = (line: LineRow) =>
     plainBubbles.has(line.id) || !artworkRegions.has(line.id);
+  // Bubbles belong to the easy and hard cleaning tasks; free lettering to SFX.
+  const inScope = (line: LineRow) =>
+    bubbleToolsOnly(line) ? scope.easy || scope.hard : scope.sfx;
+  // Easy-only runs leave bubbles that bubble fill cannot handle for the hard task.
+  const deferred = (line: LineRow) => bubbleToolsOnly(line) && !scope.hard;
   const asCleaningRegion = (line: LineRow): CleaningRegion => ({
     id: line.id,
     box: [line.x, line.y, line.w, line.h],
@@ -134,7 +157,7 @@ export async function cleanDirectorPage(
   >();
   const pending = new Set(initial.data.pendingCleanRegions || []);
   const unsafeBubbleCheckpoints =
-    stamp?.raw === raw && stamp.artwork === current
+    stamp?.raw === raw && stamp.artwork === current && (scope.easy || scope.hard)
       ? lines.filter(
           (line) =>
             bubbleToolsOnly(line) &&
@@ -402,7 +425,7 @@ export async function cleanDirectorPage(
   // lettering at full detail even when its old checkpoint and page verdict pass.
   const rejectedArtwork: string[] = [];
   for (const line of lines) {
-    if (bubbleToolsOnly(line) || current === raw) continue;
+    if (bubbleToolsOnly(line) || !scope.sfx || current === raw) continue;
     const review = await inspect(current, current, "existing-artwork-detail", line);
     if (!review.safe) {
       completed.delete(line.id);
@@ -506,9 +529,33 @@ export async function cleanDirectorPage(
           "Source text or damaged artwork remains in a locked region; clean other regions and retain this one for review",
       });
   }
-  const remaining = () => lines.filter((line) => !completed.has(line.id));
+  const remaining = () =>
+    lines.filter((line) => !completed.has(line.id) && inScope(line));
+  // A region whose box overlaps a target shares its lettering. Protecting it
+  // would leave part of the target's text uncleaned.
+  const overlapsTarget = (line: LineRow, targets: LineRow[]) =>
+    targets.some(
+      (target) =>
+        target.id === line.id ||
+        (line.x != null &&
+          line.y != null &&
+          line.w != null &&
+          line.h != null &&
+          target.x != null &&
+          target.y != null &&
+          target.w != null &&
+          target.h != null &&
+          line.x < target.x + target.w &&
+          target.x < line.x + line.w &&
+          line.y < target.y + target.h &&
+          target.y < line.y + line.h),
+    );
   const protectedPolygons = (targets: LineRow[]) =>
     lines
+      .filter(
+        (line) =>
+          regionDoc(line.id).data.locked || !overlapsTarget(line, targets),
+      )
       .filter(
         (line) =>
           completed.has(line.id) ||
@@ -620,7 +667,7 @@ export async function cleanDirectorPage(
           : maskInputs(targets, regionDoc).map((r) => r.polygon),
         excludeRegions: full
           ? lines
-              .filter((l) => !targets.some((t) => t.id === l.id))
+              .filter((l) => !overlapsTarget(l, targets))
               .map((l) => maskRegion(l, regionDoc(l.id).data))
           : protectedPolygons(targets),
         expansion: full ? 0 : 5,
@@ -628,9 +675,23 @@ export async function cleanDirectorPage(
       ctx.signal,
     );
     assertCurrent();
+    maskPixels = typeof result.result?.pixels === "number" ? result.result.pixels : undefined;
     return result.artifact;
   };
-  const restoreBoundaries = lines.filter((line) => damagedBoundaries.has(line.id) && !regionDoc(line.id).data.locked);
+  // A fill of a connected or overlapping balloon can clear a neighbour's
+  // lettering too. When the detector finds nothing left, review the current
+  // artwork and record those regions as clean instead of inpainting an empty mask.
+  let maskPixels: number | undefined;
+  const alreadyClean = async (targets: LineRow[]) => {
+    if (maskPixels !== 0) return false;
+    for (const line of targets) {
+      const review = await inspect(current, current, "already-clean", line);
+      if (!review.safe) return false;
+    }
+    await save(current, targets, "already-clean");
+    return true;
+  };
+  const restoreBoundaries = lines.filter((line) => damagedBoundaries.has(line.id) && inScope(line) && !regionDoc(line.id).data.locked);
   if (restoreBoundaries.length) {
     const before = current;
     for (const line of restoreBoundaries)
@@ -716,6 +777,7 @@ export async function cleanDirectorPage(
     residueRepairGroups.get(id) ||
     [...residueRepairGroups.values()].find((ids) => ids.includes(id)) || [id];
   const fillBubbles = async (requested: LineRow[]) => {
+    if (!scope.easy) return;
     const candidateIds = new Set(
       requested.flatMap(
         (line) => residueRepairGroups.get(line.id) || [line.id],
@@ -862,19 +924,51 @@ export async function cleanDirectorPage(
               px,
               py,
             });
-            const candidate = await operation(
-              {
-                cmd: "bubble-fill",
-                path: assetPath(current),
-                px,
-                py,
-                strict: true,
-                excludeRegions: lines
-                  .filter((l) => !group.some((target) => target.id === l.id))
-                  .map((l) => maskRegion(l, regionDoc(l.id).data)),
-              },
-              ctx.signal,
-            );
+            // The box centre can land on a glyph stroke or a gap between
+            // lines. Try nearby points inside the box before giving up.
+            const offsets = [
+              [0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2],
+              [0.2, 0.2], [-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2],
+              [0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35],
+            ];
+            let candidate: Awaited<ReturnType<typeof operation>> | undefined;
+            let clickError: unknown;
+            for (const [dx, dy] of offsets) {
+              const x = px + dx * line.w!,
+                y = py + dy * line.h!;
+              if (x < 0 || x > 1 || y < 0 || y > 1) continue;
+              try {
+                candidate = await operation(
+                  {
+                    cmd: "bubble-fill",
+                    path: assetPath(current),
+                    px: x,
+                    py: y,
+                    strict: true,
+                    excludeRegions: lines
+                      .filter((l) => !overlapsTarget(l, group))
+                      .map((l) => maskRegion(l, regionDoc(l.id).data)),
+                  },
+                  ctx.signal,
+                );
+                if (dx || dy)
+                  emit("clean:retry", {
+                    method: "bubble-fill",
+                    regionIds: group.map((member) => member.id),
+                    reason: `Box centre missed the bubble; filled from offset point (${x.toFixed(3)}, ${y.toFixed(3)})`,
+                  });
+                break;
+              } catch (error) {
+                ctx.signal.throwIfAborted();
+                if (
+                  error instanceof WorkflowError &&
+                  [403, 404, 409].includes(error.status)
+                )
+                  throw error;
+                clickError = error;
+              }
+            }
+            if (!candidate) throw clickError;
             const bounds = candidate.result.changedBounds as
               { x: number; y: number; w: number; h: number } | undefined;
             for (const member of group) {
@@ -901,7 +995,10 @@ export async function cleanDirectorPage(
   // Detect once on remaining raw lettering, then try the configured LaMa/inpainter.
   const batches = new Map<string, LineRow[]>();
   for (const line of remaining().filter(
-    (line) => !regionDoc(line.id).data.locked && !artworkRepairs.has(line.id),
+    (line) =>
+      !regionDoc(line.id).data.locked &&
+      !artworkRepairs.has(line.id) &&
+      !deferred(line),
   )) {
     const method = bubbleToolsOnly(line)
       ? "lama-manga"
@@ -912,6 +1009,7 @@ export async function cleanDirectorPage(
     const base = current;
     try {
       const selected = await mask(batch, false);
+      if (await alreadyClean(batch)) continue;
       emit("clean:request", {
         method,
         regionIds: batch.map((l) => l.id),
@@ -953,7 +1051,12 @@ export async function cleanDirectorPage(
   const repairRegions = async (targets: LineRow[]) => {
     await fillBubbles(targets);
     for (const line of targets) {
-      if (completed.has(line.id) || regionDoc(line.id).data.locked) continue;
+      if (
+        completed.has(line.id) ||
+        regionDoc(line.id).data.locked ||
+        deferred(line)
+      )
+        continue;
       const methods: { id: string; editor: boolean }[] = [];
       const fallback =
         !bubbleToolsOnly(line) &&
@@ -974,6 +1077,7 @@ export async function cleanDirectorPage(
         try {
           const fullRegion = !bubbleToolsOnly(line);
           const selected = await mask([line], fullRegion);
+          if (!fullRegion && (await alreadyClean([line]))) break;
           // Start from the original lettering, not an accepted historical smear.
           // Only this selected area is restored in the editor input, never saved
           // unless the new candidate passes all checks.
@@ -1026,9 +1130,10 @@ export async function cleanDirectorPage(
     }
   };
   await repairRegions(remaining());
-  if (remaining().length)
+  const unresolved = () => remaining().filter((line) => !deferred(line));
+  if (unresolved().length)
     throw new WorkflowError(
-      `Cleaning still needs attention in regions: ${remaining()
+      `Cleaning still needs attention in regions: ${unresolved()
         .map((l) => l.id)
         .join(
           ", ",
@@ -1120,6 +1225,19 @@ export async function cleanDirectorPage(
     }
     return disputed;
   };
+  if (!fullScope) {
+    // Unselected regions still hold source lettering, so a whole-page
+    // verification cannot pass until every cleaning task has run.
+    emit("clean:result", {
+      method: "progressive",
+      safe: true,
+      remainingRegionIds: remaining().map((l) => l.id),
+      reason: remaining().length
+        ? "Selected cleaning tasks finished; remaining bubbles need the hard bubble task"
+        : "Selected cleaning tasks finished",
+    });
+    return;
+  }
   let review = await inspect(current, current, "final-verification");
   if (!review.safe) {
     const disputed = await revokeDisputed(review);

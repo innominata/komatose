@@ -30,6 +30,7 @@
   import { type PaletteId } from "./ToolPalette.svelte";
   import JobsPanel from "./JobsPanel.svelte";
   import DirectorPanel from './DirectorPanel.svelte';
+  import DirectorWarnings from './workflow/DirectorWarnings.svelte';
   import DirectorMemory from './DirectorMemory.svelte';
   import StudioToasts from "./workflow/StudioToasts.svelte";
   import StudioTopBar from "./workflow/StudioTopBar.svelte";
@@ -1398,13 +1399,13 @@
       return null;
     }
   }
-  /** Big-LaMa loads on startup, so the first probe can land before it is
+  /** LaMa Manga loads on startup, so the first probe can land before it is
    *  resident. Re-check at 5s and 10s until it reports available. */
   function recheckBackendWhenUnavailable() {
     for (const timer of backendRecheckTimers) clearTimeout(timer);
     backendRecheckTimers = [5000, 10000].map((delay) =>
       setTimeout(() => {
-        if (!backend?.bigLama) void loadBackend();
+        if (!backend?.lama) void loadBackend();
       }, delay),
     );
   }
@@ -4136,6 +4137,7 @@
               <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}
             <button type="button" class="ed-btn" data-find="accept-all" disabled={!canEdit || busy} onclick={async () => { const result = await act({ action: "approve-all-translations" }); if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`); }}><i class="bi bi-check2-all" aria-hidden="true"></i> Accept all translations</button>
+            <DirectorWarnings {apiBase} pageId={page?.id ?? null} {canEdit} refreshKey={directorLocked} onregion={(id) => selectLine(id)} />
           {:else if step === "Clean"}
             {@const maskDone = !!pageDoc?.data.maskApproved}
             {@const cleaned = !!pageDoc?.data.cleaned}

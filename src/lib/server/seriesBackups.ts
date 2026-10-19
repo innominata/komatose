@@ -43,6 +43,7 @@ const selections = {
   director_assets: 'run_id IN (SELECT r.id FROM director_runs r JOIN episodes e ON e.id=r.episode_id WHERE e.series_id=?)',
   director_stages: 'run_id IN (SELECT r.id FROM director_runs r JOIN episodes e ON e.id=r.episode_id WHERE e.series_id=?)',
   director_operations: 'episode_id IN (SELECT id FROM episodes WHERE series_id=?)',
+  director_dismissals: 'episode_id IN (SELECT id FROM episodes WHERE series_id=?)',
   director_series: 'series_id=?', director_examples: 'series_id=?', director_memory_assets: 'series_id=?',
   director_created_types: 'series_id=?',
   director_classifications: 'line_id IN (SELECT l.id FROM lines l JOIN episodes e ON e.id=l.episode_id WHERE e.series_id=?)',

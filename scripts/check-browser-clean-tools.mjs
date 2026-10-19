@@ -129,7 +129,7 @@ try {
           status: 200,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            bigLama: false,
+            lama: false,
             sam: false,
             codex: { available: true, reason: "fixture" },
             devices: [],

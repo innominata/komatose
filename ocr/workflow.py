@@ -67,12 +67,10 @@ def probe():
         koharu = koharu_mask.installed()
     except Exception:
         koharu = False
-    resident = next((key[1] for key in _MODELS if key and key[0] == 'big-lama' and str(key[1]).startswith('cuda')), None)
     lama_models = getattr(sys.modules.get('worker'), '_lama', {})
     lama_resident = next((device for device in lama_models if str(device).startswith('cuda')), None)
     return {'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
-            'bigLama': bool(importlib.util.find_spec('spandrel')), 'bigLamaDevice': resident,
-            'lamaDevice': lama_resident,
+            'lama': bool(importlib.util.find_spec('spandrel')), 'lamaDevice': lama_resident,
             'koharu': koharu, 'cpu': True}
 
 
@@ -317,6 +315,18 @@ def _cut_across(mask, origin, tangent):
         return int(round(x)), int(round(y))
 
     cv2.line(mask, walk(sx, sy), walk(-sx, -sy), 0, 3)
+
+
+def _nested_box(a, b):
+    """A second detection of the same lettering, mostly inside the other box.
+
+    Treating it as a neighbouring bubble would cut this balloon in two.
+    """
+    ix = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    iy = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    if ix <= 0 or iy <= 0:
+        return False
+    return ix * iy >= min(a[2] * a[3], b[2] * b[3]) * .6
 
 
 def split_interior(mask, box, neighbors):
@@ -980,6 +990,16 @@ def _bridge_split_fill(img, region, reach=10):
     return merged
 
 
+def _seal_outline_gaps(crop, gray, size):
+    """Copy of crop with breaks up to about size px in dark outlines closed."""
+    dark = (gray < 110).astype(np.uint8) * 255
+    closed = cv2.morphologyEx(dark, cv2.MORPH_CLOSE,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
+    sealed = crop.copy()
+    sealed[(closed > 0) & (dark == 0)] = 0
+    return sealed
+
+
 def bubble_fill(img, req):
     """Flood-fill a speech bubble from a clicked point.
 
@@ -1000,10 +1020,18 @@ def bubble_fill(img, req):
         h, w = crop.shape[:2]
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         flags = 4 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
-        for seed in _fill_seeds(gray, sx - cx0, sy - cy0):
+        # First flood the artwork as drawn. If the outline has a small break,
+        # flood again against a copy with those gaps sealed, so the balloon is
+        # treated as closed. Only the flood sees the seal; pixels come from crop.
+        seeds = _fill_seeds(gray, sx - cx0, sy - cy0)
+        # Sealing only applies to light balloons with dark outlines; a dark
+        # seed would flood the sealed strokes themselves.
+        light = [seed for seed in seeds if gray[seed[1], seed[0]] >= 110]
+        attempts = ((crop, seeds), *((_seal_outline_gaps(crop, gray, size), light) for size in (9, 15)))
+        for barrier, seed in ((b, seed) for b, group in attempts for seed in group):
             work = crop.copy()
             mask = np.zeros((h + 2, w + 2), np.uint8)
-            cv2.floodFill(work, mask, seed, 0, (16, 16, 16), (16, 16, 16), flags)
+            cv2.floodFill(barrier.copy(), mask, seed, 0, (16, 16, 16), (16, 16, 16), flags)
             region = mask[1:-1, 1:-1]
             # Touching the window means the fill escaped. A larger window may
             # still enclose it.
@@ -1162,7 +1190,7 @@ def removal_mask(img, req):
 
 
 def model_inpaint(img, mask, method, device):
-    if method not in ('lama', 'big-lama', 'aot'):
+    if method not in ('lama', 'aot'):
         raise ValueError(f'Unknown inpainting method: {method}')
     from huggingface_hub import hf_hub_download
     h, w = img.shape[:2]
@@ -1191,18 +1219,6 @@ def model_inpaint(img, mask, method, device):
                 model = _cached(('aot', device), lambda: torch.jit.load(hf_hub_download('ogkalu/aot-inpainting','aot_traced.pt', revision='42ffc84ff1bd46dd95f1c5a41e83ee7e98f39189'), map_location=device).eval())
                 with torch.inference_mode():
                     result = (model(torch.from_numpy((x*2-1)*(1-m)).to(device),torch.from_numpy(m).to(device)).cpu().numpy()+1)/2
-            elif method == 'big-lama':
-                from spandrel import ModelLoader
-                def load_big_lama():
-                    path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt', revision='2953a4e935bf01ad1471f6cbfd26ab81abeeb92d')
-                    state = torch.load(path, map_location='cpu', weights_only=True)
-                    state = state.get('gen_state_dict', state.get('state_dict', state))
-                    # The manga checkpoint contains the generator only; Spandrel expects its wrapper prefix.
-                    state = {('generator.'+k if k.startswith('model.') else k): v for k, v in state.items()}
-                    return ModelLoader().load_from_state_dict(state).to(device).eval()
-                model = _cached(('big-lama', device), load_big_lama)
-                with torch.inference_mode():
-                    result = model(torch.from_numpy(x).to(device),torch.from_numpy(m).to(device)).cpu().numpy()
             else:
                 raise ValueError('Unknown inpainting model')
         result = np.clip(result[0].transpose(1,2,0)*255,0,255).astype(np.uint8)[:,:,::-1]
@@ -1280,8 +1296,6 @@ def clean(img, mask, req):
         ring = (cv2.dilate(m,np.ones((9,9),np.uint8))>0)&(mask[y0:y1,x0:x1]==0)
         samples = crop[ring]
         selected = 'lama' if method == 'auto' else method
-        if method == 'auto' and str(req.get('device', 'cpu')).startswith('cuda'):
-            selected = 'big-lama'
         if selected == 'flat':
             if len(samples)<5: raise ValueError('No background samples; refine the removal mask')
             fill = np.broadcast_to(np.median(samples,axis=0).astype(np.uint8),crop.shape)
@@ -1296,17 +1310,9 @@ def clean(img, mask, req):
 
 
 def warmup(device):
-    """Load SAM, AOT, Big-LaMa, and LaMa once so later page jobs stay warm."""
+    """Load SAM, AOT, and LaMa Manga once so later page jobs stay warm."""
     import torch
     from huggingface_hub import hf_hub_download
-
-    def load_big_lama():
-        from spandrel import ModelLoader
-        path = os.environ.get('SCAN_BIG_LAMA_CHECKPOINT') or hf_hub_download('dreMaz/AnimeMangaInpainting','lama_large_512px.ckpt', revision='2953a4e935bf01ad1471f6cbfd26ab81abeeb92d')
-        state = torch.load(path, map_location='cpu', weights_only=True)
-        state = state.get('gen_state_dict', state.get('state_dict', state))
-        state = {('generator.'+k if k.startswith('model.') else k): v for k, v in state.items()}
-        return ModelLoader().load_from_state_dict(state).to(device).eval()
 
     def load_sam():
         from sam2.build_sam import build_sam2
@@ -1320,10 +1326,9 @@ def warmup(device):
         import worker
         return worker._get_lama(device)
 
-    # Big-LaMa first, and isolate each failure: one optional model must not
+    # Isolate each failure: one optional model must not
     # stop the cleaner the user selected from becoming GPU-resident.
     loaders = (
-        ('big-lama', lambda: _cached(('big-lama', device), load_big_lama)),
         ('aot', lambda: _cached(('aot', device), load_aot)),
         ('sam', lambda: _cached(('sam', device), load_sam)),
         ('lama', load_lama),
@@ -1337,8 +1342,7 @@ def warmup(device):
             failed[name] = f'{type(e).__name__}: {e}'
     if str(device).startswith('cuda'):
         torch.cuda.synchronize(device)
-    return {'warm': warm, 'failed': failed, 'device': device,
-            'bigLamaDevice': device if 'big-lama' in warm else None}
+    return {'warm': warm, 'failed': failed, 'device': device}
 
 
 def _brush_pixels(points, width, height):
@@ -1586,7 +1590,8 @@ def run(req):
     if req['cmd']=='geometry-batch':
         regions = req.get('regions', [])
         return {'regions': [geometry(img, {**req, **r, 'cmd': 'geometry',
-                            'neighbors': [other['box'] for j, other in enumerate(regions) if j != i]})
+                            'neighbors': [other['box'] for j, other in enumerate(regions)
+                                          if j != i and not _nested_box(r['box'], other['box'])]})
                             for i, r in enumerate(regions)]}
     if req['cmd']=='bubble-fill':
         before = img.copy()
@@ -1637,7 +1642,7 @@ def run(req):
         if not cv2.imwrite(req['out'],result): raise ValueError('Clean write failed')
         parts = method.split('+')
         device = str(req.get('device', 'cpu'))
-        if any(m in parts for m in ('lama', 'big-lama', 'aot')):
+        if any(m in parts for m in ('lama', 'aot')):
             import torch
             runtime = 'ROCm' if torch.version.hip else 'CUDA'
             backend = f'{device} · GPU · PyTorch {runtime}' if device.startswith('cuda') else 'CPU · PyTorch'

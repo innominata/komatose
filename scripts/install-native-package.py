@@ -13,7 +13,8 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.model == 'sam':
-        from huggingface_hub import hf_hub_download
+        from model_download_deps import require_hub
+        hf_hub_download = require_hub().hf_hub_download
         import sam2  # Verify the runtime dependency without loading a model.
         path = os.environ.get('SCAN_SAM_CHECKPOINT') or hf_hub_download(
             'facebook/sam2.1-hiera-small', 'sam2.1_hiera_small.pt')

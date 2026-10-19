@@ -93,7 +93,6 @@ test('catalog ids are unique, grouped, and sized for decisions', () => {
 		'translategemma-12b-q4',
 		'qwen-image-edit-2511',
 		'qwen-image-edit-2511-lightning',
-		'big-lama',
 		'aot',
 		'lama-manga',
 	]) {
@@ -129,7 +128,7 @@ test('every command is a whitelisted script with fixed arguments', () => {
 		installCommand(installTarget('rtdetr')!).command.includes('install-detect-models.py --model rtdetr'),
 	);
 	assert.ok(
-		installCommand(installTarget('big-lama')!).command.includes('install-clean-models.py --model big-lama'),
+		installCommand(installTarget('lama-manga')!).command.includes('install-clean-models.py --model lama-manga'),
 	);
 	const shisa = installTarget('shisa-v2.1-qwen3-8b-q4')!;
 	assert.match(shisa.summary, /Qwen3/);
@@ -198,7 +197,7 @@ test('targetInstalled resolves ids by kind without touching the network', () => 
 	}
 });
 
-test('LaMa Manga requires mayocream SafeTensors independently of Big LaMa and old ONNX weights', async () => {
+test('LaMa Manga uses SafeTensors and has no duplicate checkpoint installer', async () => {
   const cache = join(root, 'lama-cache');
   const previous = process.env.HF_HOME;
   process.env.HF_HOME = cache;
@@ -211,12 +210,11 @@ test('LaMa Manga requires mayocream SafeTensors independently of Big LaMa and ol
     await mkdir(native, { recursive: true });
     await writeFile(join(native, 'lama_large_512px.ckpt'), 'native weights');
     assert.equal(targetInstalled(installTarget('lama-manga')!).installed, false);
-    assert.equal(targetInstalled(installTarget('big-lama')!).installed, true);
+    assert.equal(installTarget('big-lama'), undefined);
     const manga = join(cache, 'hub/models--mayocream--lama-manga/snapshots/native');
     await mkdir(manga, { recursive: true });
     await writeFile(join(manga, 'lama-manga.safetensors'), 'mayocream weights');
     assert.equal(targetInstalled(installTarget('lama-manga')!).installed, true);
-    assert.notDeepEqual(uninstallPlan('lama-manga').paths, uninstallPlan('big-lama').paths);
     assert.equal(uninstallPlan('lama-manga').warnings.length, 0);
   } finally {
     if (previous === undefined) delete process.env.HF_HOME;
@@ -403,4 +401,14 @@ test('runtime upgrades are restricted to managed workflow/review environments', 
     if (previous === undefined) delete process.env.SCAN_REVIEW_PYTHON;
     else process.env.SCAN_REVIEW_PYTHON = previous;
   }
+});
+
+test('retired checkpoint model is removed from saved rows without an alias', async () => {
+  const registry = await import('../src/lib/server/modelRegistryStore');
+  const packages = await import('../src/lib/server/modelPackages');
+  const row = { id: 'big-lama', name: 'Old checkpoint', slug: 'big-lama', access: 'local_http', seeded: false, packageId: 'big-lama' } as ModelRow;
+  registry.writeModelOverlay({ rows: [row], catalogs: [] });
+  assert.equal(registry.listRegistryRows().some(item => item.id === 'big-lama'), false);
+  assert.equal(packages.discoverModelPackages(true).packages.some(item => item.manifest.id === 'big-lama'), false);
+  assert.equal(installTarget('big-lama'), undefined);
 });

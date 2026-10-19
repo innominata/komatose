@@ -1221,7 +1221,7 @@ test("raw vs cleaned comparison flips the region crop as one animated image", as
     assert.equal(pngChunks(deduplicated.body).find((chunk) => chunk.type === "acTL")!.data.readUInt32BE(0), 4);
     // Two methods may produce identical pixels: keep both method labels in the link.
     const samePixels = getDoc<PageData>("page:compare-p", {});
-    putDoc(epId, samePixels.id, { ...samePixels.data, cleanMethod: "big-lama", cleanDurationMs: 2345 }, samePixels.revision);
+    putDoc(epId, samePixels.id, { ...samePixels.data, cleanMethod: "aot", cleanDurationMs: 2345 }, samePixels.revision);
     const { shareRegionComparison, sharedComparisonResponse } = await import("../src/lib/server/sharedComparison");
     const shared = await shareRegionComparison(series, episodeRow, lineRow, pageRow, [second.token]);
     const token = shared.apngSrc.split("/")[3];

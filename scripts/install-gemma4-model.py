@@ -124,7 +124,8 @@ def install_file(dest, repo, revision, spec):
     needed = spec["bytes"] + 128 * 1024**2
     if shutil.disk_usage(dest).free < needed:
         raise RuntimeError(f"Insufficient disk space for {path.name}")
-    from huggingface_hub import hf_hub_download
+    from model_download_deps import require_hub
+    hf_hub_download = require_hub().hf_hub_download
 
     print(f"Downloading {repo}/{spec['filename']}@{revision}", flush=True)
     hf_hub_download(

@@ -7,6 +7,7 @@ import {
   IMAGE_EDIT_ALIGN,
   IMAGE_EDIT_METHOD,
   IMAGE_EDIT_MODELS,
+  imageEditInstallArgs,
   MAX_IMAGE_EDIT_PROMPT,
   buildImageEditPrompt,
   composeImageEditInstructions,
@@ -32,7 +33,12 @@ test("the local editor is registered as its own cleaning method", () => {
   assert.deepEqual(IMAGE_EDIT_MODELS.map((model) => model.method), [
     "qwen-image-edit",
     "qwen-image-edit-lightning",
+    "qwen-image-edit-q3",
+    "qwen-image-edit-q2",
   ]);
+  assert.deepEqual(imageEditInstallArgs("qwen-image-edit-2511-q3"), ["--quant", "q3_k_m"]);
+  assert.deepEqual(imageEditInstallArgs("qwen-image-edit-2511-lightning"), ["--lightning"]);
+  assert.equal(imageEditWeightHost("qwen-image-edit-2511-q2"), "qwen-image-edit-2511-q2");
   assert.equal(imageEditModelForMethod("qwen-image-edit")?.label, "Qwen-Image-Edit 2511");
   assert.equal(imageEditModelForMethod("qwen-image-edit-lightning")?.label, "Qwen-Image-Edit 2511 Lightning");
   assert.equal(imageEditWeightHost("qwen-image-edit-2511-lightning"), "qwen-image-edit-2511");

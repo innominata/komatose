@@ -103,12 +103,8 @@ def main():
                         help="Which detector to prefetch (default all)")
     args = parser.parse_args()
     names = list(MODELS) if args.model == "all" else [args.model]
-    try:
-        import huggingface_hub  # noqa: F401
-    except ImportError:
-        raise SystemExit(
-            "huggingface-hub is not installed for this Python. "
-            "Run: python3 scripts/setup-python-env.py --env workflow")
+    from model_download_deps import require_hub
+    require_hub()
     for name in names:
         install_one(name, MODELS[name])
 

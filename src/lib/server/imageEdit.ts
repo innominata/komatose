@@ -3,7 +3,7 @@ import { existsSync, closeSync, mkdirSync, openSync, readFileSync, statSync } fr
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DEFAULT_IMAGE_EDIT_MODEL_ID, IMAGE_EDIT_MODELS, imageEditLoraList, imageEditModelOf, imageEditWeightHost, type ImageEditModelId } from '../imageEdit';
+import { DEFAULT_IMAGE_EDIT_MODEL_ID, IMAGE_EDIT_MODELS, imageEditInstallArgs, imageEditLoraList, imageEditModelOf, imageEditWeightHost, type ImageEditModelId } from '../imageEdit';
 import {
   imageEditListenPort, imageEditLorasDir as lorasDir,
   imageEditVulkanDevice, komatoseGpuEnabled, sdServerBin, vulkanLlamaEnv,
@@ -82,6 +82,8 @@ const globalState = globalThis as typeof globalThis & { __scanImageEditStates?: 
 const states: States = (globalState.__scanImageEditStates ??= {
   'qwen-image-edit-2511': freshState(),
   'qwen-image-edit-2511-lightning': freshState(),
+  'qwen-image-edit-2511-q3': freshState(),
+  'qwen-image-edit-2511-q2': freshState(),
 });
 
 function modelState(id: ImageEditModelId): ModelState {
@@ -165,7 +167,7 @@ const failure = (message: string, status = 409) => Object.assign(new Error(messa
 export function installedImageEdit(id: ImageEditModelId): Recipe | null {
   const model = imageEditModelFiles()[id];
   try {
-    const marker = JSON.parse(readFileSync(join(model.dir, 'installed.json'), 'utf8'));
+    const marker = JSON.parse(readFileSync(join(model.dir, model.marker), 'utf8'));
     const diffusion = String(marker?.diffusion?.file || model.fallback.diffusion);
     const vae = String(marker?.vae?.file || model.fallback.vae);
     if (!existsSync(join(model.dir, diffusion)) || !existsSync(join(model.dir, vae))) return null;
@@ -495,9 +497,7 @@ const modelFiles = (id: ImageEditModelId) => imageEditModelFiles()[id];
 
 /** The install instruction for whichever editor was asked for. */
 export function missingImageEditError(id: ImageEditModelId) {
-  const script = id === 'qwen-image-edit-2511-lightning'
-    ? 'scripts/install-image-edit-model.py --lightning'
-    : 'scripts/install-image-edit-model.py';
+  const script = ['scripts/install-image-edit-model.py', ...imageEditInstallArgs(id)].join(' ');
   return failure(
     `${modelFiles(id).label} is not installed. Run ${script} and build stable-diffusion.cpp (${bin()}).`,
     400,

@@ -140,7 +140,13 @@ export function undoDirectorChange(episodeId: string, changeId: number): void {
       }
       const assignments = lineFields.map(field => `${field}=?`).join(',');
       for (const row of before.lines as Row[]) {
-        if (!currentLines.has(row.id)) throw new WorkflowError('A Director line was deleted; restore it manually.', 409);
+        if (!currentLines.has(row.id)) {
+          // A region the Director removed: put the whole row back.
+          const columns = Object.keys(row);
+          sqlite.prepare(`INSERT INTO lines(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`)
+            .run(...columns.map(column => row[column] ?? null));
+          continue;
+        }
         sqlite.prepare(`UPDATE lines SET ${assignments},updated_at=? WHERE id=? AND episode_id=?`)
           .run(...lineFields.map(field => row[field] ?? null), Date.now(), row.id, episodeId);
       }

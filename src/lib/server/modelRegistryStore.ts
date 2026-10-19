@@ -70,8 +70,8 @@ function normalizeOverlayRows(rows: NonNullable<ModelOverlay['rows']>): NonNulla
 			// Retired seed entries are dropped wholesale; an operator-added row
 			// (seeded: false) reusing the id survives — the chat models ship as
 			// presets that an operator adds under exactly these ids.
-			const keep =
-				!(RETIRED_SEED_IDS as readonly string[]).includes(id) || row?.seeded === false;
+			const keep = id !== 'big-lama' && row?.packageId !== 'big-lama' &&
+				(!(RETIRED_SEED_IDS as readonly string[]).includes(id) || row?.seeded === false);
 			if (!keep) changed = true;
 			return keep;
 		})
