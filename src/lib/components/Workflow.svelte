@@ -60,7 +60,6 @@
   import {
     clampSkew,
     cssDeltaTransform,
-    setRowShear,
     draggedSkew,
     polygonEdgeHandle,
     rotateNormalizedPoints,
@@ -2088,10 +2087,6 @@
     if (drawing.bounds && drawing.corner == null)
       return `transform:translate(${(adjustedBounds(drawing).x - drawing.bounds.x) * 100}%, ${(adjustedBounds(drawing).y - drawing.bounds.y) * 100}%)`;
     return undefined;
-  }
-  function overlaySvg(l: LineRow, layout: { style: TextStyle; svg: string }) {
-    if (drawing?.regionId !== l.id || drawing.skew?.axis !== "x") return layout.svg;
-    return setRowShear(layout.svg, skewAngle(drawing));
   }
   function startPolygonDrag(e: PointerEvent) {
     e.stopPropagation();
@@ -4434,7 +4429,6 @@
               regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:studioState?.regions[id]?.data.layout}
               regionTextMask={(id: string) => studioState?.regions[id]?.data.textMask}
               {overlayStyle}
-              {overlaySvg}
               {adjustedBounds}
               {rotationCenter}
               {rotationAngle}

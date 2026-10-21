@@ -53,7 +53,7 @@
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
-      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction'].includes(event.kind)
+      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction'].includes(event.kind)
     && (event.kind!=='run' || event.detail?.state!=='running' || event.detail?.message==='Starting Director')));
 
   const selectedEvent=$derived(auditEvents.find(event=>event.id===selectedEventId)??auditEvents.at(-1));
@@ -99,7 +99,7 @@
     if (k==='typeset:result') return d.errors?.length?'bad':'good';
     if (k==='director:response') return d.textComplete===false?'warn':'good';
     if (['clean:result','stage:reused','critique:reused','region:created','region:extended'].includes(k)) return 'good';
-    if (['clean:fallback','clean:retry','automation:fallback','memory:warning','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
+    if (['clean:fallback','clean:retry','automation:fallback','memory:warning','finding:unconfirmed','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
     if (['automation:request','director:request','proofreader:images','proofreader:question','request','transcription:attempt','clean:request'].includes(k)) return 'muted';
     return 'info';
   }
@@ -147,6 +147,7 @@
     }
     if(event.kind==='automation:error') return `${purpose(detail.purpose)}: model error ${tidy(detail.error||'')}`;
     if(event.kind==='memory:warning') return tidy(detail.message);
+    if(event.kind==='finding:unconfirmed') return `Not confirmed, left for review: ${tidy(detail.message)} (${tidy(detail.reason)})`;
     if(event.kind==='ocr:error') return `OCR failed: ${tidy(detail.error)}`;
     const pageNumber=pages.find(page=>page.id===event.image_id)?.pageNumber??'?';
     if (event.kind==='run') return detail.state==='completed'?tidy(detail.message||'Director finished'):

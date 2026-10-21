@@ -143,6 +143,8 @@ export function saveMemorySettings(
     if (!result.changes)
       throw new WorkflowError("Series memory changed; reload", 409);
     if (rebuild) {
+      const relearn = getDoc(relearnDocId(seriesId), {});
+      putDoc(null, relearn.id, { pending: true }, relearn.revision);
       sqlite
         .prepare("DELETE FROM director_examples WHERE series_id=?")
         .run(seriesId);
@@ -152,6 +154,21 @@ export function saveMemorySettings(
     }
   })();
   return memorySettings(seriesId);
+}
+
+const relearnDocId = (seriesId: string) => `director-relearn:${seriesId}`;
+/** "Rebuild learned memory" asks the next classification to learn every type once.
+ * A series with reference pages but nothing learned (a rebuild from before the
+ * flag existed, or a new series) counts as pending too. */
+export function relearnPending(seriesId: string) {
+  if (getDoc<{ pending?: boolean }>(relearnDocId(seriesId), {}).data.pending === true) return true;
+  const { data } = memorySettings(seriesId);
+  if (!data.imageIds.length && !data.episodeIds.length) return false;
+  return !sqlite.prepare("SELECT 1 FROM director_examples WHERE series_id=? LIMIT 1").get(seriesId);
+}
+export function clearRelearn(seriesId: string) {
+  const doc = getDoc<{ pending?: boolean }>(relearnDocId(seriesId), {});
+  if (doc.data.pending) putDoc(null, doc.id, { pending: false }, doc.revision);
 }
 
 /** Human completion is evidence only while all its content stamps still match. */
@@ -417,7 +434,7 @@ export async function loadSeriesMemory(
   episode: Episode,
   call: DirectorModelCall,
   signal: AbortSignal,
-  options: { learnTypes?: string[]; limit?: number } = {},
+  options: { learnTypes?: string[]; limit?: number; learnMissing?: boolean } = {},
 ) {
   const { settings, types, candidates } = await referenceCandidates(
     series.id,
@@ -452,6 +469,22 @@ export async function loadSeriesMemory(
   }
   const examples: MemoryExample[] = [];
   const warnings: string[] = [];
+  const cachedFingerprint = (id: string) =>
+    (sqlite
+      .prepare("SELECT fingerprint FROM director_examples WHERE id=? AND series_id=?")
+      .get(id, series.id) as { fingerprint: string } | undefined)?.fingerprint;
+  // A type with references but nothing learned yet (a new series, or right after
+  // "Rebuild learned memory") is learned once even when no decision is uncertain.
+  const unlearned = new Set(
+    options.learnMissing
+      ? types
+          .filter((type) => {
+            const own = selected.filter((x) => x.typeId === type.id);
+            return own.length && own.every((x) => cachedFingerprint(x.id) !== x.fingerprint);
+          })
+          .map((type) => type.id)
+      : [],
+  );
   for (const candidate of selected) {
     signal.throwIfAborted();
     const cached = sqlite
@@ -466,7 +499,11 @@ export async function loadSeriesMemory(
     }
     // Page classification starts with existing knowledge. New visual learning is
     // reserved for the specific types involved in an uncertain decision.
-    if (options.learnTypes && !options.learnTypes.includes(candidate.typeId))
+    if (
+      options.learnTypes &&
+      !options.learnTypes.includes(candidate.typeId) &&
+      !unlearned.has(candidate.typeId)
+    )
       continue;
     try {
       const capture = await capturePageImages(

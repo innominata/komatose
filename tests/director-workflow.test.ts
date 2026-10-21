@@ -828,7 +828,14 @@ test("visually corrects an existing wrong type, preserves custom styles and supp
     .prepare("UPDATE lines SET line_type='thought' WHERE id=?")
     .run(page.lineId);
   const region = getDoc<any>(`region:${page.lineId}`, {});
-  const ownStyle = { fontId: font.id, size: 15, minSize: 8, fill: "#335577" };
+  // Thought defaults to italic and plain dialogue to normal; the region's own fill and size are custom.
+  const config = getDoc<any>("series:s", {});
+  const savedStyles = config.data.styles;
+  putDoc(null, config.id, {
+    ...config.data,
+    styles: { ...savedStyles, thought: { ...savedStyles?.thought, emphasis: "italic" }, plain: { ...savedStyles?.plain, emphasis: "normal" } },
+  }, config.revision);
+  const ownStyle = { fontId: font.id, size: 15, minSize: 8, fill: "#335577", emphasis: "italic" };
   putDoc(
     page.episode.id,
     region.id,
@@ -836,16 +843,19 @@ test("visually corrects an existing wrong type, preserves custom styles and supp
     region.revision,
   );
   const result = await runPage(page);
+  const restored = getDoc<any>("series:s", {});
+  putDoc(null, restored.id, { ...restored.data, styles: savedStyles }, restored.revision);
   assert.equal(
     result.overview.pages[0].state,
     "passed",
     result.overview.pages[0].detail,
   );
   assert.equal((await listLines(page.episode.id))[0].lineType, "plain");
-  assert.deepEqual(
-    getDoc<any>(`region:${page.lineId}`, {}).data.style,
-    ownStyle,
-  );
+  const style = getDoc<any>(`region:${page.lineId}`, {}).data.style;
+  assert.equal(style.fill, "#335577");
+  assert.equal(style.size, 15);
+  assert.equal(style.fontId, font.id);
+  assert.equal(style.emphasis, "normal", "the thought default must not follow the region to dialogue");
   assert.ok(
     result.overview.events.some((event) => event.kind === "type:changed"),
   );
@@ -1356,6 +1366,45 @@ test("final QA can request creation of a missing region without inventing an exi
     respond = normal;
     proofreaderReply=undefined;
     masks.restore();
+  }
+});
+
+test("a missing region that coverage cannot find becomes a warning instead of failing the page", async () => {
+  const page = await seedChapter("phantom-missed-text", 6);
+  const normal = respond;
+  let checks = 0;
+  respond = (purpose, data) => {
+    if (purpose === "inspect-region-coverage") return { regions: [], edits: [] };
+    if (purpose === "check-page" && ++checks === 1)
+      return {
+        findings: [
+          {
+            lineId: "",
+            code: "missing-region",
+            message: "Speech bubble with an ellipsis has no region",
+            evidence: "An ellipsis bubble on the left",
+            severity: "blocker",
+            repair: "detect",
+          },
+        ],
+      };
+    return normal(purpose, data);
+  };
+  try {
+    const result = await runPage(page);
+    const state = result.overview.pages[0];
+    assert.notEqual(state.state, "unresolved", state.detail);
+    assert.equal(checks, 1, "nothing changed, so the page is not reviewed again");
+    assert.ok(result.overview.events.some((event) => event.kind === "finding:unconfirmed"));
+    const findings = JSON.parse(
+      (sqlite.prepare("SELECT findings FROM director_pages WHERE image_id=?").get(page.imageId) as any).findings,
+    );
+    assert.deepEqual(
+      findings.filter((f: any) => f.code === "missing-region").map((f: any) => f.severity),
+      ["warning"],
+    );
+  } finally {
+    respond = normal;
   }
 });
 
@@ -2613,7 +2662,6 @@ test("compact description cache upgrades existing Director databases without los
 const letteringPatch = (patch: Record<string, unknown>) => ({
   fontId: null,
   size: null,
-  minSize: null,
   leading: null,
   padding: null,
   align: null,
@@ -2670,6 +2718,7 @@ test("lettering QA applies a concrete style repair before requesting a second re
     const region = getDoc<any>(`region:${page.lineId}`, {}).data;
     assert.equal(region.style.emphasis, "bold");
     assert.equal(region.layout.size, 20);
+    assert.notEqual(region.style.minSize, 20, "Director changed the minimum size");
     assert.equal(checks, 2);
     assert.equal(repairs, 1);
     assert.equal(
@@ -2870,6 +2919,29 @@ test("Director reuses saved scene context without a separate scene-description r
   } finally {
     respond = normal;
   }
+});
+
+test("rebuilding learned memory relearns every referenced type on the next run, once", async () => {
+  const config = getDoc<any>("series:s", {});
+  putDoc(null, config.id, {
+    ...config.data,
+    regionKinds: [...config.data.regionKinds, { id: "relearn-test", label: "Relearn caption", color: "#cccccc" }],
+  }, config.revision);
+  const reference = await seedChapter("relearn-reference", 30, "done");
+  sqlite.prepare("UPDATE lines SET line_type='relearn-test' WHERE id=?").run(reference.lineId);
+  const page = await seedChapter("relearn-target", 31);
+  const settings = memorySettings("s");
+  saveMemorySettings("s", settings.revision, {}, true);
+  const learned = (from: number) =>
+    requests.slice(from).filter((request) => request.purpose === "learn-region-example");
+  const start = requests.length;
+  await runPage(page);
+  assert.ok(
+    learned(start).some((request) => request.data.type.id === "relearn-test"),
+    "a type nobody was unsure about is still learned after a rebuild",
+  );
+  const { relearnPending } = await import("../src/lib/server/directorMemory");
+  assert.equal(relearnPending("s"), false, "the rebuild request is used once");
 });
 
 test("uncertain classification learns only relevant conventions and rechecks only uncertain regions", async () => {

@@ -397,10 +397,71 @@ def _lama_run(img, mask, device="cpu"):
     m = cv2.copyMakeBorder(mask, 0, (-h) % 8, 0, (-w) % 8, cv2.BORDER_CONSTANT, value=0)
     x = np.ascontiguousarray(im[:, :, ::-1].transpose(2, 0, 1))[None].astype(np.float32) / 255.0
     mm = (m > 0).astype(np.float32)[None, None]
+    # Spandrel's LaMa.forward pastes the input back outside the mask, which
+    # hides the drift _align_tone reads; call its generator for the raw answer.
+    generator = getattr(getattr(getattr(model, "model", None), "model", None), "forward", None)
     with torch.inference_mode():
-        out = model(torch.from_numpy(x).to(device), torch.from_numpy(mm).to(device)).cpu().numpy()[0]
-    res = np.clip(out.transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)[:, :, ::-1]
-    return np.ascontiguousarray(res[:h, :w])
+        xt, mt = torch.from_numpy(x).to(device), torch.from_numpy(mm).to(device)
+        out = (generator(xt * (1 - mt), mt) if callable(generator) else model(xt, mt)).cpu().numpy()[0]
+    raw = out.transpose(1, 2, 0)[:h, :w, ::-1] * 255.0
+    hole = mask[:h, :w] > 0
+    page = img.astype(np.float32)
+    raw = np.where(hole[..., None], _align_tone(page, hole, raw), page)
+    return np.ascontiguousarray(np.clip(np.round(raw), 0, 255).astype(np.uint8))
+
+
+# Tone alignment, after Bear's ToneSite (k-omiq/Bear 1b99fd2): LaMa Manga
+# darkens its fill by ~2-3 levels and drifts the unmasked pixels around the
+# hole the same way, so the drift is measured on a ring outside the mask and
+# taken out of the fill.
+_TONE_RING = (6, 18)  # ring band outside the mask, px
+_TONE_BOX = 7  # local-mean window, px
+_TONE_BANDS = 8  # brightness bands the curve is learned in
+_TONE_CLAMP = 24.0  # largest correction, levels
+_TONE_MIN_SAMPLES = 64
+
+
+def _align_tone(page, hole, raw):
+    """Correct `raw` (float BGR, 0-255) inside `hole` toward `page`'s level.
+    Learns a per-channel offset per brightness band from 7 px box means on
+    the ring 6-18 px outside the mask; returns `raw` unchanged when the ring
+    holds too few samples."""
+    import cv2
+    import numpy as np
+
+    m = hole.astype(np.uint8)
+    near = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * _TONE_RING[0] + 1,) * 2))
+    far = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * _TONE_RING[1] + 1,) * 2))
+    ring = (far > 0) & (near == 0)
+    if int(ring.sum()) < _TONE_MIN_SAMPLES:
+        return raw
+
+    def box_mean(values, weight):
+        k = (_TONE_BOX, _TONE_BOX)
+        num = cv2.blur(values * weight[..., None], k)
+        den = cv2.blur(weight, k)[..., None]
+        return num / np.maximum(den, 1e-6)
+
+    ringw = ring.astype(np.float32)
+    page_mean = box_mean(page, ringw)[ring]
+    raw_mean = box_mean(raw, ringw)[ring]
+    fill_mean = box_mean(raw, hole.astype(np.float32))
+    edges = np.linspace(0.0, 256.0, _TONE_BANDS + 1)
+    centres = (edges[:-1] + edges[1:]) / 2
+    out = raw.copy()
+    for c in range(raw.shape[2]):
+        band = np.clip(np.digitize(raw_mean[:, c], edges) - 1, 0, _TONE_BANDS - 1)
+        known, offsets = [], []
+        for b in range(_TONE_BANDS):
+            sel = band == b
+            if int(sel.sum()) >= _TONE_MIN_SAMPLES // 4:
+                known.append(centres[b])
+                offsets.append(float(np.median(page_mean[sel, c] - raw_mean[sel, c])))
+        if not known:
+            continue
+        offset = np.clip(np.interp(fill_mean[..., c][hole], known, offsets), -_TONE_CLAMP, _TONE_CLAMP)
+        out[..., c][hole] = raw[..., c][hole] + offset
+    return out
 
 
 # Longest crop side LaMa sees after upscaling; bounds memory and inference time.

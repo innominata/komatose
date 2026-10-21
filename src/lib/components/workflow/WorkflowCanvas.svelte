@@ -82,7 +82,6 @@
     regionLayout,
     regionTextMask,
     overlayStyle,
-    overlaySvg,
     adjustedBounds,
     rotationCenter,
     rotationAngle,
@@ -168,7 +167,6 @@
     regionLayout: (id: string) => FittedLayout | undefined;
     regionTextMask: (id: string) => string | undefined;
     overlayStyle: (line: LineRow, layout: { style: TextStyle }) => string | undefined;
-    overlaySvg: (line: LineRow, layout: { style: TextStyle; svg: string }) => string;
     adjustedBounds: (d: StudioDrawing) => { x: number; y: number; w: number; h: number };
     rotationCenter: (line: LineRow) => Point;
     rotationAngle: (d: StudioDrawing) => number;
@@ -709,7 +707,7 @@
             regionLayout(l.id)}{#if layout}<div class="text-clip"><img
               class="text-overlay"
               style={[overlayStyle(l, layout), textMaskCss(regionTextMask(l.id))].filter(Boolean).join(";")}
-              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(overlaySvg(l, layout))}`}
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(layout.svg)}`}
               alt=""
             /></div>{/if}{/each}{/if}
       <svg

@@ -75,6 +75,27 @@ class LamaDevice(unittest.TestCase):
             np.testing.assert_array_equal(model.mask.numpy()[0, 0, :height, :width], mask > 0)
             self.assertEqual(int(model.mask.count_nonzero()), 400)
 
+    def test_fill_drift_learned_on_the_ring_is_taken_out_of_the_hole(self):
+        # LaMa's raw answer runs a few levels dark everywhere, ring included.
+        class DarkGenerator(torch.nn.Module):
+            def forward(self, image, mask):
+                return torch.full_like(image, 217 / 255)
+        model = MagicMock()
+        model.model.model = DarkGenerator()
+        img = np.full((200, 240, 3), 220, np.uint8)
+        mask = np.zeros((200, 240), np.uint8)
+        mask[70:130, 80:160] = 255
+        with patch.object(worker, '_get_lama', return_value=model):
+            result = worker._lama_run(img, mask)
+        model.assert_not_called()
+        np.testing.assert_array_equal(result, img)
+
+    def test_tone_alignment_abstains_without_a_ring(self):
+        page = np.full((40, 40, 3), 220, np.float32)
+        hole = np.ones((40, 40), bool)
+        raw = page - 3
+        np.testing.assert_array_equal(worker._align_tone(page, hole, raw), raw)
+
     def test_workflow_passes_the_selected_device_and_keeps_unmasked_pixels(self):
         img = np.full((117, 123, 3), 90, np.uint8)
         mask = np.zeros((117, 123), np.uint8)

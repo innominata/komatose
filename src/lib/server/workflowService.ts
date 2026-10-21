@@ -316,6 +316,25 @@ function seriesTypeStyle(seriesId: string, lineType: string): TextStyle {
   });
 }
 
+/**
+ * A region's saved style re-based on a new type: fields still matching the old type's
+ * series default follow the new type, and fields someone changed are kept.
+ */
+export function restyleForType(
+  seriesId: string,
+  style: Partial<TextStyle> | undefined,
+  fromType: string,
+  toType: string,
+) {
+  if (!style) return undefined;
+  const previous = seriesTypeStyle(seriesId, fromType);
+  const next: Partial<TextStyle> = { ...seriesTypeStyle(seriesId, toType) };
+  for (const key of STYLE_KEYS)
+    if (style[key] !== undefined && style[key] !== previous[key])
+      (next as Record<string, unknown>)[key] = style[key];
+  return pickStyle(next);
+}
+
 function styleIsOwned(style: Partial<TextStyle> | undefined) {
   return !!style && STYLE_KEYS.every((key) => style[key] !== undefined);
 }

@@ -28,9 +28,8 @@ export {
 } from "../textTransform";
 import {
   MAX_SKEW,
-  inverseLayerMatrix,
+  inverseTextMatrix,
   applyMatrixAbout,
-  rowShearSvg,
   textTransformSvg,
 } from "../textTransform";
 
@@ -340,6 +339,8 @@ export function layoutKey(
       width: page.width,
       height: page.height,
       outlineFormat: 3,
+      // Layouts skewed before horizontal skew stopped affecting the fit are stale.
+      ...(s.skewX ? { skewFormat: "layer" } : {}),
     }),
   );
 }
@@ -393,12 +394,11 @@ export async function fitText(
     (Math.min(...poly.map((p) => p.x)) + Math.max(...poly.map((p) => p.x))) / 2;
   const cy =
     (Math.min(...poly.map((p) => p.y)) + Math.max(...poly.map((p) => p.y))) / 2;
-  // Wrap in un-rotated, un-skewed text space; the SVG re-applies the layer transform about the same centre.
-  // Horizontal skew shears each line about its own middle, so it only widens lines.
-  const inverse = inverseLayerMatrix(style);
-  const shear = Math.abs(Math.tan(((style.skewX ?? 0) * Math.PI) / 180));
-  const glyphHeight = (size: number) =>
-    ((font.ascent - font.descent) / font.unitsPerEm) * size * px;
+  // Wrap in un-rotated text space; the SVG re-applies the whole-layer transform about the same
+  // centre, exactly as the PSD text layer's matrix does. Like a Photoshop paragraph, lines are
+  // laid out before horizontal skew, so skew slants their common centre line with the glyphs
+  // and never changes breaks or positions.
+  const inverse = inverseTextMatrix({ ...style, skewX: 0 });
   const centre = { x: cx, y: cy };
   poly = poly.map((p) => applyMatrixAbout(inverse, p, centre));
   const minY = Math.min(...poly.map((p) => p.y)),
@@ -417,8 +417,7 @@ export async function fitText(
     return (
       (unitWidths.get(text)! * size * px) / font.unitsPerEm +
       (style.emphasis === "italic" ? size * px * 0.22 : 0) +
-      (style.emphasis === "bold" ? size * px * 0.04 : 0) +
-      shear * glyphHeight(size)
+      (style.emphasis === "bold" ? size * px * 0.04 : 0)
     );
   };
   const minHeight =
@@ -565,13 +564,9 @@ export async function fitText(
   const warped = !!(box && hasTextWarp(style));
   const italic = style.emphasis === "italic";
   const paths: string[] = [];
-  const rowMiddle = ((font.ascent + font.descent) / 2) * scale;
-  const overhang = (shear * glyphHeight(chosen)) / 2;
   for (const row of rows) {
     const run = font.layout(row.text);
-    const middle = row.baseline - rowMiddle;
-    paths.push(`<g data-row-y="${middle}" transform="${rowShearSvg(style.skewX ?? 0, middle)}">`);
-    let x = row.x + overhang;
+    let x = row.x;
     for (let i = 0; i < run.glyphs.length; i++) {
       const p = run.positions[i];
       const originX = x + p.xOffset * scale;
@@ -595,7 +590,6 @@ export async function fitText(
       }
       x += p.xAdvance * scale;
     }
-    paths.push("</g>");
   }
   const bold = style.emphasis === "bold" ? chosen * px * 0.035 : 0;
   const glyphs = paths.join("");

@@ -1736,24 +1736,32 @@ test("runs of spaces survive fitting but not wrapped line breaks", async () => {
   assert.deepEqual(layout.rows.map((row) => row.text), ["Hi   there", "  Bye"]);
 });
 
-test("horizontal skew keeps each line centred and leading spaces nudge a line", async () => {
+test("horizontal skew slants the centre line like a Photoshop paragraph and leading spaces nudge a line", async () => {
   const img = (await listImages("e"))[0];
   const line = { ...(await listLines("e"))[0], body: "WIDE LINE\nHI", x: 0.1, y: 0.1, w: 0.8, h: 0.5 };
   const inkCentres = async (style: Partial<typeof DEFAULT_STYLE>, body = line.body) => {
     const layout = await fitText({ ...line, body }, {}, img, { ...DEFAULT_STYLE, fontId: ttf.font.id, size: 24, outlineWidth: 0, ...style }, 72);
     const { data, info } = await sharp(Buffer.from(layout.svg)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    return layout.rows.map((row) => {
+    return Object.assign(layout.rows.map((row) => {
       const top = Math.max(0, Math.floor(row.baseline - 24)), bottom = Math.min(info.height, Math.ceil(row.baseline + 4));
       let min = Infinity, max = -Infinity;
       for (let y = top; y < bottom; y++)
         for (let x = 0; x < info.width; x++)
           if (data[(y * info.width + x) * 4 + 3] > 128) { min = Math.min(min, x); max = Math.max(max, x); }
       return (min + max) / 2;
-    });
+    }), { rows: layout.rows });
   };
   const plain = await inkCentres({});
   const skewed = await inkCentres({ skewX: 30 });
-  for (const [i, centre] of skewed.entries()) assert.ok(Math.abs(centre - plain[i]) < 2, `row ${i}: ${centre} vs ${plain[i]}`);
+  // Skew never changes the fit; each line's centre moves with the shear about the region centre,
+  // so a short line stays centred over a long one along the slant.
+  assert.deepEqual(skewed.rows, plain.rows);
+  const cy = (line.y + line.h / 2) * img.height, t = Math.tan(Math.PI / 6);
+  for (const [i, centre] of skewed.entries()) {
+    const capMiddle = plain.rows[i].baseline - 0.36 * 24;
+    const expected = plain[i] + t * (capMiddle - cy);
+    assert.ok(Math.abs(centre - expected) < 2, `row ${i}: ${centre} vs ${expected}`);
+  }
   const [, nudged] = await inkCentres({}, "WIDE LINE\n    HI");
   assert.ok(nudged > plain[1] + 4, `leading spaces should push the line right: ${nudged} vs ${plain[1]}`);
 });
@@ -2150,15 +2158,10 @@ test("outlined and rotated shaped preview agrees with cropped export pixels", as
     };
     const layout = await fitText(line, region, img, region.style, 72);
     assert.equal(layout.overflow, false, label);
-    if (skewY)
-      assert.match(layout.svg, new RegExp(`rotate\\(${rotation} [^)]+\\) translate\\([^)]+\\) skewY\\(${skewY}\\)`), label);
-    else assert.doesNotMatch(layout.svg, /skew/, label);
-    // Horizontal skew shears each line about its own middle, never the whole block.
-    const shear = Math.tan((skewX * Math.PI) / 180);
-    for (const [, y, t] of layout.svg.matchAll(/<g data-row-y="([^"]+)" transform="matrix\(1 0 ([^ ]+) 1/g)) {
-      assert.ok(Number.isFinite(Number(y)), label);
-      assert.ok(Math.abs(Number(t) - shear) < 1e-9, label);
-    }
+    // The render shears the whole layer, the same single matrix the PSD text layer carries.
+    if (skewX || skewY)
+      assert.match(layout.svg, new RegExp(`rotate\\(${rotation} [^)]+\\) translate\\([^)]+\\) skewX\\(${skewX}\\) skewY\\(${skewY}\\)`), label);
+    else assert.doesNotMatch(layout.svg, /skewX|skewY/, label);
     const page = {
       image: img,
       source: sourceDoc.data,
@@ -3332,8 +3335,7 @@ test("polygon edge handles and skew dragging match Photoshop side-handle convent
   assert.equal(clampSkew(90), 75);
   assert.equal(clampSkew(-90), -75);
   const from = { ...DEFAULT_STYLE, rotation: 30 };
-  // Horizontal skew is per line, so it leaves the layer transform alone; vertical skew does not.
-  assert.equal(deltaTextTransform(from, { ...from, skewX: 20 }, 120, 80), "");
+  assert.match(deltaTextTransform(from, { ...from, skewX: 20 }, 120, 80), /matrix\(/);
   assert.match(deltaTextTransform(from, { ...from, skewY: 20 }, 120, 80), /matrix\(/);
   assert.equal(deltaTextTransform(from, { ...from, rotation: 10 }, 120, 80), "rotate(-20 120 80)");
 });
@@ -3346,7 +3348,7 @@ test("moving and resetting placed text preserves glyph layout without refitting"
   const region: any = { style, polygon: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.2 }, { x: 0.3, y: 0.4 }],
     layout: { rows: [{ text: "Keep these words", x: 70, baseline: 100, width: 90 }],
       size: 14, dpi: 96, width: 600, height: 400, style,
-      svg: '<svg xmlns="http://www.w3.org/2000/svg"><g transform="rotate(30 120 120)"><g data-row-y="95" transform="matrix(1 0 0 1 0 0)"><path d="M0 0L1 1"/></g></g></svg>' } };
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"><g transform="rotate(30 120 120)"><path d="M0 0L1 1"/></g></svg>' } };
   region.layout.key = layoutKey(line, region, page, style, 96);
   const moved = transformPlacedText(line, region, page, 0.2, 0.3);
   const dx = 0.2 - line.x!, dy = 0.3 - line.y!;
@@ -3371,8 +3373,8 @@ test("moving and resetting placed text preserves glyph layout without refitting"
   assert.equal(skewed.layout!.style.skewX, 25);
   assert.equal(skewed.layout!.style.rotation, 0);
   assert.deepEqual(skewed.layout!.rows, reset.layout!.rows);
-  const t = Math.tan((25 * Math.PI) / 180);
-  assert.ok(skewed.layout!.svg.includes(`<g data-row-y="95" transform="matrix(1 0 ${t} 1 ${-t * 95} 0)"`));
+  // Skew shears the placed glyphs as one layer, as Photoshop does.
+  assert.match(skewed.layout!.svg, /matrix\(/);
 });
 
 test("crop and negative nudge move hitboxes, bubble geometry and placed glyphs, and undo restores them", async () => {
