@@ -17,7 +17,8 @@ import {
 import { now } from "$lib/server/ids";
 import { toLine } from "$lib/server/queries";
 import { broadcast } from "$lib/server/realtime";
-import { getDoc, rejectPendingSuggestions } from "$lib/server/workflowStore";
+import { getDoc, putDoc, rejectPendingSuggestions } from "$lib/server/workflowStore";
+import { copiesBox } from "$lib/maskRegions";
 import { fitRegion } from "$lib/server/workflowService";
 import type { RegionData } from "$lib/workflow";
 import type { RequestHandler } from "./$types";
@@ -160,6 +161,22 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
       .where(eq(lines.id, existing.id))
       .get();
     const line = toLine(updated!);
+    // The geometry polygon is the typesetting shape; one that only copied the old box
+    // follows the resized box, while a fitted or traced shape is kept.
+    if (["x", "y", "w", "h"].some((key) => key in body && body[key] !== (existing as any)[key])) {
+      const region = getDoc<RegionData>(`region:${line.id}`, {});
+      if (!region.data.locked && copiesBox(region.data.polygon, existing) &&
+          line.x != null && line.y != null && line.w != null && line.h != null)
+        putDoc(episode.id, region.id, {
+          ...region.data,
+          polygon: [
+            { x: line.x, y: line.y },
+            { x: line.x + line.w, y: line.y },
+            { x: line.x + line.w, y: line.y + line.h },
+            { x: line.x, y: line.y + line.h },
+          ],
+        }, region.revision);
+    }
     if (patch.status === "approved")
       rejectPendingSuggestions(episode.id, line.id);
     broadcast(episode.id, { type: "line:upsert", line });

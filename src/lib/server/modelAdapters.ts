@@ -87,7 +87,7 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
           { role: 'user', content: [{ type: 'text', text: input.prompt || 'Locate text in this image.' },
             ...images.map(bytes => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${bytes.toString('base64')}` } }))] },
         ];
-        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: 6000, thinking: input.thinking,
+        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: input.maxTokens ?? 6000, thinking: input.thinking,
           schema: input.schema ? { type: 'json_schema', json_schema: { name: task, strict: true, schema: input.schema } } : undefined });
         return llm.extractJsonObject(output);
       }

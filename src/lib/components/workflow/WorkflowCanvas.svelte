@@ -82,6 +82,7 @@
     regionLayout,
     regionTextMask,
     overlayStyle,
+    overlaySvg,
     adjustedBounds,
     rotationCenter,
     rotationAngle,
@@ -167,6 +168,7 @@
     regionLayout: (id: string) => FittedLayout | undefined;
     regionTextMask: (id: string) => string | undefined;
     overlayStyle: (line: LineRow, layout: { style: TextStyle }) => string | undefined;
+    overlaySvg: (line: LineRow, layout: { style: TextStyle; svg: string }) => string;
     adjustedBounds: (d: StudioDrawing) => { x: number; y: number; w: number; h: number };
     rotationCenter: (line: LineRow) => Point;
     rotationAngle: (d: StudioDrawing) => number;
@@ -707,7 +709,7 @@
             regionLayout(l.id)}{#if layout}<div class="text-clip"><img
               class="text-overlay"
               style={[overlayStyle(l, layout), textMaskCss(regionTextMask(l.id))].filter(Boolean).join(";")}
-              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(layout.svg)}`}
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(overlaySvg(l, layout))}`}
               alt=""
             /></div>{/if}{/each}{/if}
       <svg
@@ -1161,7 +1163,7 @@
             fill="#62e5ce" text-anchor="middle" pointer-events="none">{skewing.skew!.axis === "x" ? "H" : "V"} {skewAngle(skewing)}°</text>{/if}
         {/if}
         </g>
-        {#if drawing && ["region", "read-area", "place-line", "rectangle"].includes(tool)}<rect
+        {#if drawing && ["region", "read-area", "detect-area", "place-line", "rectangle"].includes(tool)}<rect
             x={Math.min(drawing.start.x, drawing.end.x) *
               page.width}
             y={Math.min(drawing.start.y, drawing.end.y) *

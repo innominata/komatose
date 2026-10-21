@@ -674,9 +674,10 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         return putDoc(episode.id, region.id, data, region.revision);
       })();
       let fitted = doc;
-      if (b.rotation !== undefined && line.body?.trim()) {
+      // Horizontal skew widens each line, and layouts from before per-line skew need re-rendering.
+      if ((b.rotation !== undefined || b.skewX !== undefined) && line.body?.trim()) {
         try { fitted = await fitRegion(series, episode, line.id, doc.revision); }
-        catch { /* Keep the saved text angle when the region cannot be fitted yet. */ }
+        catch { /* Keep the saved text angle or skew when the region cannot be fitted yet. */ }
       }
       const updated = (await listLines(episode.id)).find(l => l.id === line.id)!;
       broadcast(episode.id, { type: "line:upsert", line: updated });
@@ -1335,6 +1336,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     const maskRegions = maskInput?.map(row => row.polygon);
     if (detectingMask && !maskRegions?.length)
       throw new WorkflowError("Define a region before detecting a removal mask");
+    // Detect one region again in a window read at the page's own resolution.
+    const focus = detectingMask && b.focusLineId != null
+      ? maskInput!.findIndex(row => row.id === String(b.focusLineId))
+      : undefined;
+    if (focus === -1) throw new WorkflowError("Select a region on this page");
     let region = null;
     let line = null;
     let neighbors: number[][] = [];
@@ -1428,6 +1434,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
                 ? String(b.maskEngine || "auto")
                 : undefined,
             regions: maskRegions,
+            regionPlacements: maskInput?.map(row => row.placement),
+            focus,
             method,
             points: action === "geometry" && method === "sam"
               ? points(Array.isArray(b.points) && b.points.length ? b.points : bubbleFitPoints(line!))
@@ -1485,9 +1493,13 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
                     version: String(result.maskVersion || "unknown"),
                     engine: String(result.maskEngine || "unknown"),
                     backend: String(result.backend || "unknown"),
-                    entries: (result.maskDiagnostics || []).map((entry: { region: number; pixels: number; reasons: string[] }) => ({
-                      ...entry, lineId: maskInput?.[entry.region]?.id, regionNumber: maskInput?.[entry.region]?.number,
-                    })),
+                    entries: [
+                      // A focused run reports its one region; the others keep their earlier entries.
+                      ...(focus != null ? (doc.data.maskDiagnostics?.entries ?? []).filter(entry => entry.lineId !== maskInput![focus].id) : []),
+                      ...(result.maskDiagnostics || []).map((entry: { region: number; pixels: number; reasons: string[] }) => ({
+                        ...entry, lineId: maskInput?.[entry.region]?.id, regionNumber: maskInput?.[entry.region]?.number,
+                      })),
+                    ],
                   } : undefined,
                   // Committing manual edits is the user's approval of this mask.
                   // Automatic detection still produces a proposal to inspect.

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   dropRedundantTranscriptions,
   isAlreadyEnglish,
+  readsAsLettering,
   type TranscriptRegion,
 } from "../src/lib/transcribeRegions";
 
@@ -110,4 +111,19 @@ test("English regions are kept only when the chapter asks for them", () => {
   assert.equal(on.has("logo"), false);
   assert.equal(on.has("word"), true);
   assert.equal(on.has("title"), false);
+});
+
+test("mask-only lettering is kept only when it reads in the page's own script", () => {
+  // What recognisers invented from artwork on the gold pages.
+  assert.equal(readsAsLettering(["", "小", "7"], "japanese"), false);
+  assert.equal(readsAsLettering(["公司", "公司", ""], "japanese"), false);
+  assert.equal(readsAsLettering(["", "は", "い"], "korean"), false);
+  // Real lettering the recognisers read.
+  assert.equal(readsAsLettering(["", "ゴシ", "ゴミ"], "japanese"), true);
+  assert.equal(readsAsLettering(["", "헉!", "헛!"], "korean"), true);
+  // Latin counts only while English is being transcribed.
+  assert.equal(readsAsLettering(["BANG"], "japanese"), false);
+  assert.equal(readsAsLettering(["BANG"], "japanese", true), true);
+  // Without a language, any source script will do.
+  assert.equal(readsAsLettering(["小"]), true);
 });

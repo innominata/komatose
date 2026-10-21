@@ -32,6 +32,30 @@ export const FUSION = {
   voteRatio: 0.15,
   /** A block that swallows this many other regions is a line-grouping artefact. */
   containerHolds: 2,
+  /** Bubble boxes at least this sure are walls: lettering in two balloons never merges. */
+  wallScore: 0.5,
+  /**
+   * Lettering pixels no box claimed become their own region. Inside a balloon the
+   * box detectors are near complete; outside they silently miss captions, titles
+   * and stylised effects that the pixel mask still marks.
+   */
+  adoptLettering: true,
+  /** An unclaimed block overlapping a region less than this is not that region's text. */
+  claimedInside: 0.3,
+  /** A box that covers at least this much of a block, but not all of it, has clipped it and grows. */
+  clipInside: 0.5,
+  /** A clipped box grows at most to this multiple of its own area. */
+  clipGrowth: 2,
+  /** Adopted blocks this close, as a share of the larger block's short side, are one piece of lettering. */
+  reachShare: 0.5,
+  /** And never further apart than this, in page pixels. */
+  reachMax: 96,
+  /** Score of a region only the lettering mask found. */
+  adoptedScore: 0.5,
+  /** A block the mask fills more than this is a shape, not lettering (lettering stays under a third). */
+  solidFill: 0.6,
+  /** Nor is one whose strokes are this share of its short side. */
+  solidStroke: 0.4,
 };
 
 const TEXT = new Set(["text", "text_bubble", "text_free"]);
@@ -79,8 +103,39 @@ function classesCompatible(a: string, b: string) {
   return a === b || a === "text" || b === "text";
 }
 
+type Balloon = { box: Box; score: number };
+
+function centre(b: Box): [number, number] {
+  return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+}
+
+/** The smallest sure balloon holding the box's centre, if any. */
+function balloonOf(b: Box, balloons: Balloon[]): Balloon | undefined {
+  const [x, y] = centre(b);
+  return balloons
+    .filter((w) => x >= w.box[0] && x <= w.box[2] && y >= w.box[1] && y <= w.box[3])
+    .sort((a, c) => area(a.box) - area(c.box))[0];
+}
+
+/** Two boxes in different balloons are different lettering, however much they overlap. */
+function walled(a: Box, b: Box, balloons: Balloon[]) {
+  const wa = balloonOf(a, balloons), wb = balloonOf(b, balloons);
+  return !!wa && !!wb && wa !== wb;
+}
+
+function gap(a: Box, b: Box) {
+  const dx = Math.max(0, Math.max(a[0], b[0]) - Math.min(a[2], b[2]));
+  const dy = Math.max(0, Math.max(a[1], b[1]) - Math.min(a[3], b[3]));
+  return Math.hypot(dx, dy);
+}
+
+function union(a: Box, b: Box): Box {
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
 /** `c` repeats the lettering `seed` already describes. */
-function repeats(c: Candidate, seed: Candidate) {
+function repeats(c: Candidate, seed: Candidate, balloons: Balloon[] = []) {
+  if (walled(c.box, seed.box, balloons)) return false;
   if (iou(c.box, seed.box) >= FUSION.sameAnyClassIou) return true;
   if (!classesCompatible(c.cls, seed.cls)) return false;
   if (iou(c.box, seed.box) >= FUSION.sameIou) return true;
@@ -134,6 +189,8 @@ export function fuseDetections(
   opts: {
     /** Detectors that ran, even if they found nothing. Fewer than two text detectors means no cross-check. */
     ran?: DetectorSource[];
+    /** Smallest side, in page pixels, of a region only the lettering mask found. */
+    minAdoptPx?: number;
   } = {},
 ): FusedRegion[] {
   const passthrough: FusedRegion[] = [];
@@ -145,6 +202,9 @@ export function fuseDetections(
   }
 
   const rank = (source: DetectorSource) => PRIORITY.indexOf(source);
+  const balloons: Balloon[] = passthrough
+    .filter((r) => r.cls === "bubble" && r.score >= FUSION.wallScore)
+    .map((r) => ({ box: r.box as Box, score: r.score }));
   // A lone text detector has nobody to check it, so its own threshold stands.
   const detectors = new Set<DetectorSource>(
     [...(opts.ran ?? text.map((c) => c.source))].filter((s) => s === "rtdetr" || s === "ctd" || s === "paddle"),
@@ -173,7 +233,7 @@ export function fuseDetections(
         area(s.lead.box) < area(c.box) * 0.7);
       if (held.length >= FUSION.containerHolds) continue;
     }
-    const homes = seeds.filter((s) => repeats(c, s.lead));
+    const homes = seeds.filter((s) => repeats(c, s.lead, balloons));
     if (homes.length) {
       const best = homes.sort((a, b) => iou(c.box, b.lead.box) - iou(c.box, a.lead.box) || area(a.lead.box) - area(b.lead.box))[0];
       best.members.push(c);
@@ -190,6 +250,8 @@ export function fuseDetections(
     seeds.push({ lead: c, members: [c] });
   }
 
+  if (FUSION.adoptLettering && !koharuOnly) adoptLettering(seeds, text, balloons, opts.minAdoptPx ?? 0);
+
   const fused: FusedRegion[] = seeds.map(({ lead, members }) => {
     // Only RT-DETR and COO say whether lettering sits in a bubble.
     const classed = members.find((m) => m.source === "rtdetr" || m.source === "coo");
@@ -199,9 +261,77 @@ export function fuseDetections(
     return {
       ...rest,
       cls: classed && classed.cls !== "text" ? classed.cls : lead.cls,
-      score: Math.max(...members.map((m) => m.score)),
+      // The mask's blocks carry a fixed score; lettering only it found ranks below a confident box.
+      score: members.every((m) => m.source === "koharu")
+        ? FUSION.adoptedScore
+        : Math.max(...members.filter((m) => m.source !== "koharu").map((m) => m.score)),
       sources: [...sources].sort((a, b) => PRIORITY.indexOf(a) - PRIORITY.indexOf(b)),
     };
   });
   return [...passthrough, ...fused];
+}
+
+/**
+ * Pixel-first pass over the lettering mask's blocks, after the box detectors
+ * have been merged. A block a box cut short grows that box. A block no box
+ * claimed is still lettering: it becomes a region of its own, labelled inside
+ * or outside a balloon by the bubble boxes, and blocks within one glyph of
+ * each other in the same place are joined so a sound effect the boxes cut in
+ * pieces is one region. Recognition later drops any that hold no text.
+ *
+ * Adapted from Manga Cleaner's text groups (github.com/k-omiq/Bear), with the
+ * author's permission.
+ */
+function adoptLettering(seeds: { lead: Candidate; members: Candidate[] }[], text: Candidate[], balloons: Balloon[], minPx: number) {
+  const blocks = text.filter((c) => c.source === "koharu");
+  const boxed = seeds.filter((s) => s.lead.source !== "koharu");
+  const loose: Candidate[] = [];
+  // A box holding most of a block, but not all, cut the lettering short.
+  const clipped = (s: { lead: Candidate }, block: Candidate) =>
+    inside(block.box, s.lead.box) >= FUSION.clipInside && inside(block.box, s.lead.box) < 1 &&
+    area(union(s.lead.box, block.box)) <= area(s.lead.box) * FUSION.clipGrowth;
+  for (const block of blocks) {
+    const home = boxed.find((s) => s.members.includes(block));
+    if (home) {
+      if (clipped(home, block)) home.lead = { ...home.lead, box: union(home.lead.box, block.box) };
+      continue;
+    }
+    if (seeds.some((s) => s.members.includes(block))) continue;
+    const near = boxed.filter((s) => !walled(block.box, s.lead.box, balloons));
+    const claimed = near.filter((s) => inside(block.box, s.lead.box) >= FUSION.claimedInside);
+    if (claimed.length) {
+      const clip = claimed.find((s) => clipped(s, block));
+      if (clip) {
+        clip.lead = { ...clip.lead, box: union(clip.lead.box, block.box) };
+        clip.members.push(block);
+      }
+      continue;
+    }
+    // A solid shape (a white bar, a highlight) fills its box with strokes as thick as the box.
+    const side = Math.min(block.box[2] - block.box[0], block.box[3] - block.box[1]);
+    if ((block.fill ?? 0) > FUSION.solidFill || (block.stroke ?? 0) > side * FUSION.solidStroke) continue;
+    // A block spanning several regions is a line-grouping artefact.
+    if (boxed.filter((s) => inside(s.lead.box, block.box) >= FUSION.fragmentInside).length >= FUSION.containerHolds) continue;
+    loose.push(block);
+  }
+  // Join loose blocks within reach of each other in the same place.
+  const parent = loose.map((_, i) => i);
+  const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+  for (let i = 0; i < loose.length; i++)
+    for (let j = i + 1; j < loose.length; j++) {
+      const a = loose[i].box, b = loose[j].box;
+      if (balloonOf(a, balloons) !== balloonOf(b, balloons)) continue;
+      const glyph = Math.max(Math.min(a[2] - a[0], a[3] - a[1]), Math.min(b[2] - b[0], b[3] - b[1]));
+      if (gap(a, b) <= Math.min(FUSION.reachMax, glyph * FUSION.reachShare)) parent[root(j)] = root(i);
+    }
+  const groups = new Map<number, Candidate[]>();
+  loose.forEach((block, i) => groups.set(root(i), [...(groups.get(root(i)) ?? []), block]));
+  for (const members of groups.values()) {
+    const box = members.map((m) => m.box).reduce(union);
+    if (Math.min(box[2] - box[0], box[3] - box[1]) < minPx) continue;
+    seeds.push({
+      lead: { ...members[0], box, cls: balloonOf(box, balloons) ? "text_bubble" : "text_free" },
+      members,
+    });
+  }
 }

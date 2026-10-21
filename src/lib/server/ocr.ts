@@ -331,6 +331,10 @@ export type WorkerRegion = {
 	cls: string;
 	score: number;
 	box: [number, number, number, number];
+	/** Lettering-mask blocks: share of the box the mask covers. */
+	fill?: number;
+	/** Lettering-mask blocks: median stroke width in pixels. */
+	stroke?: number;
 };
 
 /** Run a Python-side detector over a whole page. Paths avoid base64-ing a

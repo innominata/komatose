@@ -60,6 +60,7 @@
   import {
     clampSkew,
     cssDeltaTransform,
+    setRowShear,
     draggedSkew,
     polygonEdgeHandle,
     rotateNormalizedPoints,
@@ -1926,6 +1927,7 @@
       ![
         "region",
         "read-area",
+        "detect-area",
         "place-line",
         "brush",
         "erase",
@@ -1993,7 +1995,7 @@
       notify("Select a region to mask its text.");
       return;
     }
-    if (["region", "read-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) regionVisibility = "shown";
+    if (["region", "read-area", "detect-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) regionVisibility = "shown";
     if ((tool === "rectangle" || tool === "oval") && (!selected || regionDoc?.data.locked)) {
       notify(regionDoc?.data.locked
         ? "Unlock this layout before changing its shape."
@@ -2076,8 +2078,9 @@
   function overlayStyle(l: LineRow, layout: { style: TextStyle }) {
     if (drawing?.regionId !== l.id) return undefined;
     if (drawing.skew) {
+      // Start from the rendered layout's style so its effective rotation (including geometry) stays put.
       const next = {
-        ...drawing.skew.style,
+        ...layout.style,
         [drawing.skew.axis === "x" ? "skewX" : "skewY"]: skewAngle(drawing),
       };
       return `transform:${cssDeltaTransform(layout.style, next)};transform-origin:${drawing.skew.center.x * 100}% ${drawing.skew.center.y * 100}%`;
@@ -2085,6 +2088,10 @@
     if (drawing.bounds && drawing.corner == null)
       return `transform:translate(${(adjustedBounds(drawing).x - drawing.bounds.x) * 100}%, ${(adjustedBounds(drawing).y - drawing.bounds.y) * 100}%)`;
     return undefined;
+  }
+  function overlaySvg(l: LineRow, layout: { style: TextStyle; svg: string }) {
+    if (drawing?.regionId !== l.id || drawing.skew?.axis !== "x") return layout.svg;
+    return setRowShear(layout.svg, skewAngle(drawing));
   }
   function startPolygonDrag(e: PointerEvent) {
     e.stopPropagation();
@@ -2367,7 +2374,7 @@
       await saveDrawnShape(tool, d.start, d.end);
       return;
     }
-    if (["region", "read-area", "place-line"].includes(tool)) {
+    if (["region", "read-area", "detect-area", "place-line"].includes(tool)) {
       const x = Math.min(d.start.x, d.end.x),
         y = Math.min(d.start.y, d.end.y),
         w = Math.abs(d.start.x - d.end.x),
@@ -2409,12 +2416,16 @@
           w,
           h,
           placed: true,
-          lineType: '""',
+          // An area drawn for detection may be signage or a sound effect, so its mask is not balloon-fitted.
+          lineType: tool === "detect-area" ? "plain" : '""',
         });
         await refresh();
         inspectorOpen = true;
         selectLine(data.line.id, "page");
-        tool = "select";
+        if (tool === "detect-area") {
+          // Stay in the tool so several areas can be drawn; each is read at full resolution.
+          await applyMask(true, data.line.id);
+        } else tool = "select";
         try {
           beginJobFeedback("region-ocr");
           await request(`${apiBase}/ai-transcribe`, {
@@ -2494,7 +2505,7 @@
       notify(`Grew that mask region by ${growPx}px.`);
     }
   }
-  async function applyMask(detect = false) {
+  async function applyMask(detect = false, focusLineId?: string) {
     if (!page || !pageDoc) return;
     if (detect && !hasMaskRegions) {
       notify("Define a region before detecting a removal mask.");
@@ -2509,11 +2520,14 @@
       strokes,
       expansion,
       maskEngine: detect ? maskEngine : undefined,
+      focusLineId,
     });
     if (!result) endJobIntent();
     if (result) {
       maskJobId = result.jobId;
-      notify(detect
+      notify(focusLineId
+        ? "Detecting lettering in this region. Only its part of the mask will change."
+        : detect
         ? "Mask detection started. Inspect the result, then approve it."
         : "Saving mask edits. The saved mask will be ready for cleaning automatically.");
     }
@@ -3916,6 +3930,8 @@
       choosePalette("raw");
     if ((e.key === "g" || e.key === "G") && step === "Clean" && canClean)
       choosePalette("mask-grow");
+    if ((e.key === "d" || e.key === "D") && !e.ctrlKey && !e.metaKey && step === "Clean" && canClean && canEdit)
+      choosePalette("detect-area");
     if ((e.key === "r" || e.key === "R") && canEdit && ["Translate", "Review"].includes(step))
       tool = "region";
     if ((e.key === "o" || e.key === "O") && canEdit && ["Translate", "Review"].includes(step))
@@ -4418,6 +4434,7 @@
               regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:studioState?.regions[id]?.data.layout}
               regionTextMask={(id: string) => studioState?.regions[id]?.data.textMask}
               {overlayStyle}
+              {overlaySvg}
               {adjustedBounds}
               {rotationCenter}
               {rotationAngle}

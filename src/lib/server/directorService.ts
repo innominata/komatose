@@ -221,8 +221,11 @@ export async function startDirector(opts: {series:Series;episode:Episode;user:Pu
   // Missing proofreader setup is reported in preflight and blocks final checking only.
   const status = new Map((await directorOverviewAsync(opts.episode.id)).pages.map(page => [page.id,page.state]));
   // A partial task selection is a targeted rerun, so it includes pages that already passed.
+  // A passed page that later went stale (edits, settings or a Director update) is still
+  // passed for a chapter run: only Recheck all or resetting the page reruns it.
+  const done = (id:string) => status.get(id)==='passed' || status.get(id)==='stale';
   const ids = opts.scope==='page' ? [opts.imageId!] : story.map(image => image.id as string)
-    .filter(id => opts.retryBlocked ? status.get(id)==='unresolved' : opts.recheckAll || !fullDirectorTasks(policy.tasks) || status.get(id)!=='passed');
+    .filter(id => opts.retryBlocked ? status.get(id)==='unresolved' : opts.recheckAll || !fullDirectorTasks(policy.tasks) || !done(id));
   if (!ids.length) throw new WorkflowError('All chapter pages already passed Director. Use Recheck all to rerun them.',400);
   if(directorLocked(opts.episode.id)) throw new WorkflowError('Director is already running on this chapter',409);
   const id = createJob(opts.episode.id,'director',{scope:opts.scope,imageIds:ids,engine:opts.model.engine,model:opts.model.model});
@@ -358,7 +361,12 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       directorAsset(run.id,raw);
       directorEvent(run.id,episode.id,imageId,'critique:reused',
         {mode:'raw',jobId:saved.id,raw,critique,purpose:'authoritative-source-and-translation'});
-      return critique;
+      // Region follow-up answers belong to the same reading: include them so their
+      // quotes count as proofreader evidence.
+      const followUps=listJobs(episode.id).filter(job=>job.kind==='page-proofread'&&job.state==='completed'&&
+        job.payload.followUpOf===saved.id&&typeof job.progress.critique==='string'&&job.progress.critique.trim())
+        .map(job=>String(job.progress.critique));
+      return followUps.length?`${critique}\n\nFollow-up answers:\n${followUps.join('\n\n')}`:critique;
     },
     askProofreader:async(line)=>{
       const before=pageFingerprint(episode.id,imageId);

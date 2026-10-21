@@ -274,7 +274,8 @@ export async function finishedPsd(
     const top = rows[0].baseline - (layout.size * page.dpi) / 72;
     const bottom =
       rows.at(-1)!.baseline + ((layout.size * page.dpi) / 72) * 0.3;
-    // Same whole-layer map as the SVG preview: rotation · skewX · skewY, in matrix(a b c d) order.
+    // Photoshop text layers can only take one whole-layer matrix, so per-line horizontal skew is
+    // approximated here as a layer shear; the flattened artwork keeps the exact per-line render.
     const [a, b, c, d] = textMatrix(s);
     const region = page.regions.find(
       (region) => region.data.layout === layout,

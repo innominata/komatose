@@ -4,6 +4,8 @@ import { episodes, images, series } from '$lib/server/db/schema';
 import { renderGuestPage } from '$lib/server/finishedExport';
 import { fail, messageOf, statusOf } from '$lib/server/http';
 import { toEpisode, toImage, toSeries } from '$lib/server/queries';
+import { parseSeriesCreditImageId } from '$lib/credits';
+import { readAsset } from '$lib/server/workflowStore';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
@@ -12,6 +14,15 @@ export const GET: RequestHandler = async ({ params }) => {
 		if (!token || token.length < 20) return fail(404, 'Not found');
 		const ep = await db.select().from(episodes).where(eq(episodes.previewToken, token)).get();
 		if (!ep) return fail(404, 'Not found');
+		const credit = parseSeriesCreditImageId(params.id);
+		if (credit) {
+			// Series default credits shown in place of credits pages the chapter has not added.
+			if (credit.episodeId !== ep.id) return fail(404, 'Not found');
+			const s = await db.select().from(series).where(eq(series.id, ep.seriesId)).get();
+			const page = s && toSeries(s).credits[credit.kind];
+			if (!page) return fail(404, 'Not found');
+			return png(await readAsset(page.hash));
+		}
 		const img = await db
 			.select()
 			.from(images)
@@ -20,16 +31,19 @@ export const GET: RequestHandler = async ({ params }) => {
 		if (!img) return fail(404, 'Not found');
 		const s = await db.select().from(series).where(eq(series.id, ep.seriesId)).get();
 		if (!s) return fail(404, 'Not found');
-		const bytes = await renderGuestPage(toSeries(s), toEpisode(ep), toImage(img));
-		return new Response(new Uint8Array(bytes), {
-			headers: {
-				'content-type': 'image/png',
-				'content-length': String(bytes.length),
-				'cache-control': 'public, max-age=60',
-				'x-robots-tag': 'noindex'
-			}
-		});
+		return png(await renderGuestPage(toSeries(s), toEpisode(ep), toImage(img)));
 	} catch (e) {
 		return fail(statusOf(e), messageOf(e));
 	}
 };
+
+function png(bytes: Buffer | Uint8Array) {
+	return new Response(new Uint8Array(bytes), {
+		headers: {
+			'content-type': 'image/png',
+			'content-length': String(bytes.length),
+			'cache-control': 'public, max-age=60',
+			'x-robots-tag': 'noindex'
+		}
+	});
+}

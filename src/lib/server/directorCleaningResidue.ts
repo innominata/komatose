@@ -255,6 +255,102 @@ function flatBackground(
   return samples >= 100 && offColour <= Math.max(6, samples * 0.005);
 }
 
+/** White lettering outlines left behind after cleaning lettering drawn over artwork.
+ * A pixel counts when it was bright in RAW and is still bright, stands out from the
+ * background around the region, and had near-black lettering beside it in RAW that
+ * cleaning removed: the letter went, its outline stayed. White artwork keeps its own
+ * dark edges, so it is not counted. Light backgrounds are skipped. */
+export function outlineResidueInspector(rawBytes: Buffer, regions: CleaningRegion[]) {
+  const raw = decode(rawBytes);
+  return async (afterBytes: Buffer, ids: string[]) => {
+    const before = await raw;
+    const after = await decode(afterBytes);
+    const findings: { lineId: string; pixels: number }[] = [];
+    const min = (img: Pixels, i: number) => Math.min(img.data[i * 3], img.data[i * 3 + 1], img.data[i * 3 + 2]);
+    const max = (img: Pixels, i: number) => Math.max(img.data[i * 3], img.data[i * 3 + 1], img.data[i * 3 + 2]);
+    for (const region of regions.filter((r) => ids.includes(r.id))) {
+      const box = rect(region, before, 4), outer = rect(region, before, 14);
+      if (!box || !outer || after.width !== before.width || after.height !== before.height) continue;
+      // Background tone from the cleaned band around the region.
+      const band: number[] = [];
+      for (let y = outer.top; y < outer.bottom; y += 2)
+        for (let x = outer.left; x < outer.right; x += 2)
+          if (x < box.left || x >= box.right || y < box.top || y >= box.bottom) band.push(min(after, y * after.width + x));
+      if (band.length < 50) continue;
+      band.sort((m, n) => m - n);
+      const background = band[band.length >> 1];
+      if (background >= 190) continue;
+      const near = (img: Pixels, x: number, y: number, test: (i: number) => boolean) => {
+        for (let dy = -4; dy <= 4; dy++)
+          for (let dx = -4; dx <= 4; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && ny >= 0 && nx < img.width && ny < img.height && test(ny * img.width + nx)) return true;
+          }
+        return false;
+      };
+      // Bright pixels joined to bright paper at the edge of the search box are a
+      // page gutter or balloon the lettering crossed into, not an outline island.
+      const ow = outer.right - outer.left, oh = outer.bottom - outer.top;
+      const paper = new Uint8Array(ow * oh), queue: number[] = [];
+      const bright = (x: number, y: number) => min(after, y * after.width + x) >= 215;
+      for (let y = outer.top; y < outer.bottom; y++)
+        for (let x = outer.left; x < outer.right; x++)
+          if ((x === outer.left || y === outer.top || x === outer.right - 1 || y === outer.bottom - 1) && bright(x, y)) {
+            paper[(y - outer.top) * ow + x - outer.left] = 1; queue.push(x, y);
+          }
+      while (queue.length) {
+        const y = queue.pop()!, x = queue.pop()!;
+        for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+          if (nx < outer.left || ny < outer.top || nx >= outer.right || ny >= outer.bottom) continue;
+          const k = (ny - outer.top) * ow + nx - outer.left;
+          if (paper[k] || !bright(nx, ny)) continue;
+          paper[k] = 1; queue.push(nx, ny);
+        }
+      }
+      let pixels = 0;
+      for (let y = box.top; y < box.bottom; y++)
+        for (let x = box.left; x < box.right; x++) {
+          const i = y * before.width + x;
+          if (min(before, i) < 215 || min(after, i) < 215 || min(after, i) - background < 50) continue;
+          if (paper[(y - outer.top) * ow + x - outer.left]) continue;
+          if (!near(before, x, y, (j) => max(before, j) < 60)) continue;
+          if (near(after, x, y, (j) => max(after, j) < 60)) continue;
+          pixels++;
+        }
+      if (pixels >= 12) findings.push({ lineId: region.id, pixels });
+    }
+    return findings;
+  };
+}
+
+/** Whether each region's lettering sits on balloon paper in RAW: a closed flat
+ * interior, or (for borderless balloons on a white page) a flat, light band just
+ * outside the lettering box. Narration and SFX drawn over artwork fail both. */
+export function flatEnclosureInspector(rawBytes: Buffer) {
+  const raw = decode(rawBytes);
+  return async (region: CleaningRegion) => {
+    const image = await raw;
+    const interior = findInterior(image, region);
+    if (interior && flatBackground(image, interior, [region])) return true;
+    const outer = rect(region, image, 12), inner = rect(region, image, 2);
+    if (!outer || !inner) return false;
+    const band: number[] = [];
+    for (let y = outer.top; y < outer.bottom; y++)
+      for (let x = outer.left; x < outer.right; x++)
+        if (x < inner.left || x >= inner.right || y < inner.top || y >= inner.bottom)
+          band.push(y * image.width + x);
+    if (band.length < 100) return false;
+    const median = [0, 1, 2].map((c) => {
+      const values = band.map((p) => image.data[p * 3 + c]).sort((m, n) => m - n);
+      return values[values.length >> 1];
+    });
+    // Balloon paper is light; a dark or coloured scene behind narration is not.
+    if (Math.min(...median) < 200) return false;
+    const flat = band.filter((p) => difference(image.data, p, median) <= 24).length;
+    return flat >= band.length * 0.85;
+  };
+}
+
 /** Independent of OCR readability and the Director's "safe" verdict. A partial
  * character, curved stroke or dark smudge still fails a plain-bubble clean. */
 export function cleaningResidueInspector(

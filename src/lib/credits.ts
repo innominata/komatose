@@ -1,3 +1,5 @@
+import type { ImageRow, Series } from "./types";
+
 export const CREDIT_KINDS = ["pre", "post"] as const;
 export type CreditKind = (typeof CREDIT_KINDS)[number];
 
@@ -81,4 +83,51 @@ export function serializeSeriesCredits(credits: SeriesCredits): string {
 
 export function storyPages<T extends { role?: string | null }>(imgs: T[]): T[] {
 	return imgs.filter((img) => !isCreditsPage(img));
+}
+
+/** Id of the stand-in page for a series credits image that a chapter has not added itself. */
+export function seriesCreditImageId(kind: CreditKind, episodeId: string) {
+	return `series-credit:${kind}:${episodeId}`;
+}
+
+export function parseSeriesCreditImageId(id: string): { kind: CreditKind; episodeId: string } | null {
+	const [prefix, kind, ...rest] = id.split(":");
+	if (prefix !== "series-credit" || !isCreditKind(kind) || !rest.length) return null;
+	return { kind, episodeId: rest.join(":") };
+}
+
+/**
+ * Chapter pages with the series' default credits added at either end, as the finished export
+ * does, unless the chapter already has its own credits page of that kind. Like the export, the
+ * added credits are sized to the widest story page.
+ */
+export function withSeriesCreditImages(
+	pages: ImageRow[],
+	series: Pick<Series, "credits" | "createdAt" | "updatedAt">,
+	episodeId: string,
+): ImageRow[] {
+	const out = [...pages];
+	const storyWidth = Math.max(0, ...pages.filter((page) => page.role === "page").map((page) => page.width));
+	for (const kind of CREDIT_KINDS) {
+		const credit = series.credits[kind];
+		if (!credit || pages.some((page) => page.role === creditRole(kind))) continue;
+		const image: ImageRow = {
+			id: seriesCreditImageId(kind, episodeId),
+			episodeId,
+			filename: credit.filename,
+			originalName: credit.originalName,
+			width: storyWidth || credit.width,
+			height: storyWidth ? Math.round((credit.height * storyWidth) / credit.width) : credit.height,
+			sortOrder: kind === "pre" ? -1 : pages.length,
+			pageNumber: null,
+			dpi: 72,
+			caption: "",
+			role: creditRole(kind),
+			createdAt: series.createdAt,
+			updatedAt: series.updatedAt,
+		};
+		if (kind === "pre") out.unshift(image);
+		else out.push(image);
+	}
+	return out;
 }

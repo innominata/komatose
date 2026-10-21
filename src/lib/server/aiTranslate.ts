@@ -26,6 +26,7 @@ import { failedOcrConsensus, ocrResolutionAccepted, type OcrConsensus } from "..
 import {
   dropRedundantTranscriptions,
   transcriptionIsEnglish,
+  readsAsLettering,
   transcriptionOverlapSource,
 } from "../transcribeRegions";
 import { detectLetteringMask, maskedBubbleCrop, transcribeBubbleCrop } from "./reviewMask";
@@ -1138,7 +1139,13 @@ async function runTranscribeJob(
           source: transcriptionOverlapSource(item.consensus.source, sources[index]),
           english: transcriptionIsEnglish(item.consensus.source, sources[index]),
         })), { includeEnglish });
-        const kept = reads.filter((_, index) => !drop.has(String(index)));
+        // A region only the lettering mask found must read as text to be kept.
+        const maskOnly = (item: (typeof reads)[number]) => {
+          const sources = item.region.provenance?.sources;
+          return !!sources && sources.length === 1 && sources[0] === "koharu";
+        };
+        const kept = reads.filter((item, index) => !drop.has(String(index)) &&
+          (!maskOnly(item) || readsAsLettering([item.consensus.source, ...sources[index]], job.lang, includeEnglish)));
         job.message = `Page ${i + 1}/${imgs.length} · Saving ${kept.length} regions`;
         emit(job);
         for (const item of kept) {
@@ -1437,7 +1444,7 @@ export function startAiTranscribe(opts: {
     lang,
   );
   const ocrNames = ocrIds.map((id) => liveAssistantName(id)).join(" + ");
-  const job = beginAiJob(opts, "transcribe", `Starting transcription · ${ocrNames || "transcription models"}`);
+  const job = beginAiJob({ ...opts, lang }, "transcribe", `Starting transcription · ${ocrNames || "transcription models"}`);
   void runWithJob(
     { jobId: job.id!, step: "transcribe", engine: job.engine, model: job.model },
     () => runTranscribeJob(job, opts),
@@ -1455,7 +1462,8 @@ export function startAiTranslate(opts: {
   model?: string;
   imageIds?: string[];
 }): AiJobSnapshot {
-  const job = beginAiJob(opts, "translate", "Starting translation…");
+  const lang = opts.lang || parseOcrLang(preferences(opts.episode.id, opts.series.id).lang);
+  const job = beginAiJob({ ...opts, lang }, "translate", "Starting translation…");
   void runWithJob(
     { jobId: job.id!, step: "translate", engine: job.engine, model: job.model },
     () => runTranslateJob(job, opts),

@@ -4,6 +4,7 @@
     | "select"
     | "region"
     | "read-area"
+    | "detect-area"
     | "reorder"
     | "style-brush"
     | "assign-character"
@@ -46,6 +47,12 @@
       id: "read-area",
       icon: "bi-eye",
       title: "Read area with image model",
+    },
+    "detect-area": {
+      id: "detect-area",
+      icon: "bi-bounding-box-circles",
+      title: "Detect lettering in an area (D)",
+      key: "D",
     },
     reorder: {
       id: "reorder",
@@ -173,6 +180,7 @@
             ALL.restore,
             ALL.raw,
             ALL["mask-grow"],
+            ...(canEdit ? [ALL["detect-area"]] : []),
             zoom,
           ]
         : [ALL.select, zoom];

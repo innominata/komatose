@@ -7,9 +7,49 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
+import sys
+# The worker runs from ocr/, so its sibling modules import by name.
+sys.path.insert(0, str(pathlib.Path(__file__).parents[1]/'ocr'))
 spec=importlib.util.spec_from_file_location('workflow',pathlib.Path(__file__).parents[1]/'ocr'/'workflow.py')
 workflow=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
+
+class FocusedMask(unittest.TestCase):
+    def test_window_is_grown_to_the_model_side_and_kept_on_the_page(self):
+        self.assertEqual(workflow.focus_window((1300, 1900, 1400, 1990), 2000, 1414), (390, 976, 1414, 2000))
+        # A region larger than the model side keeps a margin instead.
+        self.assertEqual(workflow.focus_window((100, 0, 1300, 50), 3000, 3000), (36, 0, 1364, 1024))
+
+    def test_only_the_focused_region_changes_and_hand_edits_stay(self):
+        H, W = 200, 300
+        img = np.full((H, W, 3), 255, np.uint8)
+        left = [{'x': .1, 'y': .1}, {'x': .3, 'y': .1}, {'x': .3, 'y': .9}, {'x': .1, 'y': .9}]
+        right = [{'x': .6, 'y': .1}, {'x': .9, 'y': .1}, {'x': .9, 'y': .9}, {'x': .6, 'y': .9}]
+        saved = np.zeros((H, W), np.uint8)
+        saved[50:60, 40:60] = 255    # old proposal inside the left region
+        saved[100:110, 200:220] = 255  # the right region's mask
+        saved[0:5, 0:5] = 255        # a hand edit outside every region
+        seen = {}
+
+        def propose(window, regions, expansion, engine, device, placements):
+            seen['shape'], seen['regions'] = window.shape, regions
+            found = np.zeros(window.shape[:2], np.uint8)
+            found[100:120, 50:70] = 255
+            return found, [{'region': 0, 'pixels': 400, 'reasons': []}], {'engine': 'test'}
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(pathlib.Path(directory) / 'mask.png')
+            cv2.imwrite(path, saved)
+            req = {'detect': True, 'regions': [left, right], 'focus': 0, 'mask': path, 'regionPlacements': [None, None]}
+            mask, diagnostics, meta = workflow.focused_mask(img, req, propose)
+        self.assertEqual(seen['shape'][:2], (H, W))  # a small page is read whole
+        self.assertEqual(mask[55, 50], 0)
+        self.assertEqual(mask[110, 60], 255)
+        self.assertEqual(mask[105, 210], 255)
+        self.assertEqual(mask[2, 2], 255)
+        self.assertEqual(diagnostics[0]['region'], 0)
+        self.assertEqual(meta['window'], [0, 0, W, H])
+
 
 class Cleaning(unittest.TestCase):
     def test_editor_region_mask_fills_and_expands_without_glyph_detection(self):
@@ -96,7 +136,7 @@ class Cleaning(unittest.TestCase):
                 'strict': True, 'excludeRegions': [protected]})
         np.testing.assert_array_equal(img, before)
 
-    def test_automask_clips_expansion_and_strokes_to_region_union(self):
+    def test_automask_clips_expansion_and_strokes_near_the_region_union(self):
         img = np.zeros((100, 120, 3), np.uint8)
         regions = [
             [{'x': .1, 'y': .1}, {'x': .5, 'y': .1}, {'x': .1, 'y': .5}],
@@ -113,12 +153,15 @@ class Cleaning(unittest.TestCase):
         self.assertEqual(mask[15, 18], 255)  # Triangle interior.
         self.assertEqual(mask[25, 30], 255)  # Overlap stays filled.
         self.assertEqual(mask[80, 96], 255)  # Separate region stays filled.
-        self.assertEqual(mask[45, 54], 0)  # Inside box, outside polygon.
-        self.assertEqual(mask[60, 72], 0)  # Supplied stroke outside regions.
-        self.assertFalse(np.any(mask[:10]))
-        self.assertFalse(np.any(mask[:, :12]))
-        self.assertFalse(np.any(mask[91:]))
-        self.assertFalse(np.any(mask[:, 109:]))
+        # Glyphs may poke out of their box by the fitted reach, never further.
+        import mask_fit
+        union = np.zeros(img.shape[:2], np.uint8)
+        for region in regions:
+            cv2.fillPoly(union, [np.array([[round(p['x']*120), round(p['y']*100)] for p in region], np.int32)], 255)
+        reach = mask_fit.reach(20, mask_fit.page_scale(100, 120)) + 1
+        far = cv2.dilate(union, mask_fit.disc(reach)) == 0
+        self.assertTrue(np.any(far))
+        self.assertFalse(np.any(mask[far]))
 
     def test_automask_requires_regions_before_loading_detector(self):
         img = np.zeros((100, 120, 3), np.uint8)
@@ -172,8 +215,20 @@ class Cleaning(unittest.TestCase):
         self.assertTrue(np.all(out[mask > 0] == 255))
         np.testing.assert_array_equal(out[mask == 0], img[mask == 0])
 
-    def test_open_white_background_is_not_an_enclosed_balloon(self):
-        img = np.full((100, 120, 3), 255, np.uint8)
+    def test_open_flat_paper_is_filled_in_its_own_tone(self):
+        # Not an enclosed balloon, but one tone all round: a fill is exact there.
+        img = np.full((100, 120, 3), 236, np.uint8)
+        mask = np.zeros(img.shape[:2], np.uint8)
+        mask[40:60, 50:70] = 255
+        with patch.object(workflow, 'model_inpaint') as model:
+            out, method = workflow.clean(img, mask, {'method': 'auto'})
+        self.assertEqual(method, 'flat')
+        self.assertEqual(model.call_count, 0)
+        self.assertTrue(np.all(out[mask > 0] == 236))
+
+    def test_textured_background_goes_to_the_inpainter(self):
+        rng = np.random.default_rng(1)
+        img = rng.integers(0, 256, (100, 120, 3), dtype=np.uint8)
         mask = np.zeros(img.shape[:2], np.uint8)
         mask[40:60, 50:70] = 255
         with patch.object(workflow, 'model_inpaint', side_effect=lambda crop, m, method, device: crop.copy()) as model:
@@ -197,7 +252,7 @@ class Cleaning(unittest.TestCase):
         np.testing.assert_array_equal(out[mask == 0], img[mask == 0])
 
     def test_auto_on_cuda_uses_lama_manga(self):
-        img = np.full((100, 120, 3), 255, np.uint8)
+        img = np.random.default_rng(2).integers(0, 256, (100, 120, 3), dtype=np.uint8)
         mask = np.zeros(img.shape[:2], np.uint8)
         mask[40:60, 50:70] = 255
         with patch.object(workflow, 'model_inpaint', side_effect=lambda crop, m, method, device: crop.copy()) as model:

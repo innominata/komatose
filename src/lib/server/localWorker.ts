@@ -401,7 +401,12 @@ export async function localOperation(payload: Record<string, unknown>, signal?: 
  const { executeModelTask } = await import('./modelTaskRunner');
  const { readFile, writeFile } = await import('node:fs/promises');
  const { effectiveDefault } = await import('./modelDefaultStore');
- const defaultModel = (task: 'textMask' | 'inpaint') => effectiveDefault(task, listRegistryRows().find(row => !row.disabled && rowHasOperation(row, task))?.id || '');
+ // Koharu reads whole glyphs where CTD often keeps only fragments, so it leads when installed.
+ const preferred: Record<string, string> = { textMask: 'koharu' };
+ const defaultModel = (task: 'textMask' | 'inpaint') => {
+  const rows = listRegistryRows().filter(row => !row.disabled && rowHasOperation(row, task));
+  return effectiveDefault(task, (rows.find(row => row.id === preferred[task]) ?? rows[0])?.id || '');
+ };
  let task: import('../modelTasks').ModelTaskId | undefined;
  let id = String(payload.method || '');
  if (payload.cmd === 'detect-sfx') { task = 'detect'; id = 'coo'; }

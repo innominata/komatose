@@ -64,6 +64,18 @@ export function minRegionPx(W: number, H: number): number {
   return Math.min(MIN_AUTO_REGION_PX, Math.max(10, Math.round(Math.min(W, H) * 0.012)));
 }
 
+/**
+ * The size floor is aimed at speckle, which detectors score low. A short column
+ * of dialogue the detector is sure of is kept down to half the floor.
+ */
+export const CONFIDENT_SMALL_SCORE = 0.7;
+/** Lettering only the pixel mask found must be this many times the size floor: small blocks are mostly specks of art. */
+export const ADOPTED_MIN_SCALE = 1.5;
+export function bigEnough(spanW: number, spanH: number, score: number, minPx: number): boolean {
+  const floor = score >= CONFIDENT_SMALL_SCORE ? minPx / 2 : minPx;
+  return spanW >= floor && spanH >= floor;
+}
+
 type Box = [number, number, number, number];
 
 type Candidate = {
@@ -371,7 +383,8 @@ export function regionsFromDetection(
   const taken: [number, number, number, number][] = [];
   for (const c of candidates) {
     const [spanW, spanH] = clippedSpan(c.box, W, H);
-    if (spanW < minPx || spanH < minPx) continue;
+    // Only text boxes earn the confidence exemption; a bubble fallback is no lettering claim.
+    if (!bigEnough(spanW, spanH, c.text ? c.score : 0, minPx)) continue;
     // Bubble and text boxes for the same balloon overlap heavily; keeping
     // both would OCR and translate the same line twice.
     if (
@@ -440,10 +453,10 @@ export function composeDetections(
   for (const [part, regions] of Object.entries(outputs) as [DetectorSource, WorkerRegion[]][]) {
     for (const region of regions) tagged.push({ ...region, backend: region.backend && part === "coo" ? region.backend : part });
   }
-  const fused = fuseDetections(tagged, { ran: Object.keys(outputs) as DetectorSource[] });
   const minPx = minRegionPx(W, H);
+  const fused = fuseDetections(tagged, { ran: Object.keys(outputs) as DetectorSource[], minAdoptPx: minPx * ADOPTED_MIN_SCALE });
   return regionsFromDetection(fused, W, H, { bubbleFallback: false, fused: true, minPx }).filter(
-    (region) => region.place.width >= minPx && region.place.height >= minPx,
+    (region) => bigEnough(region.place.width, region.place.height, region.score, minPx),
   );
 }
 
@@ -505,11 +518,14 @@ export function parseKoharuRegions(raw: unknown): WorkerRegion[] {
     const box = region.box as Box;
     if (box[2] <= box[0] || box[3] <= box[1]) return [];
     const score = Number(region.score);
+    const measure = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
     return [{
       cls: "text",
       backend: "koharu",
       score: Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0.8,
       box,
+      fill: measure(region.fill),
+      stroke: measure(region.stroke),
     }];
   });
 }

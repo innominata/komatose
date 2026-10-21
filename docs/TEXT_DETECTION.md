@@ -204,8 +204,9 @@ and must not be used directly to paint out lettering; use the mask stage below.
 
 ## Koharu
 
-Koharu SAM-TS-L produces a full-page text-removal mask, in the publisher
-preprocessing lineage. It is the masking stage; it is not the text detector.
+Koharu SAM-TS-L produces a full-page lettering mask, in the publisher
+preprocessing lineage. It is the masking stage, and during transcription its
+blocks also find lettering the box detectors missed (see Cross-check fusion).
 
 ### Weights and source
 
@@ -240,11 +241,37 @@ The mask is `outputs[4][0, 0, :nh, :nw]`. Resize it back to the source
 dimensions with `NEAREST`; other interpolations soften the boundary and make it
 unsuitable for thresholding.
 
+### Reading resolution
+
+The model reads the whole page shrunk to 1024 on its long side. Reading large
+pages in full-resolution 1024 tiles was measured and rejected: on the bundled
+gold pages (1414 × 2000 and 941 × 1672) it lowered RT-DETR + Koharu F1 from
+0.869 to 0.847 (Japanese) and 0.958 to 0.946 (Korean), at four times the cost.
+
 ### Mask post-processing
 
-- Clip the mask to the region polygon so adjacent bubbles are left untouched.
-- Optionally expand with an elliptical structuring element. The radius is
-  clamped to 0–20 px; the application uses 3.
+Each region's mask is fitted by where its text sits (`ocr/mask_fit.py`). The
+place comes from the Director's reading of the enclosure, then the detector's
+class, then the bubble line types (`maskPlacement`):
+
+- **Inside a balloon or box**, each glyph cluster grows past its anti-aliasing
+  until it would cross a strong edge (the balloon's outline) or the paper beside
+  it stops being one tone, up to 4 px at a 1024 scale. Ink the model missed
+  within reach (dakuten, furigana, thin tips) is added while the paper is flat.
+- **Outside**, the lettering grows by half its own stroke width, up to 8 px at a
+  1024 scale, so the outline drawn around a sound effect is removed too and an
+  inpainter does not paint the letters back in the outline's colour.
+- **Unknown** places keep the plain dilation, but a glyph that pokes slightly out of the region box is kept whole within the same reach, so a tight detected box does not cut strokes off (Koharu engine).
+- A fitted glyph that pokes slightly out of its region box is kept whole rather
+  than cut at the box edge.
+- The radius is clamped to 0–20 px; the application uses 3 for OCR crops and 5
+  for removal masks, as the floor of fitted growth.
+
+Paper counts as one tone when 90% of it sits within a tolerance of its median:
+2.5 × the page's noise floor, between 6 and 20 levels. Automatic cleaning uses
+the same test on the ring around each hole: flat paper of any colour gets a fill
+in its own tone, and only the rest goes to LaMa. This follows Manga Cleaner
+(github.com/k-omiq/Bear), used with its author's permission.
 - Merge glyph boxes into lines using a gap fraction of 0.6 and an alignment
   threshold of 0.4. Sound effects must not set the gap threshold; measure
   against the merged line height.
@@ -261,22 +288,51 @@ The pipeline in `detectRegions` is:
    by `rtdetr`), when installed. The partner gets `supplement=false` so RT-DETR
    does not run CTD a second time internally.
 3. COO adds free-floating sound-effect polygons when the setup has `+coo`.
-4. Koharu's text mask supplies boxes when the setup has `+koharu`. Koharu boxes
-   are noisy, so they are **voter-only**: they confirm another detector's box
-   and never create a region unless no box detector ran.
+4. Koharu's text mask supplies blocks when the setup has `+koharu`. Each block
+   records how much of its box the mask fills and its median stroke width.
 5. `fuseDetections` merges everything. Seeds are taken in the order COO,
    RT-DETR, CTD, Paddle, Koharu. A candidate joins a seed when the boxes share a
    class and overlap (IoU 0.4, or 0.6 across classes), when it is a fragment of
    the seed (80% inside it, one column of a bubble), or when it is the same
    lettering with a looser margin. Each region records the detectors that
    found it in `provenance.sources`.
+   Sure RT-DETR `bubble` boxes (0.5 and up) are **walls**: two boxes whose
+   centres sit in different balloons are never merged, however they overlap.
 6. A box found by only one detector survives only above its own threshold
    (RT-DETR bubble 0.5, RT-DETR free 0.6, CTD 0.6). A Paddle or Koharu block
    that swallows two or more other regions is a line-grouping artefact and is
    dropped.
-7. The minimum region size scales with the page (1.2% of the short side, between
+7. **Pixel-first pass** (`adoptLettering`). The mask decides what is lettering
+   and the boxes label it:
+   - A block a box holds half of, but not all, means the box cut the lettering
+     short; the box grows to hold it, to at most twice its area.
+   - A block no box claimed is still lettering and becomes a region: bubble text
+     when a sure balloon holds its centre, free text otherwise. Blocks within
+     half a glyph of each other (at most 96 px), in the same balloon or both in
+     none, are one region, so an effect the boxes cut in pieces is one region.
+   - A block the mask fills more than 60%, or whose strokes are 40% of its short
+     side, is a shape (a highlight, a white bar), not lettering, and is skipped.
+   - Such a region scores 0.5 and must be 1.5 times the size floor.
+   - **Confirm, then keep.** Recognisers invent characters from artwork, mostly
+     Han, digits or the other language's script, so transcription keeps a
+     mask-only region only when a reading holds the page language's own script
+     (kana for Japanese, Hangul for Korean), or Latin when English is being
+     transcribed (`readsAsLettering`).
+8. The minimum region size scales with the page (1.2% of the short side, between
    10 px and 30 px), so one-character lettering on a low-resolution scan is
-   kept and speckle on a large scan is not.
+   kept and speckle on a large scan is not. A box the detector is at least 0.7
+   sure of is kept down to half the floor: the floor is aimed at speckle, which
+   detectors score low, and it was dropping short columns of dialogue.
+
+The pixel-first pass and the confidence exemption are adapted from Manga
+Cleaner (github.com/k-omiq/Bear), with its author's permission. Measured on
+the bundled gold pages with RT-DETR + Koharu, before recognition confirms
+anything: Japanese recall 0.895 to 0.974 (sound effects 3/7 to 6/7) with 8
+more false alarms, nearly all artwork on one colour page; Korean F1 0.929 to
+0.958 (sound effects 9/14 to 14/14) with 3 more false alarms. Reading the
+Japanese mask-only regions, the script rule kept every real one and dropped 7
+of 9 artwork blocks; on the Korean pages it dropped all 3 artwork blocks and
+kept 4 of 6 real ones.
 
 Unknown regions are no longer typed as dialogue. The kind comes from the
 detector's own class (`text_free` and COO are free text), then from the reading

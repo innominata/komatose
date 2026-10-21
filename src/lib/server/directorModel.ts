@@ -20,6 +20,13 @@ export function forgetDirectorModelState(runId: string) {
 }
 const transient =
   /timeout|timed out|fetch failed|network|ECONN|429|50[0234]|temporar|rate limit/i;
+// llama-swap reports a reply that fails the JSON schema as an HTTP 502. That is a bad
+// answer, not an unavailable model: correct it, and never put the model on cooldown.
+const invalidOutput = /structured_output_failed|failed the JSON Schema/i;
+// A reply cut off at the output limit: retry once with a larger budget and a demand for brevity.
+const truncated = /finish_reason=length|output was incomplete|increase the output budget/i;
+const isTransient = (message: string) =>
+  transient.test(message) && !invalidOutput.test(message);
 
 export type DirectorModelCall = <T>(
   purpose: string,
@@ -74,6 +81,7 @@ export function directorModel(
           reason: last instanceof Error ? last.message : String(last),
         });
       let correction = "";
+      let maxTokens: number | undefined;
       let timedOut = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         signal.throwIfAborted();
@@ -98,6 +106,7 @@ export function directorModel(
             schema,
             model: model.model,
             thinking: false,
+            ...(maxTokens ? { maxTokens } : {}),
           };
           event("automation:request", {
             purpose,
@@ -132,14 +141,19 @@ export function directorModel(
           // Only an explicitly configured fallback may handle this failure.
           if (deadline.aborted) break;
           if (
-            error instanceof ModelTaskError &&
-            error.outcome === "failed_validation" &&
+            ((error instanceof ModelTaskError &&
+              error.outcome === "failed_validation") ||
+              invalidOutput.test(message)) &&
             !correction
           ) {
-            correction = `Your last response was invalid: ${message}. Return exactly the requested JSON schema.`;
+            if (truncated.test(message)) {
+              maxTokens = 12000;
+              correction = "Your last response was cut off before the JSON closed. Keep every text field to one or two short sentences, and return exactly the requested JSON schema.";
+            } else
+              correction = `Your last response was invalid: ${message}. Return exactly the requested JSON schema.`;
             continue;
           }
-          if (attempt === 2 || !transient.test(message)) break;
+          if (attempt === 2 || !isTransient(message)) break;
           if (ctx?.imageId)
             sqlite
               .prepare(
@@ -159,7 +173,7 @@ export function directorModel(
         ctx &&
         !timedOut &&
         last instanceof Error &&
-        transient.test(last.message)
+        isTransient(last.message)
       ) {
         const failures = unavailable.get(ctx.runId) || new Map();
         failures.set(key, { until: Date.now() + 60_000, error: last });

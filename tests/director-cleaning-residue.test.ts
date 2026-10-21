@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import sharp from "sharp";
 import {
   cleaningResidueInspector,
+  outlineResidueInspector,
   cleaningDetailCrop,
   cleaningBoundaryInspector,
   cleaningSeamInspector,
@@ -184,4 +185,31 @@ test("detail crops magnify only the candidate text area, including a small safet
     )(await sharp(bytes).resize(250).png().toBuffer()),
     /dimensions/,
   );
+});
+
+test("white outline residue counts islands left on dark art, not page gutter the lettering crossed", async () => {
+  const W = 200, H = 120;
+  // Grey art below y=40, white gutter above it.
+  const page = () => {
+    const px = Buffer.alloc(W * H * 3);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) px.fill(y < 40 ? 255 : 100, (y * W + x) * 3, (y * W + x) * 3 + 3);
+    return px;
+  };
+  const png = (px: Buffer) => sharp(px, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer();
+  const paint = (px: Buffer, x0: number, y0: number, x1: number, y1: number, v: number) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) px.fill(v, (y * W + x) * 3, (y * W + x) * 3 + 3);
+  };
+  const raw = page();
+  // A black letter poking into the gutter, and one on the dark art with a white outline.
+  paint(raw, 40, 30, 50, 55, 0);
+  paint(raw, 116, 66, 134, 94, 255); paint(raw, 120, 70, 130, 90, 0);
+  const regions: CleaningRegion[] = [
+    { id: "gutter", box: [30 / W, 26 / H, 30 / W, 34 / H] },
+    { id: "island", box: [112 / W, 62 / H, 26 / W, 36 / H] },
+  ];
+  const inspect = outlineResidueInspector(await png(raw), regions);
+  const cleaned = page();
+  assert.deepEqual(await inspect(await png(cleaned), ["gutter", "island"]), [], "A full clean passes");
+  paint(cleaned, 116, 66, 134, 94, 255); paint(cleaned, 120, 70, 130, 90, 100);
+  assert.deepEqual((await inspect(await png(cleaned), ["gutter", "island"])).map((f) => f.lineId), ["island"]);
 });

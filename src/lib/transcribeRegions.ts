@@ -27,6 +27,30 @@ export function isAlreadyEnglish(source: string): boolean {
   return latin / letters.length >= 0.8;
 }
 
+/** Letters only the page's own language writes: kana for Japanese, Hangul for Korean. */
+const OWN_SCRIPT: Record<string, RegExp> = {
+  japanese: /\p{Script=Hiragana}|\p{Script=Katakana}/u,
+  korean: /\p{Script=Hangul}/u,
+};
+
+/**
+ * Whether a region the lettering mask alone proposed reads as text. The mask
+ * marks artwork too (chair legs, highlights, screentone), and recognisers
+ * invent plausible characters from it, mostly Han characters, digits, or the
+ * other language's script. Such a region is kept only when a reading holds the
+ * page language's own script (kana, Hangul), or Latin lettering when English is
+ * being transcribed. Measured on the bundled gold pages, this kept every real
+ * Japanese block and dropped 7 of 9 artwork blocks, and on the Korean pages
+ * dropped all 3 artwork blocks and kept 4 of 6 real ones.
+ */
+export function readsAsLettering(readings: string[], lang?: string, includeEnglish = false): boolean {
+  const own = (lang && OWN_SCRIPT[lang]) || SOURCE_SCRIPT;
+  return readings.some((source) => {
+    const text = visible(source);
+    return own.test(text) || (includeEnglish && isAlreadyEnglish(text));
+  });
+}
+
 export function transcriptionOverlapSource(agreed: string, readings: string[]): string {
   const agreedText = agreed.trim();
   if (hasReading(agreedText)) return agreedText;

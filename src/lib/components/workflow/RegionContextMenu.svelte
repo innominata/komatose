@@ -50,7 +50,7 @@
     translatePage: (id: string) => void;
     rereadMissing: (id: string) => void;
     fillMissing: (id: string) => void;
-    applyMask: (detect?: boolean) => void;
+    applyMask: (detect?: boolean, focusLineId?: string) => void;
     approveMask: () => void;
     applyCleaningPass: () => void;
     cleanWith: (method: string) => void;
@@ -293,6 +293,18 @@
         >
         <button role="menuitem" disabled={!canEdit} onclick={() => ops.deleteRegion(target)}
           >Delete region…</button
+        >
+      {/if}
+      {#if step === "Clean"}
+        <button
+          role="menuitem"
+          data-find="detect-region-lettering"
+          title="Read this region again at the page's full resolution and replace only its part of the mask"
+          disabled={!canClean || busy || strokes.length > 0}
+          onclick={() => {
+            menu = null;
+            void ops.applyMask(true, target.id);
+          }}>Detect lettering in this region</button
         >
       {/if}
       {#if step === "Typeset"}

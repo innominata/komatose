@@ -21,8 +21,8 @@ const rotationMatrix = (deg: number): Matrix2 => {
 const skewXMatrix = (deg: number) => [1, 0, Math.tan(rad(deg)), 1] as const;
 const skewYMatrix = (deg: number) => [1, Math.tan(rad(deg)), 0, 1] as const;
 /**
- * Whole-layer text transform, rotation outermost: R(rotation) · skewX · skewY.
- * Shared by the SVG preview, live handle dragging, and the PSD text-layer matrix.
+ * Photoshop-style whole-layer transform, rotation outermost: R(rotation) · skewX · skewY.
+ * Only the PSD text-layer matrix uses this; Photoshop cannot shear lines individually.
  * Sequential shears keep the determinant at 1, so the map is always invertible.
  */
 export function textMatrix(
@@ -40,6 +40,29 @@ export function inverseTextMatrix(
   return mulMatrix(
     mulMatrix(skewYMatrix(-(style.skewY ?? 0)), skewXMatrix(-(style.skewX ?? 0))),
     rotationMatrix(-style.rotation),
+  );
+}
+/**
+ * Layer transform the renderer applies to the whole block: R(rotation) · skewY.
+ * Horizontal skew is applied per line instead (see {@link rowShearSvg}), so it never
+ * shifts one line sideways relative to the next.
+ */
+export function layerMatrix(style: Pick<TextStyle, "rotation" | "skewY">): Matrix2 {
+  return mulMatrix(rotationMatrix(style.rotation), skewYMatrix(style.skewY ?? 0));
+}
+export function inverseLayerMatrix(style: Pick<TextStyle, "rotation" | "skewY">): Matrix2 {
+  return mulMatrix(skewYMatrix(-(style.skewY ?? 0)), rotationMatrix(-style.rotation));
+}
+/** SVG transform shearing one line horizontally about its own vertical middle `y`. */
+export function rowShearSvg(deg: number, y: number) {
+  const t = Math.tan(rad(deg));
+  return `matrix(1 0 ${t} 1 ${-t * y} 0)`;
+}
+/** Re-shear every rendered line group in a layout SVG to `deg`, keeping glyphs and breaks. */
+export function setRowShear(svg: string, deg: number) {
+  return svg.replace(
+    /<g data-row-y="([^"]+)" transform="[^"]*"/g,
+    (_, y) => `<g data-row-y="${y}" transform="${rowShearSvg(deg, Number(y))}"`,
   );
 }
 /**
@@ -67,28 +90,25 @@ export function applyMatrixAbout(m: Matrix2, p: Point, c: Point): Point {
     dy = p.y - c.y;
   return { x: c.x + m[0] * dx + m[2] * dy, y: c.y + m[1] * dx + m[3] * dy };
 }
-/** SVG transform for a layout's outer group; plain `rotate(...)` when there is no skew. */
+/** SVG transform for a layout's outer group; plain `rotate(...)` when there is no vertical skew. */
 export function textTransformSvg(style: TextStyle, cx: number, cy: number) {
-  const skewX = style.skewX ?? 0,
-    skewY = style.skewY ?? 0;
+  const skewY = style.skewY ?? 0;
   const rotate = `rotate(${style.rotation} ${cx} ${cy})`;
-  if (!skewX && !skewY) return rotate;
-  return `${rotate} translate(${cx} ${cy}) skewX(${skewX}) skewY(${skewY}) translate(${-cx} ${-cy})`;
+  if (!skewY) return rotate;
+  return `${rotate} translate(${cx} ${cy}) skewY(${skewY}) translate(${-cx} ${-cy})`;
 }
-/** Incremental SVG wrap that takes `from` to `to` about `(cx, cy)`. */
+/** Incremental SVG wrap that takes the layer of `from` to `to` about `(cx, cy)`; skewX is per line. */
 export function deltaTextTransform(
   from: Pick<TextStyle, "rotation" | "skewX" | "skewY">,
   to: Pick<TextStyle, "rotation" | "skewX" | "skewY">,
   cx: number,
   cy: number,
 ) {
-  const sameSkew =
-    (from.skewX ?? 0) === (to.skewX ?? 0) && (from.skewY ?? 0) === (to.skewY ?? 0);
-  if (sameSkew) {
+  if ((from.skewY ?? 0) === (to.skewY ?? 0)) {
     const delta = to.rotation - from.rotation;
     return delta ? `rotate(${delta} ${cx} ${cy})` : "";
   }
-  const t = mulMatrix(textMatrix(to), inverseTextMatrix(from));
+  const t = mulMatrix(layerMatrix(to), inverseLayerMatrix(from));
   return `translate(${cx} ${cy}) matrix(${t[0]} ${t[1]} ${t[2]} ${t[3]} 0 0) translate(${-cx} ${-cy})`;
 }
 /** CSS `matrix()` for the same incremental map, used with `transform-origin` at the pivot. */
@@ -96,7 +116,7 @@ export function cssDeltaTransform(
   from: Pick<TextStyle, "rotation" | "skewX" | "skewY">,
   to: Pick<TextStyle, "rotation" | "skewX" | "skewY">,
 ) {
-  const t = mulMatrix(textMatrix(to), inverseTextMatrix(from));
+  const t = mulMatrix(layerMatrix(to), inverseLayerMatrix(from));
   return `matrix(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]}, 0, 0)`;
 }
 export function clampSkew(deg: number) {

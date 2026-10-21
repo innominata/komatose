@@ -192,6 +192,7 @@ const {
   resumeDirector,
   undoDirector,
   directorOverviewAsync,
+  resetDirectorPage,
   directorPreflight,
   recoverDirectorRuns,
 } = await import("../src/lib/server/directorService");
@@ -704,8 +705,8 @@ test("type descriptions compact large cached evidence in bounded text-only batch
     assert.ok(data.examples.length <= 3);
     assert.ok(JSON.stringify(data).length < 12000);
     assert.ok(!JSON.stringify(data).includes("PRIVATE-"));
-    assert.equal(schema.properties.description.maxLength, 700);
-    assert.equal(schema.properties.conflicts.maxLength, 250);
+    assert.equal(schema.properties.description.maxLength, 1400);
+    assert.equal(schema.properties.conflicts.maxLength, 1000);
     assert.match(system, /explicit user rule takes precedence/i);
     calls.push(data);
     return {
@@ -1401,6 +1402,23 @@ test("explicit rechecks refresh classification, cleaning and QA while reusing le
   putDoc(null, current.id, settings.data, current.revision);
 });
 
+test("a passed page that went stale is skipped by a chapter run until Recheck all or a reset", async () => {
+  const page = await seedChapter("stale-skip", 41);
+  await runPage(page);
+  sqlite
+    .prepare("UPDATE director_pages SET version=1 WHERE episode_id=?")
+    .run(page.episode.id);
+  assert.equal((await directorOverviewAsync(page.episode.id)).pages[0].state, "stale");
+  await assert.rejects(
+    startDirector({ ...page, user, scope: "chapter", model: selected }),
+    /already passed Director/,
+  );
+  resetDirectorPage(page.episode.id, page.imageId);
+  const { runId } = await startDirector({ ...page, user, scope: "chapter", model: selected });
+  await waitRun(runId);
+  assert.equal((await directorOverviewAsync(page.episode.id, runId)).pages[0].state, "passed");
+});
+
 test("pause and resume reuse saved stages, and recovery respects explicit stopped states", async () => {
   const page = await seedChapter("resume-page", 6);
   const normal = respond;
@@ -1954,7 +1972,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   type Options = {batch?:number[];qwen?:number[];final?:number[];bubble?:boolean;crossed?:boolean;
     damageBubble?:boolean;contradictoryQwen?:boolean;failBatch?:boolean;locked?:boolean;cancelAfterFill?:boolean;noEditor?:boolean;finalDispute?:boolean;failPlan?:boolean;
     persistentFinalDispute?:boolean;finalRegionalSafe?:boolean;finalAffected?:number[];tightPolygon?:boolean;failFinalRegional?:boolean;finalProblem?:'remaining-text'|'artwork-damage';
-    plainIndices?:number[];unknownIndices?:number[];typeIndices?:number[];visualPlain?:number[];primary?:string;legacyEditorBubble?:boolean};
+    plainIndices?:number[];unknownIndices?:number[];typeIndices?:number[];visualPlain?:number[];primary?:string;legacyEditorBubble?:boolean;ghostQwen?:boolean};
   let n=0;
   async function fixture(opts:Options={}) {
     const page=await seedChapter(`progressive-clean-${++n}`,7);
@@ -1983,8 +2001,9 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
       .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(policy));
     const controller=new AbortController();
     const operations:any[]=[];
-    const selections=new Map<string,{targets:number[];full:boolean}>();
+    const selections=new Map<string,{targets:number[];full:boolean;expansion?:number}>();
     let candidateStage='';
+    let candidateExpansion=0;
     let allowRecovery=false;
     let finalRejected=false;
     const pixel=async (artifact:string,index:number) => {
@@ -2000,12 +2019,13 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
         const targets=boxes.map((b,i)=>payload.regions.some((poly:any[])=>Math.min(...poly.map(p=>p.x))<=b.x+b.w+.001&&Math.max(...poly.map(p=>p.x))>=b.x-.001&&Math.min(...poly.map(p=>p.y))<=b.y+b.h+.001&&Math.max(...poly.map(p=>p.y))>=b.y-.001)?i:-1).filter(i=>i>=0);
         const svg=`<svg width="400" height="500"><rect width="400" height="500" fill="black"/>${targets.map(i=>{const b=boxes[i];return `<rect x="${b.x*400}" y="${b.y*500}" width="${b.w*400}" height="${b.h*500}" fill="white"/>`}).join('')}</svg>`;
         const artifact=await storeAsset(await sharp(Buffer.from(svg)).png().toBuffer());
-        selections.set(assetPath(artifact),{targets,full:!!payload.regionMask});
+        selections.set(assetPath(artifact),{targets,full:!!payload.regionMask,expansion:payload.expansion??0});
         return {artifact,result:{}};
       }
       const base=await readFile(payload.path);
       const selection=payload.cmd==='bubble-fill'?{targets:[0],full:true}:selections.get(payload.mask)!;
       const request=sqlite.prepare("SELECT detail FROM director_events WHERE run_id=? AND kind='clean:request' ORDER BY id DESC LIMIT 1").get(runId) as any;
+      candidateExpansion=selection.expansion??0;
       candidateStage=payload.cmd==='bubble-fill'?'bubble':payload.method===editor?'qwen':JSON.parse(request.detail).scope==='one-region'?'final':'batch';
       if(candidateStage==='batch' && opts.failBatch) throw new Error('LaMa worker failed');
       const successful=candidateStage==='bubble'?[0]:candidateStage==='batch'?(opts.batch??[1]):candidateStage==='qwen'?(allowRecovery?[2]:(opts.qwen??[2])):(opts.final??[]);
@@ -2054,6 +2074,8 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
       }
       const i=ids.indexOf(data.regions[0].id);
       const success=candidateStage==='bubble'?!opts.damageBubble:candidateStage==='batch'?(opts.batch??[1]).includes(i):candidateStage==='qwen'?(allowRecovery?[2]:(opts.qwen??[2])).includes(i):(opts.final??[]).includes(i);
+      // Ghosts: the editor leaves a fringe until the mask is grown past the first editor mask.
+      if(opts.ghostQwen && candidateStage==='qwen') return {safe:candidateExpansion>11,problem:candidateExpansion>11?'none':'remaining-text',reason:candidateExpansion>11?'Only source lettering removed':'Grey ghosts of the lettering remain'};
       return {safe:success || (candidateStage==='qwen' && opts.contradictoryQwen),problem:success?'none':candidateStage==='bubble'?'artwork-damage':'remaining-text',reason:success?'Only source lettering removed':'Candidate still contains source text or damages intact art'};
     }) as any;
     const ctx:any={run:{id:runId,episode_id:page.episode.id,user_id:user.id,model:JSON.stringify(selected),proofreader:JSON.stringify(selected),policy:JSON.stringify(policy)},series:page.series,episode:page.episode,user,signal:controller.signal,authorize:async()=>{},imageOperation};
@@ -2070,7 +2092,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     };
     return {page,ids,raw,runId,operations,pixel,execute,runFull,recover(){allowRecovery=true},saved:()=>getDoc<any>(`page:${page.imageId}`,{}).data};
   }
-  await t.test('human order: fill, batch LaMa, one full-region Qwen; never edit saved balloons again',async()=>{
+  await t.test('human order: fill, batch LaMa, one Qwen on grown lettering; never edit saved balloons again',async()=>{
     const f=await fixture();await f.execute();
     const click=f.operations.find(p=>p.cmd==='bubble-fill');
     assert.equal(click.px,.2,'Use the app-computed normalized region centre');
@@ -2079,7 +2101,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     const batch=f.operations.find(p=>p.cmd==='mask'&&p.detect);
     assert.equal(batch.regions.length,2);
     const qwen=f.operations.find(p=>p.method===editor);
-    assert.equal(qwen.task,'cleaning');assert.match(qwen.prompt,/whole region/);
+    assert.equal(qwen.task,'cleaning');assert.match(qwen.prompt,/lettering plus a small margin/);
     assert.equal(f.saved().pendingCleanRegions,undefined);
     for(let i=0;i<3;i++) assert.deepEqual(await f.pixel(f.saved().cleaned,i),[255,255,255]);
     const rawPixel=await f.pixel(f.raw,2);assert.deepEqual(rawPixel,[0,0,0]);
@@ -2097,9 +2119,18 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   await t.test('failed Qwen is discarded before single-region LaMa',async()=>{
     const f=await fixture({qwen:[],final:[2]});await f.execute();
     const attempts=f.operations.filter(p=>p.cmd==='clean');
-    assert.deepEqual(attempts.map(p=>p.method),['lama-manga',editor,'lama-manga']);
-    assert.equal(attempts[1].path,attempts[2].path,'both start from the last verified artwork');
+    // A residue failure earns one wider editor retry before LaMa.
+    assert.deepEqual(attempts.map(p=>p.method),['lama-manga',editor,editor,'lama-manga']);
+    assert.equal(attempts[1].path,attempts[3].path,'every retry starts from the last verified artwork');
     assert.equal(f.saved().directorCleaning.regions[f.ids[2]].method,'lama-manga');
+  });
+  await t.test('lettering ghosts get one wider retry of the same method before falling back',async()=>{
+    const f=await fixture({ghostQwen:true});await f.execute();
+    const attempts=f.operations.filter(p=>p.cmd==='clean');
+    assert.deepEqual(attempts.map(p=>p.method),['lama-manga',editor,editor]);
+    const masks=f.operations.filter(p=>p.cmd==='mask'&&p.detect&&p.regions.length===1).map(p=>p.expansion);
+    assert.ok(masks.includes(11)&&masks.includes(19),`editor masks ${masks}`);
+    assert.equal(f.saved().directorCleaning.regions[f.ids[2]].method,editor);
   });
   await t.test('partial failure retains successful pixels and retries only unresolved regions',async()=>{
     const f=await fixture({qwen:[]});await assert.rejects(f.execute(),/Verified regions were saved/);
@@ -2186,14 +2217,15 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     assert.equal(f.operations.filter(p=>p.method===editor).length,3);
     assert.equal(f.saved().pendingCleanRegions,undefined);
   });
-  await t.test('full-region editor mask includes space outside a tighter fitted lettering polygon',async()=>{
+  await t.test('the editor gets the detected lettering grown a little, never the whole region',async()=>{
     const f=await fixture({bubble:false,batch:[0,1],qwen:[2],tightPolygon:true});
     await f.execute();
     const qwen=f.operations.find(p=>p.method===editor);
-    const full=f.operations.find(p=>p.cmd==='mask'&&p.regionMask&&p.regions.some((poly:any[])=>poly[0].x<.6&&poly[2].x>.8));
-    assert.ok(qwen&&full);
-    assert.ok(full.regions[0][0].y<.7&&full.regions[0][2].y>.82,'Include the outline margin around the whole region');
-    assert.equal(full.detect,false);assert.equal(full.expansion,0);
+    const grown=f.operations.find(p=>p.cmd==='mask'&&p.detect&&p.expansion===11);
+    assert.ok(qwen&&grown);
+    assert.equal(grown.regionMask,false);
+    assert.equal(f.operations.some(p=>p.cmd==='mask'&&p.regionMask&&p.regions.some((poly:any[])=>poly[0].x<.6&&poly[2].x>.8)&&f.operations.indexOf(p)===f.operations.indexOf(qwen)-1),false,
+      'A whole-region mask lets the editor repaint the artwork, such as a sign, away with its lettering');
   });
   await t.test('a persistent final failure stops after one recovery pass and restores the disputed region',async()=>{
     const f=await fixture({finalDispute:true,persistentFinalDispute:true});
@@ -2336,9 +2368,10 @@ test("outside-lettering close-ups revoke cached halos and invented lines before 
     const imageOperation=async(payload:any)=>{
       operations.push(payload);
       if(payload.cmd==='mask'){
-        assert.equal(payload.regionMask,true,'A rejected historical artwork clean goes directly to the full-region repair');
-        const p=payload.regions[0];assert.ok(p[0].x<x&&p[0].y<y&&p[2].x>x+w&&p[2].y>y+h,'Include the outline outside the OCR box');
-        const artifact=await storeAsset(await sharp(Buffer.from(`<svg width="400" height="300"><rect width="400" height="300" fill="black"/><polygon points="${p.map((q:any)=>`${q.x*400},${q.y*300}`).join(' ')}" fill="white"/></svg>`)).png().toBuffer());
+        // Restoring from raw covers the whole region; the editor repair masks only grown lettering.
+        if(!payload.regionMask)assert.equal(payload.detect,true);
+        const p=payload.regions[0];
+        const artifact=await storeAsset(await sharp(Buffer.from(`<svg width="400" height="300"><rect width="400" height="300" fill="black"/><polygon points="${p.map((q:any)=>`${q.x*400},${q.y*300}`).join(' ')}" fill="white"${payload.detect?` stroke="white" stroke-width="${2*payload.expansion}" stroke-linejoin="round" shape-rendering="crispEdges"`:''}/></svg>`)).png().toBuffer());
         return {artifact,result:{}};
       }
       assert.equal(payload.cmd,'clean');

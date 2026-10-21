@@ -1,7 +1,7 @@
 import type { ImageRow, LineRow } from "../types";
 import type { RegionData } from "../workflow";
 import { effectiveTextRotation } from "../textRotation";
-import { deltaTextTransform } from "../textTransform";
+import { deltaTextTransform, setRowShear } from "../textTransform";
 import { layoutKey, regionPolygon } from "./typesetting";
 
 /** Transform existing glyphs without changing their font size or line breaks. */
@@ -42,7 +42,7 @@ export function transformPlacedText(
     next.layout = {
       ...old, style,
       rows: old.rows.map(row => ({ ...row, x: row.x + dx * page.width, baseline: row.baseline + dy * page.height })),
-      svg: old.svg.replace(/(<svg\b[^>]*>)/, `$1<g transform="${transform}">`).replace(/<\/svg>\s*$/, "</g></svg>"),
+      svg: ((old.style.skewX ?? 0) === (style.skewX ?? 0) ? old.svg : setRowShear(old.svg, style.skewX ?? 0)).replace(/(<svg\b[^>]*>)/, `$1<g transform="${transform}">`).replace(/<\/svg>\s*$/, "</g></svg>"),
     };
     // Preserve an existing stale state instead of approving unrelated style/text changes.
     if (old.key === layoutKey(line, region, page, old.style, old.dpi))

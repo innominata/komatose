@@ -8,7 +8,7 @@ import sharp from "sharp";
 process.env.SCAN_ROOT = await mkdtemp(join(tmpdir(), "scan-region-extent-"));
 process.env.DATABASE_URL = join(process.env.SCAN_ROOT, "data/test.db");
 
-const { extendClippedRegions, relocateEmptyRegions } = await import("../src/lib/server/directorAutomation");
+const { extendClippedRegions, relocateEmptyRegions, letteringInBox } = await import("../src/lib/server/directorAutomation");
 const { getDoc, putDoc, storeAsset } = await import("../src/lib/server/workflowStore");
 const save = (id: string, data: unknown) => putDoc(null, id, data, getDoc(id, {}).revision);
 
@@ -97,3 +97,46 @@ test("an empty region moves onto a column another region's box swallowed, and th
   assert.equal(edits.some((edit) => edit.lineId === "english"), false, "English-only regions are never moved");
 });
 
+
+test("a proposed box around part of a sound effect grows to the whole effect; artwork running off the window stays clipped", async () => {
+  // A 척-like effect: glyph strokes extending well past the proposed box, plus a long
+  // artwork line that runs to the edge of the search window.
+  const glyphs: [number, number, number, number][] = [[500, 500, 40, 80], [545, 470, 30, 140]];
+  const artwork: [number, number, number, number] = [0, 640, 1000, 6];
+  const mask = await maskAsset([...glyphs, artwork]);
+  save("page:page", { prepared: mask });
+  const ctx: any = {
+    run: { id: "run", policy: "{}" },
+    signal: new AbortController().signal,
+    imageOperation: async () => ({ artifact: mask }),
+  };
+  const fit = (await letteringInBox(ctx, "page", { x: 0.51, y: 0.51, w: 0.04, h: 0.06 }))!;
+  assert.ok(fit, "lettering is found");
+  assert.ok(fit.x <= 0.5 && fit.y <= 0.47, `grew up and left: ${fit.x},${fit.y}`);
+  assert.ok(fit.x + fit.w >= 0.575 && fit.y + fit.h >= 0.61, "grew to the tall stroke");
+  assert.ok(fit.y + fit.h < 0.63, "never takes the artwork line below");
+  assert.equal(await letteringInBox(ctx, "page", { x: 0.1, y: 0.1, w: 0.05, h: 0.05 }), null, "an empty box is rejected");
+  // A box sitting on the artwork line keeps only what lies inside it.
+  const line = (await letteringInBox(ctx, "page", { x: 0.2, y: 0.6, w: 0.1, h: 0.1 }))!;
+  assert.ok(line.x >= 0.18 && line.x + line.w <= 0.32, `artwork clipped to the box: ${line.x}..${line.x + line.w}`);
+});
+
+test("refitting a region box keeps a fitted geometry polygon, and moves one that only copied the box", async () => {
+  const sfx: [number, number, number, number][] = [0, 1, 2, 3].map((i) => [600 + i * 55, 700, 40, 40]);
+  const mask = await maskAsset(sfx);
+  save("page:page", { prepared: mask });
+  const ctx: any = {
+    run: { id: "run", policy: "{}" },
+    signal: new AbortController().signal,
+    imageOperation: async () => ({ artifact: mask }),
+  };
+  const box = { x: 0.595, y: 0.695, w: 0.05, h: 0.05 };
+  const balloon = [{ x: 0.56, y: 0.66 }, { x: 0.86, y: 0.64 }, { x: 0.88, y: 0.8 }, { x: 0.58, y: 0.79 }, { x: 0.55, y: 0.72 }];
+  save("region:shaped", { polygon: balloon });
+  const [shaped] = await extendClippedRegions(ctx, "page", [line("shaped", box.x, box.y, box.w, box.h)]);
+  assert.deepEqual(shaped.polygon, balloon, "the typesetting shape is not the lettering box");
+  const copy = [{ x: box.x, y: box.y }, { x: box.x + box.w, y: box.y }, { x: box.x + box.w, y: box.y + box.h }, { x: box.x, y: box.y + box.h }];
+  save("region:boxed", { polygon: copy });
+  const [boxed] = await extendClippedRegions(ctx, "page", [line("boxed", box.x, box.y, box.w, box.h)]);
+  assert.ok(Math.abs(Math.max(...boxed.polygon.map((p) => p.x)) - (boxed.x + boxed.w)) < 1e-9, "a copied box follows the refit");
+});

@@ -37,11 +37,59 @@ test('a lone detector keeps its own boxes: nobody is there to check them', () =>
   assert.equal(rows.length, 1);
 });
 
-test('Koharu agrees but never proposes', () => {
-  const koharu = r('koharu', 'text', 0.8, [300, 300, 360, 400]);
-  assert.equal(text(fuseDetections([koharu], { ran: ['rtdetr', 'ctd', 'koharu'] })).length, 0);
+const block = (box: [number, number, number, number], fill = 0.2, stroke = 4): WorkerRegion => ({ ...r('koharu', 'text', 0.8, box), fill, stroke });
+const balloon = (box: [number, number, number, number]) => r('rtdetr', 'bubble', 0.9, box);
+
+test('Koharu agrees with a box, and lettering no box claimed is its own region', () => {
+  const koharu = block([300, 300, 360, 400]);
   const rows = text(fuseDetections([r('rtdetr', 'text_free', 0.25, [300, 302, 358, 398]), koharu], { ran: ['rtdetr', 'koharu'] }));
   assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].sources, ['rtdetr', 'koharu']);
+  const alone = text(fuseDetections([koharu], { ran: ['rtdetr', 'ctd', 'koharu'] }));
+  assert.equal(alone.length, 1);
+  assert.equal(alone[0].cls, 'text_free');
+  assert.deepEqual(alone[0].sources, ['koharu']);
+  assert.ok(alone[0].score < 0.7, 'mask-only lettering ranks below a confident box');
+});
+
+test('mask-only lettering inside a balloon is bubble text', () => {
+  const rows = text(fuseDetections([balloon([200, 200, 500, 500]), block([300, 300, 360, 400])], { ran: ['rtdetr', 'koharu'] }));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cls, 'text_bubble');
+});
+
+test('a solid shape the mask marks is not lettering', () => {
+  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.85, 68)], { ran: ['rtdetr', 'koharu'] })).length, 0);
+  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.3, 60)], { ran: ['rtdetr', 'koharu'] })).length, 0);
+});
+
+test('a box that cut the lettering short grows to hold it', () => {
+  const rows = text(fuseDetections([
+    r('rtdetr', 'text_free', 0.9, [100, 100, 200, 200]),
+    block([110, 120, 200, 240]),
+  ], { ran: ['rtdetr', 'koharu'] }));
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].box, [100, 100, 200, 240]);
+});
+
+test('pieces of one effect within reach are one region, but not across balloons', () => {
+  const pieces = text(fuseDetections([block([100, 100, 160, 160]), block([180, 100, 240, 160])], { ran: ['rtdetr', 'koharu'] }));
+  assert.equal(pieces.length, 1);
+  assert.deepEqual(pieces[0].box, [100, 100, 240, 160]);
+  const walled = text(fuseDetections([
+    balloon([90, 90, 170, 170]), balloon([175, 90, 250, 170]),
+    block([100, 100, 160, 160]), block([180, 100, 240, 160]),
+  ], { ran: ['rtdetr', 'koharu'] }));
+  assert.equal(walled.length, 2);
+});
+
+test('boxes in two different balloons are two regions however they overlap', () => {
+  const rows = text(fuseDetections([
+    balloon([100, 100, 200, 300]), balloon([190, 100, 300, 300]),
+    r('rtdetr', 'text_bubble', 0.9, [120, 120, 200, 280]),
+    r('ctd', 'text', 0.9, [185, 120, 280, 280]),
+  ], { ran: ['rtdetr', 'ctd'] }));
+  assert.equal(rows.length, 2);
 });
 
 test('one column of a bubble is a fragment of its text box, not another region', () => {
@@ -133,5 +181,8 @@ test('the smallest saved region follows the page resolution', () => {
     ctd: [],
   }, 654, 919);
   assert.equal(small.length, 1);
-  assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.9, [121, 198, 138, 282])], ctd: [] }, 4000, 6000).length, 0);
+  // Under the floor: speckle the detector is unsure of is dropped, short dialogue it is sure of is kept.
+  assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.6, [121, 198, 138, 282])], ctd: [] }, 4000, 6000).length, 0);
+  assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.9, [121, 198, 138, 282])], ctd: [] }, 4000, 6000).length, 1);
+  assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.9, [121, 198, 130, 282])], ctd: [] }, 4000, 6000).length, 0);
 });

@@ -57,8 +57,10 @@ export type MemoryTypeDescription = {
 };
 const DESCRIPTION_VERSION = "compact-type-v1";
 const descriptionSchema = objectSchema({
-  description: { type: "string", minLength: 1, maxLength: 700 },
-  conflicts: { type: "string", maxLength: 250 },
+  // The prompt asks for 700 and 250; the schema allows overrun and the result
+  // is trimmed, because a strict cap fails the whole call on a long answer.
+  description: { type: "string", minLength: 1, maxLength: 1400 },
+  conflicts: { type: "string", maxLength: 1000 },
 });
 export function memorySettings(seriesId: string): {
   revision: number;
@@ -337,7 +339,11 @@ export async function summarizeTypeDescription(
       descriptionSchema,
     );
   }
-  const result = { ...identity, ...summary! };
+  const result = {
+    ...identity,
+    description: summary!.description.slice(0, 700),
+    conflicts: summary!.conflicts.slice(0, 250),
+  };
   sqlite
     .prepare(
       `INSERT INTO director_type_descriptions(series_id,type_id,fingerprint,data,updated_at) VALUES(?,?,?,?,?)

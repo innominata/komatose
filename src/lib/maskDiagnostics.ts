@@ -1,11 +1,12 @@
-import { maskRegion } from './maskRegions';
+import { maskPlacement, maskRegion } from './maskRegions';
 import type { LineRow } from './types';
 import type { PageData, RegionData } from './workflow';
 
 export function maskInputs(lines: LineRow[], region: (id: string) => { data: RegionData; revision: number }) {
   return lines.map((line, index) => {
     const doc = region(line.id);
-    return { id: line.id, number: index + 1, revision: doc.revision, polygon: maskRegion(line, doc.data) };
+    return { id: line.id, number: index + 1, revision: doc.revision, polygon: maskRegion(line, doc.data),
+      placement: maskPlacement(line, doc.data) };
   }).filter(row => row.polygon.length >= 3);
 }
 

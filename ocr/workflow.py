@@ -1132,6 +1132,68 @@ def grow_mask_at(mask, px, py, radius=1):
     return np.maximum(mask, grown)
 
 
+FOCUS_SIDE = 1024
+FOCUS_MARGIN = 64
+
+
+def focus_window(box, H, W):
+    """A window around one region read at the page's own resolution.
+
+    The lettering models take a 1024 px input, so a whole page is scaled down and
+    large or faint lettering can come back in fragments. The window is the region
+    grown about its middle to 1024 px on each axis (or the region plus a margin
+    when it is larger), moved back inside the page.
+    """
+    x0, y0, x1, y1 = box
+    def span(lo, hi, size):
+        want = max(FOCUS_SIDE, hi - lo + 2 * FOCUS_MARGIN)
+        if want >= size:
+            return 0, size
+        start = min(max(0, (lo + hi) // 2 - want // 2), size - want)
+        return start, start + want
+    wx0, wx1 = span(x0, x1, W)
+    wy0, wy1 = span(y0, y1, H)
+    return wx0, wy0, wx1, wy1
+
+
+def focused_mask(img, req, propose):
+    """Re-detect one region in its own window and replace only its part of the saved mask."""
+    H, W = img.shape[:2]
+    index = int(req['focus'])
+    regions = req.get('regions') or []
+    if not 0 <= index < len(regions) or len(regions[index]) < 3:
+        raise ValueError('Select a region to detect')
+    region = regions[index]
+    vertices = np.array([[round(p['x']*W), round(p['y']*H)] for p in region], np.int32)
+    allowed = np.zeros((H, W), np.uint8)
+    cv2.fillPoly(allowed, [vertices], 255)
+    ys, xs = np.nonzero(allowed)
+    if not len(xs):
+        raise ValueError('The region is empty')
+    wx0, wy0, wx1, wy1 = focus_window((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1), H, W)
+    ww, wh = wx1 - wx0, wy1 - wy0
+    local = [{'x': (p['x']*W - wx0) / ww, 'y': (p['y']*H - wy0) / wh} for p in region]
+    placements = req.get('regionPlacements') or []
+    placement = placements[index] if index < len(placements) else None
+    found, diagnostics, meta = propose(
+        np.ascontiguousarray(img[wy0:wy1, wx0:wx1]), [local], req.get('expansion', 5),
+        engine=req.get('maskEngine', 'auto'), device=req.get('device', 'cpu'), placements=[placement])
+    import mask_fit
+    bound = allowed
+    if placement in ('inside', 'outside'):
+        bound = cv2.dilate(allowed, mask_fit.disc(mask_fit.reach(req.get('expansion', 5), mask_fit.page_scale(wh, ww)) + 1))
+    mask = np.zeros((H, W), np.uint8)
+    if req.get('mask'):
+        mask = cv2.imread(req['mask'], cv2.IMREAD_GRAYSCALE)
+        if mask is None or mask.shape != (H, W):
+            raise ValueError('Removal mask dimensions do not match prepared source')
+    # The region's old proposal goes; the rest of the saved mask, hand edits included, stays.
+    mask[allowed > 0] = 0
+    mask[wy0:wy1, wx0:wx1] |= cv2.bitwise_and(found, bound[wy0:wy1, wx0:wx1])
+    diagnostics = [{**entry, 'region': index} for entry in diagnostics]
+    return mask, diagnostics, {**meta, 'window': [wx0, wy0, wx1, wy1]}
+
+
 def removal_mask(img, req):
     H, W = img.shape[:2]
     if req.get('detect'):
@@ -1145,8 +1207,12 @@ def removal_mask(img, req):
             raise ValueError('Define a region before detecting a removal mask')
         from lettering import propose, resolve_engine
         engine = req.get('maskEngine', 'auto')
-        mask, diagnostics, meta = propose(
-            img, req['regions'], req.get('expansion', 5), engine=engine, device=req.get('device', 'cpu'))
+        if req.get('focus') is not None:
+            mask, diagnostics, meta = focused_mask(img, req, propose)
+        else:
+            mask, diagnostics, meta = propose(
+                img, req['regions'], req.get('expansion', 5), engine=engine, device=req.get('device', 'cpu'),
+                placements=req.get('regionPlacements'))
         req['_maskDiagnostics'] = diagnostics
         req['_maskMeta'] = meta
         req['_requestedMaskEngine'] = engine
@@ -1179,9 +1245,13 @@ def removal_mask(img, req):
             cv2.polylines(mask, [points], False, color, radius*2, cv2.LINE_8)
         for p in points:
             cv2.circle(mask, tuple(p), radius, color, -1)
-    if req.get('detect'):
+    if req.get('detect') and req.get('focus') is None:
         # Clip the complete proposal, including padding and any supplied strokes.
-        mask = cv2.bitwise_and(mask, allowed)
+        # A fitted region may reach past its box to take a glyph or outline the
+        # box missed, so it is clipped to its own fitted reach instead.
+        import mask_fit
+        bound = cv2.dilate(allowed, mask_fit.disc(mask_fit.reach(req.get('expansion', 5), mask_fit.page_scale(H, W)) + 1))
+        mask = cv2.bitwise_and(mask, bound)
     for protected in req.get('excludeRegions', []):
         if len(protected) >= 3:
             vertices = np.array([[round(p['x']*W), round(p['y']*H)] for p in protected], np.int32)
@@ -1260,6 +1330,15 @@ def balloon_fills(img, mask):
             yield (slice(y, y+h), slice(x, x+w)), selected, colors[ids[0]]
 
 
+def _flat_paper(samples, sigma):
+    """Whether every channel of the ring around a hole sits at one tone."""
+    if sigma is None or len(samples) < 32:
+        return False
+    import mask_fit
+    tolerance = mask_fit.paper_tolerance(sigma)
+    return all(mask_fit.flat_tone(samples[:, c], tolerance) is not None for c in range(samples.shape[1]))
+
+
 def clean(img, mask, req):
     if not mask.any():
         raise ValueError('The approved removal mask is empty')
@@ -1286,6 +1365,10 @@ def clean(img, mask, req):
         if not mask.any():
             return result, 'flat'
     # Work locally around nearby lettering, keeping large strips bounded in memory.
+    sigma = None
+    if method == 'auto':
+        import mask_fit
+        sigma = mask_fit.noise_sigma(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
     grouped = cv2.dilate(mask, np.ones((31,31),np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(grouped)
     for i in range(1,n):
@@ -1296,6 +1379,10 @@ def clean(img, mask, req):
         ring = (cv2.dilate(m,np.ones((9,9),np.uint8))>0)&(mask[y0:y1,x0:x1]==0)
         samples = crop[ring]
         selected = 'lama' if method == 'auto' else method
+        if method == 'auto' and _flat_paper(samples, sigma):
+            # One tone all round, in any colour: a fill matches it exactly,
+            # where an inpainter drifts a level or two and can draw marks.
+            selected = 'flat'
         if selected == 'flat':
             if len(samples)<5: raise ValueError('No background samples; refine the removal mask')
             fill = np.broadcast_to(np.median(samples,axis=0).astype(np.uint8),crop.shape)

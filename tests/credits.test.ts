@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import JSZip from "jszip";
-import { parseSeriesCredits, serializeSeriesCredits } from "../src/lib/credits";
+import { parseSeriesCredits, parseSeriesCreditImageId, serializeSeriesCredits, withSeriesCreditImages } from "../src/lib/credits";
 import { exportBlockers } from "../src/lib/workflow";
 
 const root = await mkdtemp("/tmp/scan-credits-");
@@ -239,4 +239,18 @@ test("auto-crop skips credits pages", async () => {
 after(async () => {
   sqlite.close();
   await rm(root, { recursive: true, force: true });
+});
+
+test("the web viewer adds series credits the chapter has not added itself", () => {
+	const credit = { hash: "a".repeat(64), filename: "c.png", originalName: "c.png", width: 10, height: 20 };
+	const page = { id: "p1", episodeId: "e1", role: "page", width: 40, height: 60 } as any;
+	const ownPost = { id: "p2", episodeId: "e1", role: "post-credits" } as any;
+	const s = { credits: { pre: credit, post: credit }, createdAt: 1, updatedAt: 2 };
+	const shown = withSeriesCreditImages([page, ownPost], s, "e1");
+	assert.deepEqual(shown.map((img) => img.id), ["series-credit:pre:e1", "p1", "p2"]);
+	assert.equal(shown[0].role, "pre-credits");
+	assert.deepEqual([shown[0].width, shown[0].height], [40, 80], "credits match the story page width");
+	assert.deepEqual(parseSeriesCreditImageId(shown[0].id), { kind: "pre", episodeId: "e1" });
+	assert.equal(parseSeriesCreditImageId("p1"), null);
+	assert.deepEqual(withSeriesCreditImages([page], { ...s, credits: {} }, "e1"), [page]);
 });

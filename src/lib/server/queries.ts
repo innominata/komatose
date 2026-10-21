@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { CommentRow, Episode, ImageRow, LineRow, LineType, Series } from '../types';
-import { parsePageRole, parseSeriesCredits } from '../credits';
+import { parsePageRole, parseSeriesCredits, withSeriesCreditImages } from '../credits';
 import { parseGlossary } from '../glossary';
 import { stickyMainText } from '../prCorrection';
 import { db } from './db';
@@ -203,7 +203,7 @@ export async function loadPreviewByToken(token: string): Promise<PreviewPayload 
 	return {
 		seriesTitle: s.title,
 		episodeTitle: ep.title,
-		images: imgs,
+		images: withSeriesCreditImages(imgs, s, ep.id),
 		lines
 	};
 }

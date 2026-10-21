@@ -28,8 +28,9 @@ export {
 } from "../textTransform";
 import {
   MAX_SKEW,
-  inverseTextMatrix,
+  inverseLayerMatrix,
   applyMatrixAbout,
+  rowShearSvg,
   textTransformSvg,
 } from "../textTransform";
 
@@ -342,7 +343,8 @@ export function layoutKey(
     }),
   );
 }
-type Token = { text: string; alone?: boolean; breakBefore?: boolean };
+/** `gap` is the whitespace before the word, kept when both words land on the same row. */
+type Token = { text: string; gap?: string; alone?: boolean; breakBefore?: boolean };
 export function dictionaryFragments(
   word: string,
   width: number,
@@ -391,8 +393,12 @@ export async function fitText(
     (Math.min(...poly.map((p) => p.x)) + Math.max(...poly.map((p) => p.x))) / 2;
   const cy =
     (Math.min(...poly.map((p) => p.y)) + Math.max(...poly.map((p) => p.y))) / 2;
-  // Wrap in un-rotated, un-skewed text space; the SVG re-applies the transform about the same centre.
-  const inverse = inverseTextMatrix(style);
+  // Wrap in un-rotated, un-skewed text space; the SVG re-applies the layer transform about the same centre.
+  // Horizontal skew shears each line about its own middle, so it only widens lines.
+  const inverse = inverseLayerMatrix(style);
+  const shear = Math.abs(Math.tan(((style.skewX ?? 0) * Math.PI) / 180));
+  const glyphHeight = (size: number) =>
+    ((font.ascent - font.descent) / font.unitsPerEm) * size * px;
   const centre = { x: cx, y: cy };
   poly = poly.map((p) => applyMatrixAbout(inverse, p, centre));
   const minY = Math.min(...poly.map((p) => p.y)),
@@ -411,7 +417,8 @@ export async function fitText(
     return (
       (unitWidths.get(text)! * size * px) / font.unitsPerEm +
       (style.emphasis === "italic" ? size * px * 0.22 : 0) +
-      (style.emphasis === "bold" ? size * px * 0.04 : 0)
+      (style.emphasis === "bold" ? size * px * 0.04 : 0) +
+      shear * glyphHeight(size)
     );
   };
   const minHeight =
@@ -431,8 +438,14 @@ export async function fitText(
     .replace(/\r\n?/g, "\n")
     .split("\n")
     .entries()) {
-    const words = paragraph.trim().split(/\s+/);
-    for (const [w, word] of words.entries()) {
+    // Keep runs of spaces between words, and before a paragraph's first word so spaces can
+    // nudge a line sideways; only wrapped line breaks swallow them.
+    const words = [...paragraph.trimEnd().matchAll(/(\s*)(\S+)/g)].map(([, gap, word], w) => {
+      const spaces = gap.replace(/\t/g, "    ").replace(/\s/g, " ");
+      return w === 0 ? { word: spaces + word, gap: "" } : { word, gap: spaces };
+    });
+    if (!words.length) words.push({ word: "", gap: "" });
+    for (const [w, { word, gap }] of words.entries()) {
       const parts =
         measure(word, style.minSize) > maxWidthAtMin && maxWidthAtMin > 0
           ? dictionaryFragments(word, maxWidthAtMin, (s) =>
@@ -442,10 +455,11 @@ export async function fitText(
       if (parts) {
         hyphenated = true;
         for (const part of parts)
-          tokens.push({ text: part, alone: true, breakBefore: true });
+          tokens.push({ text: part, gap, alone: true, breakBefore: true });
       } else
         tokens.push({
           text: word,
+          gap,
           breakBefore: i > 0 && w === 0,
           alone: !word,
         });
@@ -508,7 +522,7 @@ export async function fitText(
             (tokens[end].breakBefore || tokens[end].alone || tokens[at].alone)
           )
             break;
-          text += (end > at ? " " : "") + tokens[end].text;
+          text += (end > at ? tokens[end].gap || " " : "") + tokens[end].text;
           const actual = measure(text, size);
           if (actual > width) break;
           const tail = solve(end + 1, row + 1);
@@ -551,9 +565,13 @@ export async function fitText(
   const warped = !!(box && hasTextWarp(style));
   const italic = style.emphasis === "italic";
   const paths: string[] = [];
+  const rowMiddle = ((font.ascent + font.descent) / 2) * scale;
+  const overhang = (shear * glyphHeight(chosen)) / 2;
   for (const row of rows) {
     const run = font.layout(row.text);
-    let x = row.x;
+    const middle = row.baseline - rowMiddle;
+    paths.push(`<g data-row-y="${middle}" transform="${rowShearSvg(style.skewX ?? 0, middle)}">`);
+    let x = row.x + overhang;
     for (let i = 0; i < run.glyphs.length; i++) {
       const p = run.positions[i];
       const originX = x + p.xOffset * scale;
@@ -577,6 +595,7 @@ export async function fitText(
       }
       x += p.xAdvance * scale;
     }
+    paths.push("</g>");
   }
   const bold = style.emphasis === "bold" ? chosen * px * 0.035 : 0;
   const glyphs = paths.join("");

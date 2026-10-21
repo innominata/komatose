@@ -28,7 +28,7 @@ test("overlapping text of different sizes remains distinct; duplicate boxes coll
   assert.ok(result[1].ocr.width < 50);
 });
 
-test("detector boxes under 30px on either axis are not created", () => {
+test("detector boxes under 30px are not created unless the detector is sure of their text", () => {
   assert.equal(MIN_AUTO_REGION_PX, 30);
   const rows = regionsFromDetection(
     [
@@ -38,14 +38,21 @@ test("detector boxes under 30px on either axis are not created", () => {
       { cls: "bubble", box: [200, 200, 220, 280], score: 0.9 },
       { cls: "text_bubble", box: [300, 300, 315, 360], score: 0.99 },
       { cls: "bubble", box: [280, 280, 400, 420], score: 0.8 },
+      { cls: "text_bubble", box: [450, 10, 470, 80], score: 0.5 },
+      { cls: "text_bubble", box: [450, 100, 460, 180], score: 0.95 },
     ],
     500,
     500,
   );
-  assert.equal(rows.length, 2);
-  assert.ok(rows.every((row) => row.place.width >= 30 && row.place.height >= 30));
-  assert.ok(rows.some((row) => row.place.width < 50));
-  assert.ok(rows.some((row) => row.place.width > 100));
+  // A sure text box is kept down to half the floor; an unsure one, a bubble
+  // fallback and anything under half the floor are not.
+  const widths = rows.map((row) => Math.round(row.place.width)).sort((a, b) => a - b);
+  assert.equal(rows.length, 4);
+  assert.ok(rows.every((row) => row.place.width >= 15 && row.place.height >= 15));
+  assert.ok(!rows.some((row) => row.place.left > 440), "unsure or tiny boxes on the right are dropped");
+  assert.ok(widths[0] < 30);
+  // The kept text box is the balloon's lettering, so its bubble box is not read twice.
+  assert.ok(!rows.some((row) => row.place.width > 100));
 });
 
 test("absent, displaced, invalid and out-of-page geometry uses exact region bounds", () => {

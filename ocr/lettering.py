@@ -107,13 +107,19 @@ def regions_from_mask(mask):
         bw, bh = x1 - x0, y1 - y0
         if bw < 6 or bh < 6 or bw * bh > page * 0.45:
             continue
-        if int(np.count_nonzero(binary[y0:y1, x0:x1])) < 16:
+        block = binary[y0:y1, x0:x1]
+        if int(np.count_nonzero(block)) < 16:
             continue
+        dt = cv2.distanceTransform(block, cv2.DIST_L2, 3)
+        ridge = (dt > 0) & (dt >= cv2.dilate(dt, np.ones((3, 3), np.uint8)))
         regions.append({
             'cls': 'text',
             'backend': 'koharu',
             'score': 0.8,
             'box': [float(x0), float(y0), float(x1), float(y1)],
+            # Lettering is strokes on paper; a solid shape fills its box with thick strokes.
+            'fill': round(float(np.mean(block)), 3),
+            'stroke': round(float(2 * np.median(dt[ridge])) if np.any(ridge) else 0.0, 1),
         })
     return regions
 
@@ -151,11 +157,17 @@ def _region_diagnostics(index, allowed, clipped, uncertain=False):
     return {'region': index, 'reasons': reasons, 'pixels': pixels}
 
 
-def propose_koharu(image, regions, expansion=5, device='cpu'):
+def _placement(placements, index):
+    value = placements[index] if placements and index < len(placements) else None
+    return value if value in ('inside', 'outside') else None
+
+
+def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
     import koharu_mask
-    raw = koharu_mask.predict(image, device)
-    expanded = _apply_expansion(raw, expansion)
+    import mask_fit
     height, width = image.shape[:2]
+    raw = koharu_mask.predict(image, device)
+    gray, page = mask_fit.page_statistics(image) if any(_placement(placements, i) for i in range(len(regions))) else (None, None)
     result = np.zeros((height, width), np.uint8)
     diagnostics = []
     for index, poly in enumerate(regions):
@@ -163,12 +175,17 @@ def propose_koharu(image, regions, expansion=5, device='cpu'):
         if not np.any(allowed):
             diagnostics.append({'region': index, 'reasons': ['empty coverage'], 'pixels': 0})
             continue
-        clipped = cv2.bitwise_and(expanded, allowed)
+        placement = _placement(placements, index)
+        if placement:
+            clipped = mask_fit.fit_region(gray, raw, allowed, placement, expansion, page)
+        else:
+            # Unknown place: plain dilation, keeping glyphs that poke out of the box whole.
+            clipped = mask_fit.fit_region(None, raw, allowed, None, expansion, {'scale': mask_fit.page_scale(height, width)})
         result |= clipped
-        diagnostics.append(_region_diagnostics(index, allowed, clipped))
+        diagnostics.append({**_region_diagnostics(index, allowed, clipped), **({'placement': placement} if placement else {})})
     meta = {
         'engine': 'koharu',
-        'version': koharu_mask.VERSION,
+        'version': koharu_mask.VERSION + (f'+{mask_fit.VERSION}' if page else ''),
         'backend': koharu_mask.runtime_backend(device),
         'repo': koharu_mask.REPO,
         'revision': koharu_mask.REVISION,
@@ -258,15 +275,17 @@ def refine(probability, image, boxes):
     return mask, rejected
 
 
-def propose(image, regions, expansion=5, engine='auto', device='cpu'):
+def propose(image, regions, expansion=5, engine='auto', device='cpu', placements=None):
     resolved = resolve_engine(engine)
     if resolved == 'koharu':
-        return propose_koharu(image, regions, expansion, device)
+        return propose_koharu(image, regions, expansion, device, placements)
     import detect
+    import mask_fit
     height, width = image.shape[:2]
     full_boxes, full_probability = detect.detect_ctd(image, want_mask=True, device=device)
     result = np.zeros((height, width), np.uint8)
     diagnostics = []
+    gray = page = None
     for index, poly in enumerate(regions):
         allowed = np.zeros((height, width), np.uint8)
         vertices = np.array([[round(p['x']*width), round(p['y']*height)] for p in poly], np.int32)
@@ -291,10 +310,17 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu'):
         # provides context, never authority to select neighboring artwork.
         clip = allowed[top:bottom, left:right]
         mask, uncertain = refine(probability, crop, boxes)
-        radius = max(0, min(20, int(expansion)))
-        if radius:
-            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*radius+1,)*2))
-        clipped = cv2.bitwise_and(mask, clip)
+        placement = _placement(placements, index)
+        if placement:
+            if page is None:
+                gray, page = mask_fit.page_statistics(image)
+            local = {**page, 'strong': page['strong'][top:bottom, left:right]}
+            clipped = mask = mask_fit.fit_region(gray[top:bottom, left:right], mask, clip, placement, expansion, local)
+        else:
+            radius = max(0, min(20, int(expansion)))
+            if radius:
+                mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*radius+1,)*2))
+            clipped = cv2.bitwise_and(mask, clip)
         pixels = int(np.count_nonzero(clipped))
         edge = cv2.subtract(clip, cv2.erode(clip, np.ones((3,3), np.uint8), borderType=cv2.BORDER_CONSTANT, borderValue=0))
         reasons = []
@@ -304,11 +330,11 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu'):
             reasons.append('boundary clipping')
         if uncertain:
             reasons.append('uncertain components')
-        diagnostics.append({'region': index, 'reasons': reasons, 'pixels': pixels})
+        diagnostics.append({'region': index, 'reasons': reasons, 'pixels': pixels, **({'placement': placement} if placement else {})})
         result[top:bottom, left:right] |= clipped
     meta = {
         'engine': 'ctd',
-        'version': VERSION,
+        'version': VERSION + (f'+{mask_fit.VERSION}' if page else ''),
         'backend': 'CPU ONNX' if device == 'cpu' else f'{device} · GPU · PyTorch',
         'repo': detect.CTD_REPO,
         'revision': detect.CTD_FILE,
