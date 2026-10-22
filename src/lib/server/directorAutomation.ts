@@ -2052,7 +2052,7 @@ async function readPage(
       // only where the text detector finds lettering, snapped to that lettering.
       const verified = [];
       for (const item of result.regions) {
-        const found = await letteringInBox(ctx, imageId, item);
+        const found = await letteringInBox(ctx, imageId, item, { reason: "Checking where Director says text was missed" });
         if (found) verified.push(found);
         else
           emit(ctx, imageId, "region:rejected", {
@@ -3172,6 +3172,7 @@ export async function letteringInBox(
   ctx: AutomationContext,
   imageId: string,
   box: Box,
+  purpose: DetectPurpose = { reason: "Checking a box for lettering" },
 ): Promise<Box | null> {
   // Look past the proposal: a box the model drew around part of a text must
   // grow to the whole of it. Masks are clipped to the queried area, so asking
@@ -3185,7 +3186,7 @@ export async function letteringInBox(
     w: Math.min(1, box.x + box.w + reach) - left,
     h: Math.min(1, box.y + box.h + reach) - top,
   };
-  const mask = await letteringMask(ctx, imageId, window);
+  const mask = await letteringMask(ctx, imageId, window, purpose);
   if (!mask) return box;
   const { width, height, x0, y0, pageWidth, pageHeight } = mask;
   const bx0 = Math.max(0, Math.floor(box.x * pageWidth) - x0),
@@ -3307,7 +3308,7 @@ async function checkRegionOverlay(
     if (item.verdict === "no-lettering" && line.sourceState !== "ignored") unlettered.set(line.id, item.reason);
     if (item.verdict !== "cuts-lettering" && item.verdict !== "uncertain") continue;
     const box = { x: line.x!, y: line.y!, w: line.w!, h: line.h! };
-    const fit = await letteringInBox(ctx, imageId, box);
+    const fit = await letteringInBox(ctx, imageId, box, { lineId: line.id, reason: "Finding the lettering the box cuts off" });
     if (!fit) continue;
     // Grow only: the box keeps its own extent and takes the detected lettering past it.
     const x = Math.min(box.x, fit.x), y = Math.min(box.y, fit.y);
@@ -3335,12 +3336,18 @@ async function checkRegionOverlay(
   await dropNonLettering(ctx, imageId, call, capture.raw, fresh, unlettered, "Region box check");
 }
 
-/** Detected lettering in a window: a binary mask at page resolution, cropped to the window. */
-async function letteringMask(ctx: AutomationContext, imageId: string, box: Box) {
+type DetectPurpose = { lineId?: string; reason: string };
+
+/**
+ * Detected lettering in a window: a binary mask at page resolution, cropped to the window.
+ * The text detector can take many seconds on CPU, so each run is logged before it starts.
+ */
+async function letteringMask(ctx: AutomationContext, imageId: string, box: Box, purpose: DetectPurpose) {
   const prepared = pageData(imageId).data.prepared;
   if (!prepared) return null;
   const operation = ctx.imageOperation ?? runWorkflowPng;
   const { x, y, w, h } = box;
+  emit(ctx, imageId, "region:detect", { ...purpose, box: [x, y, w, h] });
   const result = await operation(
     {
       cmd: "mask",
@@ -3354,6 +3361,12 @@ async function letteringMask(ctx: AutomationContext, imageId: string, box: Box) 
     },
     ctx.signal,
   );
+  emit(ctx, imageId, "region:detected", {
+    ...purpose,
+    seconds: typeof result.result?.seconds === "number" ? Math.round(result.result.seconds * 10) / 10 : undefined,
+    backend: result.result?.backend,
+    cached: result.result?.cached === true,
+  });
   const { data, info } = await sharp(await readAsset(result.artifact))
     .greyscale()
     .raw()
@@ -3438,7 +3451,7 @@ export async function extendClippedRegions(
       w: Math.min(1, box.x + box.w + reach) - left,
       h: Math.min(1, box.y + box.h + reach) - top,
     };
-    const mask = await letteringMask(ctx, imageId, window);
+    const mask = await letteringMask(ctx, imageId, window, { lineId: line.id, reason: "Looking for lettering that runs past the box" });
     if (!mask) return [];
     const { width, height, x0, y0, pageWidth, pageHeight } = mask;
     // Screentone is often detected as lettering; eroding first keeps it from joining a cluster.
@@ -3576,7 +3589,7 @@ export async function relocateEmptyRegions(
     // English-only regions are removed after text correction; never move them onto lettering.
     if (!keepEnglish && latinOrNumbersOnly(line.source ?? "")) continue;
     const box = { x: line.x, y: line.y, w: line.w, h: line.h };
-    const mask = await letteringMask(ctx, imageId, box);
+    const mask = await letteringMask(ctx, imageId, box, { lineId: line.id, reason: "Checking the box still holds lettering" });
     if (!mask) return [];
     const { width, height, x0, y0, pageWidth, pageHeight } = mask;
     const on = erode(mask.on, width, height, 1);

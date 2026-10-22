@@ -1,7 +1,9 @@
 """Koharu SAM-TS-L full-page text removal proposals (publisher preprocessing)."""
+import hashlib
 import importlib.util
 import os
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -97,8 +99,32 @@ def _load(device):
     return _MODELS[key]
 
 
+# Recent full-page predictions by page pixels. Callers ask for the same page
+# once per region (the box only clips the result), and on CPU each pass costs
+# around 20 seconds, so repeats are served from here.
+_PREDICTIONS = OrderedDict()
+_PREDICTION_LIMIT = 4
+# Whether the latest predict() was served from the cache, for the caller's log.
+LAST_CACHED = False
+
+
 def predict(image, device='cpu'):
     """Return a full-page uint8 mask in source dimensions before region clipping."""
+    key = (hashlib.blake2b(np.ascontiguousarray(image).tobytes(), digest_size=16).hexdigest(), image.shape, str(device))
+    global LAST_CACHED
+    cached = _PREDICTIONS.get(key)
+    LAST_CACHED = cached is not None
+    if cached is not None:
+        _PREDICTIONS.move_to_end(key)
+        return cached.copy()
+    mask = _predict(image, device)
+    _PREDICTIONS[key] = mask
+    while len(_PREDICTIONS) > _PREDICTION_LIMIT:
+        _PREDICTIONS.popitem(last=False)
+    return mask.copy()
+
+
+def _predict(image, device):
     import torch
     from PIL import Image
 

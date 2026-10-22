@@ -20,6 +20,7 @@ import {
 	invalidateTorchProbe,
 	readDevicePrefs,
 	setDevicePref,
+	setDeviceDisabled,
 	setTorchVariant,
 	torchVariantPref,
 	type TorchVariant,
@@ -147,6 +148,7 @@ function deviceState() {
  *   { action: 'set-detector', setup, conf? }   text detector setup id (ctd+koharu, …) and confidence
  *   { action: 'set-torch-variant', variant }    auto | cpu | cuda | rocm
  *   { action: 'refresh-hardware' }              force a fresh device probe
+ *   { action: 'set-device-disabled', pdev, disabled }  turn a card off for every model
  *   { action: 'build-nvtop' }                   download, patch, and build nvtop into data/tools/nvtop
  *   { action: 'stop-gpu', scope: 'others' }     stop every Komatose model and worker on the GPUs
  *   { action: 'stop-gpu', scope: 'one', kind, id, pid?, label? }
@@ -171,6 +173,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			// choices apply the next time that model starts.
 			if (id === 'cleaning-worker') restartWorkflowWorker();
 			return json({ ok: true, rows: listRegistryRows().map(publicRow), managed: listManagedStatuses(), ...deviceState() });
+		}
+		if (action === 'set-device-disabled') {
+			const disabled = setDeviceDisabled(String(body.pdev || ''), body.disabled === true);
+			// The resident worker may be on the card just turned off; it respawns on the next job.
+			restartWorkflowWorker();
+			return json({ ok: true, disabled, hardware: hardwareSnapshot(), ...deviceState() });
 		}
 		if (action === 'set-gpu-mode') {
 			const enabled = body.enabled === true || body.enabled === 'true';

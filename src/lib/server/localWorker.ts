@@ -70,7 +70,7 @@ function workflowEnv() {
   const env = { ...process.env, SAM2_BUILD_CUDA: "0" };
   const persistent = komatoseGpuEnabled() ? { SCAN_WORKFLOW_PERSISTENT: "1" } : {};
   if (komatoseGpuEnabled() && isAutoChoice(devicePref(WORKFLOW_DEVICE_KEY)))
-    return { ...hipWorkerEnv(env, python()), ...persistent };
+    return { ...hipWorkerEnv(torchDeviceEnv(workflowResolved(), env), python()), ...persistent };
   return { ...torchDeviceEnv(workflowResolved(), env), ...persistent };
 }
 

@@ -53,7 +53,7 @@
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
-      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction'].includes(event.kind)
+      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction','region:detect','region:detected','region:lettering-check','region:non-text','region:move-refused'].includes(event.kind)
     && (event.kind!=='run' || event.detail?.state!=='running' || event.detail?.message==='Starting Director')));
 
   const selectedEvent=$derived(auditEvents.find(event=>event.id===selectedEventId)??auditEvents.at(-1));
@@ -98,7 +98,9 @@
     if (k==='automation:response') return d.output?.safe===false?'bad':d.output?.safe===true?'good':'muted';
     if (k==='typeset:result') return d.errors?.length?'bad':'good';
     if (k==='director:response') return d.textComplete===false?'warn':'good';
-    if (['clean:result','stage:reused','critique:reused','region:created','region:extended'].includes(k)) return 'good';
+    if (['clean:result','stage:reused','critique:reused','region:created','region:extended','region:non-text'].includes(k)) return 'good';
+    if (k==='region:detect'||k==='region:detected') return 'muted';
+    if (k==='region:move-refused'||(k==='region:lettering-check'&&!d.hasLettering)) return 'warn';
     if (['clean:fallback','clean:retry','automation:fallback','memory:warning','finding:unconfirmed','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
     if (['automation:request','director:request','proofreader:images','proofreader:question','request','transcription:attempt','clean:request'].includes(k)) return 'muted';
     return 'info';
@@ -131,6 +133,11 @@
     if(event.kind==='region:removed') return `Removed ${region(detail.lineId)} ("${detail.source}"): ${tidy(detail.reason)}`;
     if(event.kind==='region:rejected') return `Rejected ${region(detail.lineId)}: ${tidy(detail.reason)}`;
     if(event.kind==='region:extended') return `Refit ${region(detail.lineId)} to its lettering`;
+    if(event.kind==='region:detect') return `Text detector: ${String(detail.reason??'checking for lettering').replace(/^./,(c:string)=>c.toLowerCase())}${detail.lineId?` in ${region(detail.lineId)}`:''}…`;
+    if(event.kind==='region:detected') return detail.cached ? 'Text detector reused its result for this page' : `Text detector finished${detail.seconds!=null?` in ${detail.seconds}s`:''}${detail.backend?` on ${detail.backend}`:''}`;
+    if(event.kind==='region:lettering-check') return detail.hasLettering ? `${region(detail.lineId)} does hold lettering; kept` : `${region(detail.lineId)} holds no lettering: ${tidy(detail.reason)}`;
+    if(event.kind==='region:non-text') return `Excluded ${region(detail.lineId)} as artwork, not text`;
+    if(event.kind==='region:move-refused') return `Kept ${region(detail.lineId)} in place: moving it would cover ${region(detail.onto)}`;
     if(event.kind==='region:relocated') return `Moved ${region(detail.lineId)}: ${tidy(detail.reason)}`;
     if(event.kind==='region:read') return `Read the source in ${region(detail.lineId)}: ${tidy(detail.evidence)}`;
     if(event.kind==='type:changed') return `${region(detail.lineId)} type changed: ${detail.before} → ${detail.after}`;

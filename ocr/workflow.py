@@ -1714,7 +1714,8 @@ def run(req):
         return {'pixels': int(np.count_nonzero(mask)), 'backend': meta.get('backend', 'CPU'),
                 'maskEngine': meta.get('engine', 'ctd'), 'maskVersion': meta.get('version', 'ctd-regions-v1'),
                 'maskDiagnostics': req.get('_maskDiagnostics', []),
-                'maskModel': {'repo': meta.get('repo'), 'revision': meta.get('revision')}}
+                'maskModel': {'repo': meta.get('repo'), 'revision': meta.get('revision')},
+                **({'cached': True} if meta.get('cached') else {})}
     if req['cmd']=='clean-flat':
         result = img.copy()
         remaining = mask.copy()

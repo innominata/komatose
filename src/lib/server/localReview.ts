@@ -215,7 +215,7 @@ function childEnv(id: LocalReviewModelId): NodeJS.ProcessEnv {
     return mmprojDeviceEnv(vulkanLlamaEnv(base), device.kind === 'gpu' ? device.name : undefined);
   }
   if (id === 'pp-ocrv5-korean') return { ...base, CUDA_VISIBLE_DEVICES: '', HIP_VISIBLE_DEVICES: '', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: 'True' };
-  if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(base, python());
+  if (komatoseGpuEnabled() && isAutoChoice(devicePref(id))) return hipWorkerEnv(torchDeviceEnv(reviewResolved(id), base), python());
   return torchDeviceEnv(reviewResolved(id), base);
 }
 

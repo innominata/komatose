@@ -382,6 +382,7 @@ export function hardwareSnapshot({ refresh = false } = {}): HardwareSnapshot {
 		imageServer: { bin: sd, found: fileExists(sd) },
 		torch: namedTorch,
 		usage: gpuUsage(),
+		disabled: [...disabledDevices()],
 		nvidia: Boolean(onPath('nvidia-smi')),
 		rocm: existsSync('/opt/rocm') || Boolean(onPath('rocminfo')),
 		at: Date.now(),
@@ -394,14 +395,20 @@ function prefsPath() {
 	return join(dataDir(), 'model-devices.json');
 }
 
-export type DevicePrefsFile = { version: 1; devices: Record<string, string>; torchVariant?: TorchVariant };
+export type DevicePrefsFile = {
+	version: 1;
+	devices: Record<string, string>;
+	torchVariant?: TorchVariant;
+	/** PCI addresses of cards no model may use, such as an iGPU that shares system RAM. */
+	disabled?: string[];
+};
 export type TorchVariant = 'auto' | 'cpu' | 'cuda' | 'rocm';
 
 function readPrefsFile(): DevicePrefsFile {
 	try {
 		const parsed = JSON.parse(readFileSync(prefsPath(), 'utf8')) as DevicePrefsFile;
 		return parsed && typeof parsed === 'object'
-			? { version: 1, devices: parsed.devices || {}, torchVariant: parsed.torchVariant }
+			? { version: 1, devices: parsed.devices || {}, torchVariant: parsed.torchVariant, disabled: parsed.disabled }
 			: { version: 1, devices: {} };
 	} catch {
 		return { version: 1, devices: {} };
@@ -428,6 +435,28 @@ function writePrefsFile(prefs: DevicePrefsFile) {
 	const temp = `${prefsPath()}.tmp`;
 	writeFileSync(temp, JSON.stringify({ ...prefs, version: 1 }, null, 2));
 	renameSync(temp, prefsPath());
+}
+
+/** PCI addresses of the cards turned off on the Hardware page. */
+export function disabledDevices(): Set<string> {
+	return new Set((readPrefsFile().disabled || []).map((key) => pciKey(key)).filter(Boolean));
+}
+
+export function setDeviceDisabled(pdev: string, disabled: boolean): string[] {
+	const key = pciKey(pdev);
+	if (!key) throw Object.assign(new Error('Unknown device'), { status: 400 });
+	const prefs = readPrefsFile();
+	const next = new Set(prefs.disabled || []);
+	if (disabled) next.add(key);
+	else next.delete(key);
+	writePrefsFile({ ...prefs, disabled: [...next].sort() });
+	return [...next].sort();
+}
+
+/** A card the operator turned off: never chosen, by hand or by Auto. */
+function isOff(device: { pdev?: string }, off = disabledDevices()): boolean {
+	const key = pciKey(device.pdev);
+	return Boolean(key && off.has(key));
 }
 
 export function setTorchVariant(variant: TorchVariant): TorchVariant {
@@ -486,7 +515,11 @@ function titled(name: string, card: string): string {
 }
 
 function resolveGgml(choice: string, needMiB: number, legacy?: string): ResolvedDevice {
-	const { devices } = ggmlDevices();
+	const off = disabledDevices();
+	const all = ggmlDevices().devices;
+	const devices = all.filter((device) => !isOff(device, off));
+	const turnedOff = all.find((device) => device.name === choice && isOff(device, off));
+	if (turnedOff) return { ...resolveGgml('auto', needMiB, legacy), reason: `${titled(turnedOff.name, turnedOff.label)} is turned off; using Auto` };
 	if (!isAutoChoice(choice)) {
 		const known = devices.find((device) => device.name === choice);
 		return {
@@ -522,7 +555,12 @@ function resolveGgml(choice: string, needMiB: number, legacy?: string): Resolved
 
 function resolveTorch(choice: string, needMiB: number, env: string, legacy?: string): ResolvedDevice {
 	const info = torchEnvironment(env);
-	const devices = info?.devices || [];
+	const off = disabledDevices();
+	const named = assignTorchPdevs(info?.devices || [], ggmlDevices().devices);
+	const devices = named.filter((device) => !isOff(device, off));
+	const pinned = /^cuda:(\d+)$/.exec(choice);
+	const turnedOff = pinned && named.find((device) => device.index === Number(pinned[1]) && isOff(device, off));
+	if (turnedOff) return { ...resolveTorch('auto', needMiB, env, legacy), reason: `${titled(turnedOff.name, turnedOff.label)} is turned off; using Auto` };
 	const byIndex = (index: number, reason: string): ResolvedDevice => {
 		const known = devices.find((device) => device.index === index);
 		return {

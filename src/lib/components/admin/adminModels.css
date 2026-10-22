@@ -440,6 +440,7 @@ body.admin-dlg-open { overflow: hidden; }
 .amodels .testing-note { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--muted); }
 .amodels .matrix-legend .mx { width: 20px; height: 20px; font-size: 0.8rem; margin-right: 0.3rem; }
 .amodels .devices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+.amodels .devices .device.off { opacity: 0.6; }
 .amodels .resident { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.6rem; align-items: center; }
 .amodels .resident .mem { white-space: nowrap; text-align: right; }
 .amodels .resident .actions { display: inline-flex; gap: 0.45rem; align-items: center; justify-content: flex-end; }

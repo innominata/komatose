@@ -136,6 +136,15 @@
 			toast(String((e as Error).message), 'bad');
 		}
 	}
+	async function setDeviceDisabled(device: (typeof devices)[number], disabled: boolean, input: HTMLInputElement) {
+		try {
+			await hubPost({ action: 'set-device-disabled', pdev: device.pdev, disabled });
+			toast(disabled ? `${device.name} turned off — no model will use it` : `${device.name} can be used again`, disabled ? 'warn' : undefined);
+		} catch (e) {
+			input.checked = !disabled;
+			toast(String((e as Error).message), 'bad');
+		}
+	}
 	async function recheckDevices() {
 		try {
 			await hubPost({ action: 'refresh-hardware' });
@@ -265,8 +274,14 @@
 
 <div class="devices">
 	{#each devices as device (device.name)}
-		<div class="card device">
-			<div class="spread"><h3>{device.name}</h3><span class="muted small">{cardLabel(device.label)}{device.integrated ? ' · integrated' : ''}</span></div>
+		<div class="card device" class:off={device.disabled}>
+			<div class="spread"><h3>{device.name}{#if device.disabled} <span class="chip muted">Off</span>{/if}</h3><span class="muted small">{cardLabel(device.label)}{device.integrated ? ' · integrated' : ''}</span></div>
+			{#if device.pdev}
+				<label class="switch small">
+					<input type="checkbox" checked={!device.disabled} onchange={(e) => void setDeviceDisabled(device, !e.currentTarget.checked, e.currentTarget)} /><span class="track"></span>
+					{device.disabled ? 'Turned off — Auto and model choices skip it' : 'Models may use this card'}
+				</label>
+			{/if}
 			<div class="bar lg">
 				{#each deviceSegments(device) as seg (seg.key)}<span class="seg-{seg.kind}" style="width:{seg.pct}%{seg.color ? `;background:${seg.color}` : ''}" title={seg.title}></span>{/each}
 			</div>

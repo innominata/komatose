@@ -189,6 +189,7 @@ def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
         'backend': koharu_mask.runtime_backend(device),
         'repo': koharu_mask.REPO,
         'revision': koharu_mask.REVISION,
+        'cached': koharu_mask.LAST_CACHED,
     }
     return result, diagnostics, meta
 

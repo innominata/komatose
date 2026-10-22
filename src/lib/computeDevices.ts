@@ -82,6 +82,8 @@ export type HardwareSnapshot = {
 	imageServer: { bin: string; found: boolean };
 	torch: TorchEnvironment[];
 	usage: GpuUsage[];
+	/** PCI addresses of cards turned off on the Hardware page. */
+	disabled?: string[];
 	nvidia: boolean;
 	rocm: boolean;
 	at: number;
@@ -232,7 +234,10 @@ export function deviceOptions(runtime: DeviceRuntime, hw: HardwareSnapshot | nul
 	];
 	if (!hw) return options;
 	const titles = gpuTitles(hw);
-	const push = (device: { name: string; label: string; totalMiB: number; integrated: boolean }) => {
+	const off = new Set((hw.disabled || []).map((key) => pciKey(key)));
+	const push = (device: { name: string; label: string; totalMiB: number; integrated: boolean; pdev?: string }) => {
+		// Cards turned off on the Hardware page are not offered.
+		if (device.pdev && off.has(pciKey(device.pdev))) return;
 		options.push({
 			value: device.name,
 			label: titles.get(device.name) || device.name,

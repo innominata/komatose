@@ -112,11 +112,12 @@ export function reviewVulkanDevice() {
 }
 
 /**
- * HIP index of the second 7900 XTX. ROCm enumerates iGPU as 0, then the two XTXs.
- * PyTorch must not see the iGPU — mixed-device init has segfaulted on this host.
+ * An operator's fixed HIP index list for PyTorch workers, or undefined to let
+ * device resolution pick the card. Never assume an order: ROCm numbering
+ * differs between machines (here the iGPU is last, not first).
  */
-export function hipVisibleDevices() {
-  return process.env.SCAN_HIP_VISIBLE_DEVICES || '2';
+export function hipVisibleDevices(): string | undefined {
+  return process.env.SCAN_HIP_VISIBLE_DEVICES?.trim() || undefined;
 }
 
 export function llmListenPort() {
@@ -357,11 +358,11 @@ export function hipWorkerEnv(env: NodeJS.ProcessEnv = process.env, pythonPath?: 
       splitRuntime = receipt.plan?.profile?.startsWith('rocm-split-') === true;
     } catch { /* Legacy interpreter. */ }
   }
+  // `env` already carries the resolved card's mask; only an operator override replaces it.
   const devices = hipVisibleDevices();
   return {
     ...env,
-    HIP_VISIBLE_DEVICES: devices,
-    CUDA_VISIBLE_DEVICES: devices,
+    ...(devices ? { HIP_VISIBLE_DEVICES: devices, CUDA_VISIBLE_DEVICES: devices } : {}),
     ...(env.HSA_OVERRIDE_GFX_VERSION ? { HSA_OVERRIDE_GFX_VERSION: env.HSA_OVERRIDE_GFX_VERSION } : splitRuntime ? {} : { HSA_OVERRIDE_GFX_VERSION: '11.0.0' }),
     SAM2_BUILD_CUDA: '0',
   };

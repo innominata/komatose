@@ -8,7 +8,7 @@ import {
 } from '$lib/modelRegistry';
 import type { ProviderOperation } from '$lib/providerCatalog';
 import { INSTALL_TARGETS, type InstallTarget } from '$lib/installCatalog';
-import { shownDevice, type GpuUsage, type HardwareSnapshot, type ResolvedDevice } from '$lib/computeDevices';
+import { pciKey, shownDevice, type GpuUsage, type HardwareSnapshot, type ResolvedDevice } from '$lib/computeDevices';
 import type { NvtopStatus } from '$lib/nvtopStatus';
 import { nameResidents, type KnownProcess } from '$lib/gpuResidents';
 import { collectGpuServices, residentControl, type GpuStop, type GpuWorkerRow } from '$lib/gpuRelease';
@@ -534,6 +534,9 @@ export type DeviceRow = {
 	totalMiB: number;
 	usedMiB: number;
 	integrated: boolean;
+	/** PCI address, when known; what a card is turned off by. */
+	pdev?: string;
+	disabled?: boolean;
 	users: DeviceUser[];
 };
 
@@ -585,13 +588,17 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 
 	const rows: DeviceRow[] = [];
 	const seen = new Set<string>();
+	const off = new Set((data.hardware.disabled || []).map((key) => pciKey(key)));
 	for (const usage of data.usage) {
 		const known = ggml.find((device) => device.name === usage.name);
 		seen.add(usage.name);
 		const residents = usage.residents ? nameResidents(usage.residents, knownProcesses) : undefined;
+		const pdev = pciKey(usage.pdev || known?.pdev);
 		rows.push({
 			name: title(usage.name),
 			label: known?.label || usage.name,
+			pdev: pdev || undefined,
+			disabled: Boolean(pdev && off.has(pdev)),
 			totalMiB: usage.totalMiB,
 			usedMiB: usage.usedMiB,
 			integrated: usage.integrated ?? known?.integrated ?? false,
@@ -600,9 +607,12 @@ export function deviceRows(data: HubData | null): DeviceRow[] {
 	}
 	for (const device of ggml) {
 		if (seen.has(device.name)) continue;
+		const pdev = pciKey(device.pdev);
 		rows.push({
 			name: title(device.name),
 			label: device.label,
+			pdev: pdev || undefined,
+			disabled: Boolean(pdev && off.has(pdev)),
 			totalMiB: device.totalMiB,
 			usedMiB: Math.max(0, device.totalMiB - device.freeMiB),
 			integrated: device.integrated,
