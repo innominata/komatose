@@ -269,7 +269,7 @@ let respond: (purpose: string, data: any) => any = (purpose, data) => {
       conflicts: "",
     };
   if (purpose === "inspect-region-presentation")
-    return { observations: data.regions.map((line:any)=>({lineId:line.id,enclosure:"bubble",handwritten:false,role:"speech",reason:"Visible surrounding speech balloon."})) };
+    return { observations: data.regions.map((line:any)=>({lineId:line.id,enclosure:"bubble",handwritten:false,letteringVisible:true,role:"speech",reason:"Visible surrounding speech balloon."})) };
   if (purpose === "classify-regions")
     return {
       classifications: data.regions.map((line: any) => ({
@@ -966,7 +966,7 @@ test("outside handwritten speech is corrected to Aside using physical evidence, 
       const start=requests.length;
       respond=(purpose,data)=>{
         const result=normal(purpose,data);
-        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,role:'speech',reason:'Handwritten speech outside the adjacent bubble; short speaker leader only.'}]};
+        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,letteringVisible:true,role:'speech',reason:'Handwritten speech outside the adjacent bubble; short speaker leader only.'}]};
         if(purpose==='classify-regions') {
           classifications++;
           assert.equal(data.regions[0].detectionKind,'free');
@@ -991,7 +991,7 @@ test("outside handwritten speech is corrected to Aside using physical evidence, 
       const region=getDoc<any>(`region:${page.lineId}`,{});
       putDoc(page.episode.id,region.id,{...region.data,detectionKind:'free'},region.revision);
       respond=(purpose,data)=>purpose==='inspect-region-presentation'
-        ?{observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,role:'speech',reason:'Outside speech, no enclosing border.'}]}
+        ?{observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,letteringVisible:true,role:'speech',reason:'Outside speech, no enclosing border.'}]}
         :normal(purpose,data);
       const result=await runPage(page);
       assert.equal(result.overview.pages[0].state,'unresolved');
@@ -1005,13 +1005,31 @@ test("outside handwritten speech is corrected to Aside using physical evidence, 
       putDoc(page.episode.id,region.id,{...region.data,detectionKind:'free'},region.revision);
       respond=(purpose,data)=>{
         const result=normal(purpose,data);
-        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,role:'sfx',reason:'Sound effect of footsteps outside the balloons.'}]};
+        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,letteringVisible:true,role:'sfx',reason:'Sound effect of footsteps outside the balloons.'}]};
         if(purpose==='classify-regions') return {classifications:result.classifications.map((d:any)=>({...d,typeId:'::',referenceIds:[]}))};
         return result;
       };
       const result=await runPage(page);
       assert.equal(result.overview.pages[0].state,'passed',result.overview.pages[0].detail);
       assert.equal((await listLines(page.episode.id))[0].lineType,'::');
+    });
+    await t.test('artwork the region check sees no lettering in is excluded before classification',async()=>{
+      const page=await seedChapter('outside-shoelaces',30);
+      const region=getDoc<any>(`region:${page.lineId}`,{});
+      putDoc(page.episode.id,region.id,{...region.data,detectionKind:'free'},region.revision);
+      const asked:string[]=[];
+      respond=(purpose,data)=>{
+        asked.push(purpose);
+        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:false,letteringVisible:false,role:'uncertain',reason:'The tight crop shows only shoelaces on a shoe.'}]};
+        if(purpose==='verify-lettering') return {hasLettering:false,reason:'White shoelaces crossing a brown sneaker; no characters.'};
+        return normal(purpose,data);
+      };
+      await runPage(page);
+      const line=(await listLines(page.episode.id)).find(l=>l.id===page.lineId)!;
+      assert.equal(line.sourceState,'ignored');
+      assert.equal(getDoc<any>(`region:${page.lineId}`,{}).data.directorDetectionReview?.verdict,'non-text');
+      assert.ok(asked.indexOf('verify-lettering')<asked.indexOf('inspect-region-presentation')+2,'checked straight after the region check');
+      assert.ok(!asked.slice(asked.indexOf('verify-lettering')).includes('classify-regions'),'excluded artwork is never classified');
     });
     await t.test('a specific cited user rule can override the default aside category',async()=>{
       const page=await seedChapter('outside-explicit-rule',30);
@@ -1021,7 +1039,7 @@ test("outside handwritten speech is corrected to Aside using physical evidence, 
       saveMemorySettings('s',saved.revision,{rules:{...saved.data.rules,plain:'All spoken words use Dialogue in this series, including handwritten speech outside balloons.'}});
       respond=(purpose,data)=>{
         const result=normal(purpose,data);
-        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,role:'speech',reason:'Spoken aside outside any border.'}]};
+        if(purpose==='inspect-region-presentation') return {observations:[{lineId:page.lineId,enclosure:'none',handwritten:true,letteringVisible:true,role:'speech',reason:'Spoken aside outside any border.'}]};
         if(purpose==='classify-regions') return {classifications:result.classifications.map((d:any)=>({...d,ruleOverride:'plain',reason:'The explicit plain rule includes outside handwritten speech.'}))};
         return result;
       };

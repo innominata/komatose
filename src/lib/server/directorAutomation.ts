@@ -1027,7 +1027,7 @@ async function classify(
       regionResponseSchema(
         objectSchema({
           observations: arrayOf(
-            optionalFields(["letteringVisible"], objectSchema({
+            objectSchema({
               lineId: requiredString,
               enclosure: {
                 type: "string",
@@ -1040,7 +1040,7 @@ async function classify(
                 enum: ["speech", "thought", "narration", "sfx", "uncertain"],
               },
               reason: requiredString,
-            })),
+            }),
           ),
         }),
         "observations",
@@ -1785,11 +1785,6 @@ export function latinOrNumbersOnly(source: string) {
   );
 }
 
-/** The same object schema with `keys` no longer required. */
-function optionalFields<T extends { required: string[] }>(keys: string[], schema: T): T {
-  return { ...schema, required: schema.required.filter((key) => !keys.includes(key)) };
-}
-
 /** A model's reason that says a region shows artwork, not lettering. */
 const NO_LETTERING =
   /\b(?:no|not any|without any) (?:\w+ ){0,2}(?:text|lettering|characters)\b|does not (?:contain|show|include) any (?:\w+ ){0,2}(?:text|lettering|characters)|shows only (?:the )?(?:\w+ ){0,3}(?:artwork|shoelaces?|laces|stitching|folds?|hair)\b|lettering is not visible|text is not visible/i;
@@ -1957,6 +1952,18 @@ async function readPage(
       }),
     );
     assertUnchanged(ctx.episode.id, imageId, before);
+    // A box moved onto another region's lettering duplicates that region and
+    // hides why it was wrong (it may hold no lettering at all, e.g. shoelaces).
+    // Leave it where it is so the lettering checks can judge it.
+    result.edits = result.edits.filter((edit: any) => {
+      const moved = lines.find((line) => line.id === edit.lineId);
+      const onto = moved && lines.find((other) =>
+        other.id !== edit.lineId &&
+        overlap({ ...moved, x: edit.x, y: edit.y, w: edit.w, h: edit.h }, other) >= 0.5 &&
+        overlap(moved, other) < 0.5);
+      if (onto) emit(ctx, imageId, "region:move-refused", { lineId: edit.lineId, onto: onto.id, reason: edit.reason });
+      return !onto;
+    });
     if (result.edits.length) {
       await applyGeometryRepairs(
         ctx,
@@ -3292,10 +3299,12 @@ async function checkRegionOverlay(
     }),
   );
   const edits: RegionEdit[] = [];
+  const unlettered = new Map<string, string>();
   for (const item of result.regions) {
     const line = regions[item.number - 1];
     if (!line) continue;
     emit(ctx, imageId, "region:overlay", { lineId: line.id, verdict: item.verdict, reason: item.reason });
+    if (item.verdict === "no-lettering" && line.sourceState !== "ignored") unlettered.set(line.id, item.reason);
     if (item.verdict !== "cuts-lettering" && item.verdict !== "uncertain") continue;
     const box = { x: line.x!, y: line.y!, w: line.w!, h: line.h! };
     const fit = await letteringInBox(ctx, imageId, box);
@@ -3315,10 +3324,15 @@ async function checkRegionOverlay(
       reason: `Director saw the box cut lettering (${item.reason}); refit to the detected lettering.`,
     });
   }
-  if (!edits.length) return;
-  await applyGeometryRepairs(ctx, imageId, capture, before, edits, []);
-  for (const edit of edits)
-    emit(ctx, imageId, "region:extended", { lineId: edit.lineId, box: [edit.x, edit.y, edit.w, edit.h], reason: edit.reason });
+  if (edits.length) {
+    await applyGeometryRepairs(ctx, imageId, capture, before, edits, []);
+    for (const edit of edits)
+      emit(ctx, imageId, "region:extended", { lineId: edit.lineId, box: [edit.x, edit.y, edit.w, edit.h], reason: edit.reason });
+  }
+  // A box the Director sees no letters in gets the neutral lettering check now,
+  // before it is read, translated or cleaned.
+  const fresh = (await listLines(ctx.episode.id)).filter((line) => unlettered.has(line.id));
+  await dropNonLettering(ctx, imageId, call, capture.raw, fresh, unlettered, "Region box check");
 }
 
 /** Detected lettering in a window: a binary mask at page resolution, cropped to the window. */
