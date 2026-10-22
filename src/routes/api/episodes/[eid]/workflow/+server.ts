@@ -8,7 +8,6 @@ import { rowHasOperation } from '$lib/modelRegistry';
 import type { ProviderOperation } from '$lib/providerCatalog';
 import { MAX_SOURCE_REVIEWERS } from '$lib/localReviewModels';
 import { MAX_TRANSCRIPTION_MODELS, normalizeTranscriptionModels } from '$lib/regionAi';
-import { transcriptionModelIds } from '$lib/server/ocrConsensus';
 import { resolveLiveAssistant } from '$lib/server/assistantRoute';
 import { maskInputs } from "$lib/maskDiagnostics";
 import { automaticRegionPolygon, bubbleFitPoints } from "$lib/regionGeometry";
@@ -252,8 +251,8 @@ function assertPassedTask(
 function parseRegionAi(ai: any): NonNullable<Preferences["regionAi"]> {
   if (!Array.isArray(ai?.reviewers) || ai.reviewers.length > MAX_SOURCE_REVIEWERS)
     throw new WorkflowError("Choose up to five reviewers");
-  const transcriptionModels = transcriptionModelIds(normalizeTranscriptionModels(ai.transcriptionModels));
-  if (!transcriptionModels.length) throw new WorkflowError('Choose a transcription model');
+  // Empty is allowed: it follows the Transcribe default under Admin → Models.
+  const transcriptionModels = normalizeTranscriptionModels(ai.transcriptionModels);
   const regionAi = {
     translate: validateModel(ai.translate),
     describe: validateModel(ai.describe),
@@ -850,6 +849,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       }
       if (b.data && "transcribeEnglish" in b.data)
         data.transcribeEnglish = b.data.transcribeEnglish === true;
+      if (b.data && "punctuationOnly" in b.data)
+        data.punctuationOnly = b.data.punctuationOnly === "keep" ? "keep" : "replace";
       if (
         data.dpi != null &&
         (!Number.isFinite(data.dpi) || data.dpi < 10 || data.dpi > 2400)

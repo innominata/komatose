@@ -32,16 +32,7 @@ export async function engineReadiness() {
           };
         }
       }
-      if (engine.id !== "qwen") {
-        return { ...engine };
-      }
-      // The legacy "qwen" id has no row once the default chat model is removed.
-      // Report it unavailable rather than failing every picker that lists engines.
-      try {
-        return { ...engine, ...await probeModelConnection(resolveLiveAssistant(engine.id).row) };
-      } catch (error) {
-        return { ...engine, available: false, reason: error instanceof Error ? error.message : String(error) };
-      }
+      return { ...engine };
     }),
   );
 }

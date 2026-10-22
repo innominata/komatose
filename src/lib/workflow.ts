@@ -117,12 +117,26 @@ export type Preferences = {
   detectConf?: number;
   /** Create regions for lettering that is already English. Off unless the chapter turns it on. */
   transcribeEnglish?: boolean;
+  /**
+   * Lettering that is only punctuation (a lone "?" or "!!" drawn as a sound
+   * effect): `replace` cleans it and letters it again, `keep` leaves the
+   * original drawing and neither cleans nor letters it.
+   */
+  punctuationOnly?: PunctuationOnly;
   style?: Partial<TextStyle>;
   /** Keyed by line type id; series-added region type ids are valid keys too. */
   styles: Partial<Record<string, Partial<TextStyle>>>;
   /** When set, this series uses these region types instead of the built-in list. */
   regionKinds?: RegionKind[];
 };
+export type PunctuationOnly = "replace" | "keep";
+
+/** Marks and symbols only, such as "?", "!!" or "…": no letters or digits. */
+export function punctuationOnlyText(source: string | null | undefined): boolean {
+  const text = (source ?? "").normalize("NFKC").replace(/\s+/g, "");
+  return text.length > 0 && /^[\p{P}\p{S}]+$/u.test(text);
+}
+
 export const DEFAULT_PREFERENCES: Preferences = {
   lang: "japanese",
   direction: "rtl",
@@ -132,6 +146,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   translationPreferences: "",
   chapterSummary: "",
   transcribeEnglish: false,
+  punctuationOnly: "replace",
   styles: {},
 };
 export const STYLE_KEYS = [

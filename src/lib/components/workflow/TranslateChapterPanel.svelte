@@ -220,6 +220,18 @@
       onchange={(e) => onprefs({ transcribeEnglish: e.currentTarget.checked })}
     /> Transcribe English text</label
   >
+  <label
+    title="A region whose lettering is only punctuation, such as a lone ? or !! drawn as a sound effect."
+    >Punctuation-only lettering
+    <select
+      value={preferences.punctuationOnly ?? "replace"}
+      disabled={!canEdit}
+      onchange={(e) => onprefs({ punctuationOnly: e.currentTarget.value })}
+    >
+      <option value="replace">Clean and re-letter it</option>
+      <option value="keep">Keep the original, don't letter it</option>
+    </select></label
+  >
   </div>
   {/if}
   {#if section === "full"}

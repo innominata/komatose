@@ -2,7 +2,7 @@ import { formatAdapterList, productionCliAdapterDefs } from '../cliAdapterDefs';
 import { DEFAULT_REVIEW_MODEL_ID } from '../modelDefaults';
 import type { ModelRow } from '../modelRegistry';
 import { isOcrSpecialist, isTranslationSpecialist, rowHasOperation } from '../modelRegistry';
-import { QWEN_38_27B_ID } from '../qwenModels';
+import { modelDefaultFor } from './modelDefaultStore';
 import type { CliToolAdminStatus } from './cliToolStatus';
 import { missingApiKeyMessage } from './openaiHttp';
 
@@ -304,11 +304,13 @@ export async function buildSetupReport(deps: SetupDeps): Promise<SetupReport> {
 			: step('select_model', 'Get a vision or OCR model ready, then select it for transcription.'),
 	});
 
-	const defaultTranslate = deps.rows.find((row) => row.id === QWEN_38_27B_ID);
-	const defaultReview = deps.rows.find((row) => row.id === DEFAULT_REVIEW_MODEL_ID);
+	// The operator's chosen defaults; no model is built in.
+	const translateId = modelDefaultFor('translate');
+	const reviewId = modelDefaultFor('chapterReview');
+	const defaultTranslate = translateId ? deps.rows.find((row) => row.id === translateId) : undefined;
+	const defaultReview = reviewId ? deps.rows.find((row) => row.id === reviewId) : undefined;
 	if (defaultTranslate && !ready(defaultTranslate) && translateReady.length) {
-		// Komatose defaults to the single ready translator when the shipped
-		// default cannot translate, so only a real choice needs a warning.
+		// With one ready translator Komatose uses it, so only a real choice needs a warning.
 		if (translateReady.length === 1) {
 			items.push({
 				id: 'default:translate',

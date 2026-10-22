@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { modelHttpConfig } from './modelConnection';
 import { isCliProvider, type CliProviderId, type ProviderOperation } from '../providerCatalog';
 import { listRegistryRows } from './modelRegistryStore';
+import { modelDefaultFor } from './modelDefaultStore';
 import { resolveAssistant, rowHasOperation, type ModelRow, type ResolvedAssistant } from '../modelRegistry';
 import { WorkflowError } from './workflowStore';
 import { currentAssistantHttp, type AssistantHttpConfig } from './openaiHttp';
@@ -29,8 +30,31 @@ export function withDiagnosticRuns<T>(run: () => Promise<T>): Promise<T> {
 }
 export const isDiagnosticRun = () => diagnosticRuns.getStore() === true;
 
+/**
+ * An unchosen engine (empty, or the legacy "qwen" host without a model) means the
+ * operator's default for chat work under Admin → Models, then any chat row this
+ * machine has passed. No model is built in.
+ */
 export function resolveLiveAssistant(engine: string, model?: string): ResolvedAssistant {
-	return resolveAssistant(engine, model, listRegistryRows(), false);
+	const rows = listRegistryRows();
+	const id = String(engine || '').trim();
+	const unchosen = () => {
+		// A legacy "qwen" model name is a slug on the local endpoint; it keeps that slug.
+		const chosen = modelDefaultFor('translate');
+		const row = chosen ? rows.find((item) => item.id === chosen && !item.disabled) : undefined;
+		if (row) return { row, slug: model || row.slug, host: resolveAssistant(row.id, '', rows, false).host };
+		return resolveAssistant('', model, rows, true);
+	};
+	if (!id) return unchosen();
+	if (id === 'qwen') {
+		if (!model) return unchosen();
+		try {
+			return resolveAssistant(id, model, rows, false);
+		} catch {
+			return unchosen();
+		}
+	}
+	return resolveAssistant(id, model, rows, false);
 }
 
 export function liveAssistantName(engine: string, model = ''): string {

@@ -20,7 +20,7 @@
 
 	// ---- local
 	const LOCAL_PRESETS = [
-		{ id: 'qwen38', label: QWEN_38_27B_LABEL, slug: 'qwen3.8-27b-q4', target: 'qwen3.8-27b', note: 'Default chat model. Installer downloads the weights.' },
+		{ id: 'qwen38', label: QWEN_38_27B_LABEL, slug: 'qwen3.8-27b-q4', target: 'qwen3.8-27b', note: 'Chat model. Installer downloads the weights.' },
 		{ id: 'gemma4-26b', label: GEMMA4_26B_LABEL, slug: GEMMA4_26B_ID, note: 'Bring your own GGUF.' },
 		{ id: 'gemma4-12b', label: GEMMA4_12B_LABEL, slug: GEMMA4_12B_ID, note: 'Bring your own GGUF.' },
 		{ id: 'gemma4-e2b', label: GEMMA4_E2B_LABEL, slug: GEMMA4_E2B_ID, note: 'Tiny; CPU-friendly.' },

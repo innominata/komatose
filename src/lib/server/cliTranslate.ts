@@ -141,7 +141,8 @@ function requireCli(id: CliToolId): string {
 
 export function listTranslateEngines(): TranslateEngineInfo[] {
 	const configured = proofreadServiceConfigured();
-	return TRANSLATE_ENGINES.filter((id) => !isProofreaderProvider(id) || configured).map((id) => {
+	// "qwen" is a legacy host alias, not a model: it is never offered as an engine.
+	return TRANSLATE_ENGINES.filter((id) => id !== 'qwen' && (!isProofreaderProvider(id) || configured)).map((id) => {
 		let available = true;
 		let reason: string | undefined;
 		if (id !== 'qwen' && !isProofreaderProvider(id)) {
@@ -165,7 +166,7 @@ export function listTranslateEngines(): TranslateEngineInfo[] {
 		}
 		return {
 			id,
-			label: id === 'qwen' && komatoseGpuEnabled() ? 'Local HTTP · GPU' : TRANSLATE_ENGINE_LABELS[id],
+			label: TRANSLATE_ENGINE_LABELS[id],
 			available,
 			reason,
 			pageImageOnly: isProofreaderProvider(id),

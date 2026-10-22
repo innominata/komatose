@@ -10,7 +10,6 @@ import {
 	type ModelRow,
 } from './modelRegistry';
 import { isProofreaderId } from './proofreaders';
-import { QWEN_38_27B_ID } from './qwenModels';
 import { MAX_TRANSCRIPTION_MODELS, type RegionAiSettings } from './regionAi';
 
 export const PROFILE_FIELDS = [
@@ -212,10 +211,7 @@ export function profileRowForRef(
 		return browser ? { row: browser, missing: false } : { missing: true };
 	}
 	if (ref.engine === 'qwen') {
-		if (!ref.model) {
-			const fallback = rowById(rows, QWEN_38_27B_ID);
-			return fallback ? { row: fallback, missing: false } : { missing: true };
-		}
+		if (!ref.model) return { missing: true };
 		const named = rowById(rows, ref.model) || rows.find((row) => row.slug === ref.model);
 		if (named) return { row: named, missing: false };
 		return { missing: true };

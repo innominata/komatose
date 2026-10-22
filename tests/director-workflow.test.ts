@@ -2167,7 +2167,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     const click=f.operations.find(p=>p.cmd==='bubble-fill');
     assert.equal(click.px,.2,'Use the app-computed normalized region centre');
     assert.equal(click.py,.16,'Never ask the model for page-pixel coordinates');
-    assert.deepEqual(f.operations.filter(p=>p.cmd!=='mask').map(p=>p.cmd==='bubble-fill'?'bubble':p.method),['bubble','lama-manga',editor]);
+    assert.deepEqual(f.operations.filter(p=>p.cmd!=='mask'&&!p.touchUp).map(p=>p.cmd==='bubble-fill'?'bubble':p.method),['bubble','lama-manga',editor]);
     const batch=f.operations.find(p=>p.cmd==='mask'&&p.detect);
     assert.equal(batch.regions.length,2);
     const qwen=f.operations.find(p=>p.method===editor);
@@ -2188,7 +2188,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   });
   await t.test('failed Qwen is discarded before single-region LaMa',async()=>{
     const f=await fixture({qwen:[],final:[2]});await f.execute();
-    const attempts=f.operations.filter(p=>p.cmd==='clean');
+    const attempts=f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp);
     // A residue failure earns one wider editor retry before LaMa.
     assert.deepEqual(attempts.map(p=>p.method),['lama-manga',editor,editor,'lama-manga']);
     assert.equal(attempts[1].path,attempts[3].path,'every retry starts from the last verified artwork');
@@ -2196,8 +2196,12 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   });
   await t.test('lettering ghosts get one wider retry of the same method before falling back',async()=>{
     const f=await fixture({ghostQwen:true});await f.execute();
-    const attempts=f.operations.filter(p=>p.cmd==='clean');
+    const attempts=f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp);
     assert.deepEqual(attempts.map(p=>p.method),['lama-manga',editor,editor]);
+    // Before reaching for the editor, LaMa touches up only what batch LaMa left behind.
+    const touchUps=f.operations.filter(p=>p.touchUp);
+    assert.ok(touchUps.length>=1&&touchUps.every(p=>p.method==='lama-manga'&&p.cmd==='clean'));
+    assert.ok(f.operations.findIndex(p=>p.touchUp)<f.operations.findIndex(p=>p.method===editor),'touch-up comes before the editor');
     const masks=f.operations.filter(p=>p.cmd==='mask'&&p.detect&&p.regions.length===1).map(p=>p.expansion);
     assert.ok(masks.includes(11)&&masks.includes(19),`editor masks ${masks}`);
     assert.equal(f.saved().directorCleaning.regions[f.ids[2]].method,editor);
@@ -2321,12 +2325,12 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   await t.test('without an editor, try single-region LaMa after batch failure',async()=>{
     const f=await fixture({noEditor:true,final:[2]});await f.execute();
     assert.equal(f.operations.filter(p=>p.method===editor).length,0);
-    assert.equal(f.operations.filter(p=>p.cmd==='clean').length,2);
+    assert.equal(f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp).length,2);
   });
   await t.test('plain bubbles never reach the editor when fill planning and primary cleaning fail',async()=>{
     const f=await fixture({plainIndices:[0,1,2],failPlan:true,failBatch:true,final:[0,1,2],qwen:[0,1,2]});
     await f.execute();
-    const cleans=f.operations.filter(p=>p.cmd==='clean');
+    const cleans=f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp);
     assert.equal(cleans.length,4);
     assert.ok(cleans.every(p=>p.method==='lama-manga'));
     assert.equal(f.operations.filter(p=>p.cmd==='mask'&&p.regionMask).length,0,'Bubble retries mask only detected lettering');
@@ -2335,7 +2339,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   await t.test('a selected primary image editor is overridden for bubbles but retained for free lettering',async()=>{
     const f=await fixture({plainIndices:[0,1],primary:editor,bubble:false,batch:[0,1],qwen:[2]});
     await f.execute();
-    assert.deepEqual(f.operations.filter(p=>p.cmd==='clean').map(p=>p.method),['lama-manga',editor]);
+    assert.deepEqual(f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp).map(p=>p.method),['lama-manga',editor]);
     assert.equal(f.saved().directorCleaning.regions[f.ids[0]].method,'lama-manga');
     assert.equal(f.saved().directorCleaning.regions[f.ids[1]].method,'lama-manga');
     assert.equal(f.saved().directorCleaning.regions[f.ids[2]].method,editor);
@@ -2343,7 +2347,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   await t.test('an artwork editor mask protects neighbouring bubbles even before they are cleaned',async()=>{
     const f=await fixture({plainIndices:[1,2],primary:editor,bubble:false,batch:[1,2],qwen:[0]});
     await f.execute();
-    const edits=f.operations.filter(p=>p.cmd==='clean');
+    const edits=f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp);
     assert.deepEqual(edits.map(p=>p.method),[editor,'lama-manga']);
     const firstMask=f.operations.find(p=>p.cmd==='mask');
     assert.equal(firstMask.excludeRegions.length,2,'Uncleaned bubbles must also be protected from artwork editor masks');
@@ -2353,7 +2357,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   await t.test('dialogue and thought labels protect bubbles even when the detector calls them free text',async()=>{
     const f=await fixture({typeIndices:[1,2],bubble:false,batch:[0],final:[1,2],qwen:[1,2]});
     await f.execute();
-    assert.ok(f.operations.filter(p=>p.cmd==='clean').every(p=>p.method==='lama-manga'));
+    assert.ok(f.operations.filter(p=>p.cmd==='clean'&&!p.touchUp).every(p=>p.method==='lama-manga'));
   });
   await t.test('confirmed outside lettering cannot be flood-filled or trapped by an old bubble classification',async()=>{
     const f=await fixture({typeIndices:[0],batch:[1,2],qwen:[0]});
@@ -2401,6 +2405,42 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   });
 });
 
+
+test("a final-check critique rewords a region once per run; later rewordings are held so the page can pass",async()=>{
+  const page=await seedChapter('critique-settles',34);
+  let round=0;const normal=respond;
+  proofreaderReply=(mode,{rows})=>mode==='critique'?`Region ${page.lineId}: polish the wording (round ${++round}).`:rows.map((l:any)=>`Region ${l.id}: Original source: ${l.source||'こんにちは'}; English: ${l.body||'Hello'}`).join('\n');
+  respond=(purpose,data)=>purpose==='correct-text'&&data.phase==='critique'
+    ?{reason:'Apply the critique',sourceReviewLineIds:[],textComplete:true,exclusions:[],edits:[{lineId:page.lineId,source:null,english:`Hello, version ${round}`,reason:'Follow the latest critique'}]}
+    :normal(purpose,data);
+  try{
+    const result=await runPage(page);
+    assert.equal(result.overview.pages[0].state,'passed',result.overview.pages[0].detail);
+    const edits=(sqlite.prepare("SELECT detail FROM director_events WHERE run_id=? AND kind='edit'").all(result.runId) as any[]).map(r=>JSON.parse(r.detail)).filter(e=>e.phase==='critique');
+    assert.equal(edits.length,1,'only the first final check rewords the region');
+    assert.ok(sqlite.prepare("SELECT 1 FROM director_events WHERE run_id=? AND kind='edit:held'").get(result.runId),'later suggestions are kept for review');
+    assert.equal((await listLines(page.episode.id)).find(l=>l.id===page.lineId)!.body,'Hello, version 1');
+  }finally{respond=normal;proofreaderReply=undefined;}
+});
+
+test("punctuation-only lettering the series keeps is set aside as drawn: never cleaned, lettered or reported",async()=>{
+  const {PUNCTUATION_KEPT_REASON}=await import('../src/lib/server/directorAutomation');
+  const page=await seedChapter('punctuation-kept',33);
+  sqlite.prepare("UPDATE lines SET source='?',body='?',line_type='::' WHERE id=?").run(page.lineId);
+  const chapter=getDoc<any>(`chapter:${page.episode.id}`,{});
+  putDoc(page.episode.id,chapter.id,{...chapter.data,punctuationOnly:'keep'},chapter.revision);
+  const asked:any[]=[];const normal=respond;
+  respond=(purpose,data)=>{asked.push({purpose,data});return normal(purpose,data);};
+  try{
+    await runPage(page);
+    const line=()=>sqlite.prepare('SELECT source_state,ignore_reason FROM lines WHERE id=?').get(page.lineId) as any;
+    assert.equal(line().source_state,'ignored');assert.equal(line().ignore_reason,PUNCTUATION_KEPT_REASON);
+    assert.ok(!asked.some(r=>r.purpose==='inspect-cleaning'&&JSON.stringify(r.data).includes(page.lineId)),'kept punctuation is never cleaned');
+    const qa=requests.filter(r=>r.purpose==='check-page').at(-1);
+    if((qa as any)?.system)assert.match((qa as any).system,/keeps them exactly as drawn/);
+    assert.ok(sqlite.prepare("SELECT 1 FROM director_events WHERE kind='region:punctuation' AND detail LIKE ?").get(`%${page.lineId}%"kept":true%`));
+  }finally{respond=normal;}
+});
 
 test("artwork boxed as text is excluded only when a neutral lettering check agrees, and undo restores it",async()=>{
   const {excludeIfNotLettering}=await import('../src/lib/server/directorLettering');
@@ -2561,7 +2601,7 @@ test("pixel residue revokes an old clean checkpoint and rechecks connected lobes
       assert.equal(saved.pendingCleanRegions,undefined);
       for(const id of ids)assert.equal(saved.directorCleaning.regions[id].method,'bubble-fill');
       assert.equal(operations.filter(p=>p.cmd==='bubble-fill').length,1);
-      assert.equal(operations.filter(p=>p.cmd==='clean').length,0,'Use the safe shared fill before LaMa');
+      assert.equal(operations.filter(p=>p.cmd==='clean'&&!p.touchUp).length,0,'Use the safe shared fill before LaMa');
     }
     assert.ok((sqlite.prepare("SELECT detail FROM director_events WHERE run_id=? AND kind='clean:residue'").all(runId) as any[]).some(e=>JSON.parse(e.detail).findings[0].lineId===ids[1]));
     assert.ok(reviews.every(r=>r.method!=='existing'||r.scope!=='whole-page'),'The initial false-positive pass is vetoed by pixels before invoking the visual model');

@@ -6,7 +6,8 @@ import { compareOcrReadings, ocrResolutionAccepted, failedOcrConsensus, ocrCompa
 import { classifyRegionLineType, sfxClassificationSource, type RegionTypeHints } from '../sfx';
 import { collapseSuggestions } from '../regionAi';
 import { normalizeTranslation } from '../translationText';
-import { DEFAULT_TRANSCRIPTION_MODEL_IDS, resolveAssistant, visionEligible } from '../modelRegistry';
+import { resolveAssistant, visionEligible } from '../modelRegistry';
+import { modelDefaultFor } from './modelDefaultStore';
 import type { LineRow, OcrLang } from '../types';
 import { sqlite } from './db';
 import { broadcast } from './realtime';
@@ -74,7 +75,9 @@ function selectableTranscriptionId(id: string, rows = listRegistryRows()) {
 
 /** Saved ids that are still enabled and allowed to read text. Disabled or deleted models are omitted. */
 export function transcriptionModelIds(value?: string[] | null): string[] {
-  const ids = Array.isArray(value) && value.length ? value : [...DEFAULT_TRANSCRIPTION_MODEL_IDS];
+  // An empty series list follows the operator's Transcribe default; nothing is built in.
+  const fallback = modelDefaultFor('transcribe');
+  const ids = Array.isArray(value) && value.length ? value : fallback ? [fallback] : [];
   const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
   const rows = listRegistryRows();
   const live = unique.filter((id) => selectableTranscriptionId(id, rows));

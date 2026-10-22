@@ -264,7 +264,7 @@
 				{/if}
 			</div>
 		</div>
-		<p class="muted small nvtop-note">Stops every Komatose model and worker on the GPUs, including Qwen 3.8 27B.</p>
+		<p class="muted small nvtop-note">Stops every Komatose model and worker on the GPUs, including chat models.</p>
 		{#if nvtopNote()}<p class="muted small nvtop-note">{nvtopNote()}</p>{/if}
 		{#if nvtop && (nvtop.state === 'running' || nvtop.state === 'failed') && nvtop.lines.length}
 			<pre class="build-log">{nvtop.lines.join('\n')}</pre>

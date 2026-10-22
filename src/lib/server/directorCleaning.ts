@@ -23,6 +23,7 @@ import { listLines } from "./queries";
 import { digest, regionCrop } from "./directorMemory";
 import { directorEvent, directorAsset } from "./directorAudit";
 import { excludeIfNotLettering } from "./directorLettering";
+import { ghostMask } from "./cleaningTouchUp";
 import { auditedDirectorOperation, pageFingerprint } from "./directorState";
 import { maskedCleaning, runWorkflowPng } from "./workflowImages";
 import { preferences } from "./workflowService";
@@ -69,11 +70,16 @@ export async function cleanDirectorPage(
   // English lettering and numbers are left on the page (the Director removes
   // their regions), so cleaning checks must not report them as remaining text.
   const keepsEnglish = !preferences(ctx.episode.id, ctx.series.id).transcribeEnglish;
+  // Punctuation-only regions reach cleaning only when the series replaces them
+  // (kept ones are set aside first), so their marks are lettering to remove.
+  const punctuation = preferences(ctx.episode.id, ctx.series.id).punctuationOnly === "keep"
+    ? " Standalone punctuation marks (such as a lone ? or !!) outside the target regions are kept as drawn on purpose: never report them as remaining text."
+    : " Punctuation drawn as lettering (?, !, …) in a target region is source lettering to remove, never artwork to preserve.";
   const call: DirectorModelCall = (purpose, system, ...rest) =>
     modelCall(
       purpose,
-      purpose === "inspect-cleaning" && keepsEnglish
-        ? `${system} Lettering already in English (Latin letters) and plain numbers is intentionally left in place: it is never remaining text or a cleaning failure.`
+      purpose === "inspect-cleaning"
+        ? `${system}${keepsEnglish ? " Lettering already in English (Latin letters) and plain numbers is intentionally left in place: it is never remaining text or a cleaning failure." : ""}${punctuation}`
         : system,
       ...rest,
     );
@@ -745,6 +751,49 @@ export async function cleanDirectorPage(
     await save(current, targets, "already-clean");
     return true;
   };
+  // A candidate rejected only for leftover lettering is usually nearly right.
+  // Like a person would, mask just what is left in it and run LaMa Manga on
+  // those pixels: first whatever the text detector still finds in the
+  // candidate, else faint marks inside the original lettering's footprint.
+  // Original lettering per region, from raw: how much a candidate left behind is judged against it.
+  const originalLetters = new Map<string, { asset: string; pixels: number }>();
+  const touchUp = async (line: LineRow, candidate: string, base: string, from: string) => {
+    if (!originalLetters.has(line.id)) {
+      const asset = await mask([line], false, 0, raw);
+      originalLetters.set(line.id, { asset, pixels: maskPixels ?? 0 });
+    }
+    const original = originalLetters.get(line.id)!;
+    let selected = await mask([line], false, 2, candidate);
+    // Most of the lettering still there means the method failed outright;
+    // touching up is for the remnants of a nearly clean result.
+    if (maskPixels && original.pixels && maskPixels > original.pixels * 0.5) return false;
+    let how = "lettering the detector still finds";
+    if (!maskPixels) {
+      const letters = original.asset;
+      const ghosts = await ghostMask(await readAsset(candidate), await readAsset(letters));
+      if (!ghosts.pixels) return false;
+      selected = await storeAsset(ghosts.png);
+      how = `${ghosts.pixels} faint pixels left inside the original lettering`;
+    }
+    emit("clean:request", { method: "lama-manga", regionIds: [line.id], scope: "touch-up", maskMode: "leftover-lettering", from, reason: `Touch up ${from}: inpaint only the ${how}` });
+    try {
+      const result = await operation(
+        { cmd: "clean", path: assetPath(candidate), mask: assetPath(selected), method: "lama-manga", touchUp: true },
+        ctx.signal,
+      );
+      const limited = await maskedCleaning(candidate, selected, result.artifact);
+      const review = await inspect(base, limited, "lama-touch-up", line);
+      if (!review.safe) {
+        failure("lama-touch-up", [line], review.reason);
+        return false;
+      }
+      await save(limited, line, `${from}+lama-touch-up`, selected);
+      return true;
+    } catch (error) {
+      failure("lama-touch-up", [line], error);
+      return false;
+    }
+  };
   const restoreBoundaries = lines.filter((line) => damagedBoundaries.has(line.id) && inScope(line) && !regionDoc(line.id).data.locked);
   if (restoreBoundaries.length) {
     const before = current;
@@ -1085,6 +1134,7 @@ export async function cleanDirectorPage(
         if (!review.safe) {
           if (review.problem === "artwork-damage") damaged.set(line.id, review.reason);
           failure(method, [line], review.reason);
+          if (review.problem === "remaining-text" && !bubbleToolsOnly(line)) await touchUp(line, limited, base, method);
           continue;
         }
         // Commit only this successful region, retaining raw pixels for failed neighbours.
@@ -1199,6 +1249,14 @@ export async function cleanDirectorPage(
             if (!review.safe) {
               residue = review.problem === "remaining-text";
               if (review.problem === "artwork-damage") damaged.set(line.id, review.reason);
+              if (residue && artwork) {
+                failure(method.id, [line], review.reason);
+                if (await touchUp(line, limited, base, method.id)) {
+                  cleaned = true;
+                  break;
+                }
+                continue;
+              }
               throw new Error(review.reason);
             }
             await save(limited, line, method.id, selected);

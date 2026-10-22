@@ -426,7 +426,8 @@ test("paid source reviews require an individual selection of the exact engine an
   // validateModel hydrates against the live rows: the chat model is operator-
   // added now, so only the store — not the seed table — resolves legacy "qwen".
   const live = listRegistryRows();
-  assert.deepEqual(validateReviewers([local]), [hydrateTaskEngine(local, live)]);
+  // The legacy "qwen" host is saved as the chat row it resolves to.
+  assert.deepEqual(validateReviewers([local]), [{ engine: "qwen3.8-27b-q4", model: "" }]);
   for (const engine of ["grok", "codex", "cursor"]) {
     for (const model of ["", "selected-model"]) {
       const paid = { engine, model };
@@ -3782,7 +3783,7 @@ for line in sys.stdin:
     sortOrder: 1, caption: "Alice meets Bob beside the gate.", createdAt: 1, updatedAt: 1 });
   await db.insert(schema.images).values({ id: "auto-later", episodeId: "auto-e", originalName: "later.png", ...laterFile,
     sortOrder: 2, caption: "Later rooftop chase.", createdAt: 1, updatedAt: 1 });
-  putDoc("auto-e", "chapter:auto-e", { chapterSummary: "Castle courtyard at dusk.", regionAi: {
+  putDoc("auto-e", "chapter:auto-e", { chapterSummary: "Castle courtyard at dusk.", regionAi: { transcriptionModels: ["hayai-ocr-v2", "paddleocr-vl-1.6"],
     describe: { engine: "qwen", model: "description-fixture" },
     vision: { engine: "qwen", model: "vision-fixture" },
     translate: { engine: "qwen", model: "translation-fixture" },

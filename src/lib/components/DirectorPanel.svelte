@@ -53,7 +53,7 @@
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
-      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction','region:detect','region:detected','region:lettering-check','region:non-text','region:move-refused'].includes(event.kind)
+      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction','region:detect','region:detected','region:lettering-check','region:non-text','region:move-refused','region:punctuation','edit:held'].includes(event.kind)
     && (event.kind!=='run' || event.detail?.state!=='running' || event.detail?.message==='Starting Director')));
 
   const selectedEvent=$derived(auditEvents.find(event=>event.id===selectedEventId)??auditEvents.at(-1));
@@ -101,7 +101,7 @@
     if (['clean:result','stage:reused','critique:reused','region:created','region:extended','region:non-text'].includes(k)) return 'good';
     if (k==='region:detect'||k==='region:detected') return 'muted';
     if (k==='region:move-refused'||(k==='region:lettering-check'&&!d.hasLettering)) return 'warn';
-    if (['clean:fallback','clean:retry','automation:fallback','memory:warning','finding:unconfirmed','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
+    if (['edit:held','clean:fallback','clean:retry','automation:fallback','memory:warning','finding:unconfirmed','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
     if (['automation:request','director:request','proofreader:images','proofreader:question','request','transcription:attempt','clean:request'].includes(k)) return 'muted';
     return 'info';
   }
@@ -117,7 +117,7 @@
     if(event.kind==='stage:reused') return `${stageName(detail.stage)} already verified, reused`;
     if(event.kind==='stage:error') return `${stageName(detail.stage)} failed: ${tidy(detail.error)}`;
     if(event.kind==='stage:skipped') return `${stageName(detail.stage)} skipped: ${tidy(detail.reason)}`;
-    if(event.kind==='clean:request') return `Cleaning ${regions(detail.regionIds)} with ${detail.method}`;
+    if(event.kind==='clean:request') return detail.scope==='touch-up' ? `${tidy(detail.reason)} in ${regions(detail.regionIds)} with LaMa` : `Cleaning ${regions(detail.regionIds)} with ${detail.method}`;
     if(event.kind==='clean:result') return detail.regionIds?.length ? `Cleaned ${regions(detail.regionIds)} (${detail.method})${detail.remainingRegionIds?.length?`, ${detail.remainingRegionIds.length} still to do`:''}` : `Cleaned artwork verified (${detail.method})`;
     if(event.kind==='clean:residue') return `Clean rejected: leftover lettering or smudges in ${detail.findings?.length??0} regions`;
     if(event.kind==='clean:waiting') return tidy(detail.reason);
@@ -136,6 +136,8 @@
     if(event.kind==='region:detect') return `Text detector: ${String(detail.reason??'checking for lettering').replace(/^./,(c:string)=>c.toLowerCase())}${detail.lineId?` in ${region(detail.lineId)}`:''}…`;
     if(event.kind==='region:detected') return detail.cached ? 'Text detector reused its result for this page' : `Text detector finished${detail.seconds!=null?` in ${detail.seconds}s`:''}${detail.backend?` on ${detail.backend}`:''}`;
     if(event.kind==='region:lettering-check') return detail.hasLettering ? `${region(detail.lineId)} does hold lettering; kept` : `${region(detail.lineId)} holds no lettering: ${tidy(detail.reason)}`;
+    if(event.kind==='edit:held') return `Held for review: final check suggested ${quote(detail.proposed?.english)} for ${region(detail.lineId)}, which a check already revised to ${quote(detail.current?.english)}`;
+    if(event.kind==='region:punctuation') return detail.kept ? `Kept ${quote(detail.source)} in ${region(detail.lineId)} as drawn (series setting): not cleaned or lettered` : `${region(detail.lineId)} ${quote(detail.source)} will be cleaned and lettered again (series setting)`;
     if(event.kind==='region:non-text') return `Excluded ${region(detail.lineId)} as artwork, not text`;
     if(event.kind==='region:move-refused') return `Kept ${region(detail.lineId)} in place: moving it would cover ${region(detail.onto)}`;
     if(event.kind==='region:relocated') return `Moved ${region(detail.lineId)}: ${tidy(detail.reason)}`;

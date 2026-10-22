@@ -59,24 +59,11 @@ export function parseTaskEngine(raw: unknown, fallback: string = DEFAULT_CHAT_MO
 export type EngineModelOption = { id: string; label: string; available?: boolean; reason?: string };
 
 export const FALLBACK_ENGINE_MODELS: Record<string, EngineModelOption[]> = {
-	qwen: [{ id: 'qwen3.8-27b-q4', label: 'Qwen 3.8 27B' }],
-	grok: [
-		{ id: 'grok-4.6', label: 'Grok 4.6' },
-		{ id: 'grok-4.5', label: 'Grok 4.5' }
-	],
-	codex: [
-		{ id: 'gpt-5.4', label: 'GPT-5.4' },
-		{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
-		{ id: 'gpt-5.3', label: 'GPT-5.3' },
-		{ id: 'gpt-5.2', label: 'GPT-5.2' },
-		{ id: 'o3', label: 'o3' },
-		{ id: 'o4-mini', label: 'o4-mini' }
-	],
-	cursor: [
-		{ id: 'composer-2.5', label: 'Composer 2.5' },
-		{ id: 'composer-2.5-fast', label: 'Composer 2.5 Fast' },
-		{ id: 'auto', label: 'Auto' }
-	],
+	// CLI model lists come from discovery; none are built in.
+	qwen: [],
+	grok: [],
+	codex: [],
+	cursor: [],
 	'proofreader-a': [],
 	'proofreader-b': []
 };

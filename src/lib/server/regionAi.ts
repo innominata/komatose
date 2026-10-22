@@ -177,6 +177,8 @@ export async function reviewSource(
 
 export function validateModel(value: unknown): TaskEngine {
   const v = value as TaskEngine | undefined;
+	// An empty engine is "not chosen here" and follows the operator's default.
+	if (v && v.engine === "" && (v.model ?? "") === "") return { engine: "", model: "" };
 	if (
 		!v ||
 		typeof v.engine !== "string" ||
@@ -186,7 +188,11 @@ export function validateModel(value: unknown): TaskEngine {
 	)
 		throw new WorkflowError("Choose a valid engine and model");
   try {
-    const next = hydrateTaskEngine(v, listRegistryRows(), true);
+    const resolved = resolveLiveAssistant(v.engine, v.model);
+    // The legacy "qwen" host is saved as the concrete row it resolved to.
+    if (v.engine === "qwen")
+      return { engine: resolved.row.id, model: resolved.slug && resolved.slug !== resolved.row.slug ? resolved.slug : "" };
+    const next = hydrateTaskEngine(v, listRegistryRows(), false);
     resolveLiveAssistant(next.engine, next.model);
     return next;
   } catch {
@@ -338,8 +344,21 @@ export async function advisoryModel(
   responseSchema: unknown = ADVISORY_SCHEMA,
 ) {
   const task = (responseSchema as any)?.properties?.critique ? 'pageImageProofread' : 'advisory';
-  return executeModelTask(resolveLiveAssistant(model.engine, model.model).row, task,
-    { system, prompt, images, schema: responseSchema, model: model.model }, { abort });
+  const row = resolveLiveAssistant(model.engine, model.model).row;
+  const input = { system, prompt, images, schema: responseSchema, model: model.model };
+  try {
+    return await executeModelTask(row, task, input, { abort });
+  } catch (error) {
+    // A busy page can run past the default output budget. Retry once with a
+    // larger budget and a request for brevity, as Director's own calls do.
+    if (abort?.aborted || !/finish_reason=length|output was incomplete|increase the output budget/i.test(error instanceof Error ? error.message : String(error)))
+      throw error;
+    return executeModelTask(row, task, {
+      ...input,
+      maxTokens: 12000,
+      system: `${system}\n\nYour previous answer ran out of room before it finished. Keep every note to one short sentence and return the complete answer.`,
+    }, { abort });
+  }
 }
 
 export async function regionTarget(

@@ -359,7 +359,8 @@ const PROOFREADER_SEED_ROWS: ModelRow[] = PROOFREADER_DEFS.map((def) =>
 export const ALL_SEED_ROWS: ModelRow[] = [...SEED_ROWS, ...PROOFREADER_SEED_ROWS];
 
 
-export const DEFAULT_TRANSCRIPTION_MODEL_IDS = ['hayai-ocr-v2', 'paddleocr-vl-1.6'] as const;
+/** No transcription models are built in; the series list or the operator's default decides. */
+export const DEFAULT_TRANSCRIPTION_MODEL_IDS = [] as const;
 
 const SEED_BY_ID = new Map(ALL_SEED_ROWS.map((item) => [item.id, item]));
 
@@ -612,7 +613,7 @@ export function resolveAssistant(
 ): ResolvedAssistant {
 	const id = String(engine || '').trim();
 	const slugIn = sanitizeModelSlug(model);
-	if (!id) throw new Error('Unsupported translation engine: ');
+	if (!id && !chatFallback) throw new Error('No model is chosen for this task. Pick one in AI model settings, or set a default under Admin → Models.');
 
 	// Legacy host ids stay host lookups even if an overlay row reused the alias.
 	if (!isReservedLegacyHost(id)) {
@@ -642,13 +643,10 @@ export function resolveAssistant(
 			const found = rows.find((item) => item.id === local.id) || seedRow(local.id);
 			if (found) return { row: found, slug: found.slug, host: 'http' };
 		}
-		// Legacy "qwen" host: resolve to the local chat model this machine
-		// actually has. Chat rows are no longer seeded, so an operator who has
-		// not added one falls through to the error below.
-		const general =
-			(slugIn ? rows.find((item) => item.slug === slugIn && item.access === 'local_http') : undefined) ||
-      rows.find((item) => item.id === QWEN_38_27B_ID);
-		if (general) return { row: general, slug: slugIn || general.slug, host: 'http' };
+		// Legacy "qwen" host with a slug: the local row serving that slug. Without
+		// one it means "not chosen", which only the chat fallback below resolves.
+		const general = slugIn ? rows.find((item) => item.slug === slugIn && item.access === 'local_http') : undefined;
+		if (general) return { row: general, slug: slugIn, host: 'http' };
 	}
 
 	if (isCliAdapterId(id)) {
@@ -665,11 +663,10 @@ export function resolveAssistant(
 		return { row: ephemeralCli(id, '', rows), slug: '', host: id };
 	}
 
-	// The shipped chat default with no row on this machine used to stop here.
-	// Other installs run a lighter chat model (Qwen3-VL 8B, a remote row, a CLI
-	// model) instead of the 27B, so fall back to whichever chat row exists
-	// before giving up.
-	if (chatFallback && (id === DEFAULT_CHAT_MODEL_ID || id === QWEN_38_27B_ID)) {
+	// An unchosen engine (empty, or the legacy "qwen" host) resolves to a chat row
+	// this machine has, only where the caller allows it. A saved model id whose
+	// row is gone is never swapped for a different model.
+	if (chatFallback && (!id || id === 'qwen')) {
 		// Real chat rows translate *and* handle context work. Only proven chat
 		// candidates qualify: OCR and single-purpose translation specialists
 		// cannot do the job, and a model whose text test failed must not be
@@ -702,7 +699,8 @@ export function hydrateTaskEngine(
 	const engine = typeof rec.engine === 'string' ? rec.engine : '';
 	const model = sanitizeModelSlug(rec.model);
 	try {
-		const resolved = resolveAssistant(engine || DEFAULT_CHAT_MODEL_ID, model, rows, chatFallback);
+		if (!engine && !chatFallback) return { engine: '', model };
+		const resolved = resolveAssistant(engine, model, rows, chatFallback);
 		const inRegistry = rows.some((item) => item.id === resolved.row.id);
 		if (!inRegistry && resolved.row.access === 'cli' && resolved.row.cliAdapter) {
 			return { engine: resolved.row.cliAdapter, model: resolved.slug };

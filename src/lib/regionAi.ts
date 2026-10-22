@@ -56,10 +56,10 @@ export function regionAiSettings(
 }
 
 export function normalizeTranscriptionModels(value: unknown): string[] {
-  if (!Array.isArray(value) || !value.length) return [...DEFAULT_TRANSCRIPTION_MODEL_IDS];
+  // Empty means "follow the operator's Transcribe default"; there is no built-in set.
+  if (!Array.isArray(value)) return [];
   const ids = value.map((item) => String(item || "").trim()).filter(Boolean);
-  const unique = [...new Set(ids)].slice(0, MAX_TRANSCRIPTION_MODELS);
-  return unique.length ? unique : [...DEFAULT_TRANSCRIPTION_MODEL_IDS];
+  return [...new Set(ids)].slice(0, MAX_TRANSCRIPTION_MODELS);
 }
 
 /**

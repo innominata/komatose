@@ -3,7 +3,7 @@
   import { untrack } from "svelte";
   import AiModelPicker from "./AiModelPicker.svelte";
   import TranslationModelPicker from './TranslationModelPicker.svelte';
-  import { assistantDisplayName, DEFAULT_TRANSCRIPTION_MODEL_IDS } from "$lib/modelRegistry";
+  import { assistantDisplayName } from "$lib/modelRegistry";
   import { regionAiSettings, defaultReviseModels, enginesForRegionAiField, MAX_REVISE_MODELS, MAX_TRANSCRIPTION_MODELS, type RegionAiSettings } from "$lib/regionAi";
   import type { TaskEngine, EngineModelOption } from "$lib/aiTasks";
   import { isPageImageOnlyEngine, type TranslateEngine, type TranslateEngineInfo } from "$lib/types";
@@ -107,10 +107,8 @@
       // can still name them. Drop those so they are not transcribed or counted
       // toward the checkbox cap.
       const kept = draft.transcriptionModels.filter((id) => allowed.has(id));
-      if (kept.length !== draft.transcriptionModels.length) {
-        const fallback = DEFAULT_TRANSCRIPTION_MODEL_IDS.filter((id) => allowed.has(id));
-        draft.transcriptionModels = kept.length ? kept : fallback;
-      }
+      // Never substitute other models: an emptied list follows the operator's default.
+      if (kept.length !== draft.transcriptionModels.length) draft.transcriptionModels = kept;
     }
   }
   async function refreshLiveEngines() {
@@ -347,7 +345,7 @@
       ? [...draft.transcriptionModels, id]
       : draft.transcriptionModels.filter((item) => item !== id);
     const unique = [...new Set(next)].slice(0, MAX_TRANSCRIPTION_MODELS);
-    draft.transcriptionModels = unique.length ? unique : draft.transcriptionModels;
+    draft.transcriptionModels = unique;
   }
   const transcriptionPaid = $derived(
     transcriptionOptions.some((row) => draft.transcriptionModels.includes(row.id) && (row.access === 'cli' || row.access === 'remote_http')),

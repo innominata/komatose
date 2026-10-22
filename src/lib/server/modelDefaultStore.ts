@@ -1,5 +1,4 @@
-import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
-import { DEFAULT_TRANSCRIPTION_MODEL_IDS, RETIRED_INPAINT_MODEL_IDS } from '../modelRegistry';
+import { RETIRED_INPAINT_MODEL_IDS } from '../modelRegistry';
 import type { ModelTaskId } from '../modelTasks';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,8 +9,7 @@ import type { ProviderOperation } from '../providerCatalog';
 
 /**
  * Operator-chosen default model per job, stored beside the other machine-local
- * admin settings. The shipped constants remain the last resort so a fresh
- * install behaves exactly as documented.
+ * admin settings. Nothing is built in: an unset job has no default model.
  */
 
 export type DefaultJob = ProviderOperation | 'detect' | 'transcribe';
@@ -54,15 +52,9 @@ export function setModelDefault(job: DefaultJob, rowId: string | undefined): Mod
 
 const IMAGE_TASKS = new Set<ModelTaskId>(['detect', 'textMask', 'segmentBubble', 'inpaint', 'cleaning']);
 
-/**
- * The model a job runs when the operator has not picked another one: the stored
- * job default, the shipped chat model, or a default transcription reader.
- */
+/** The model the operator chose as this job's default. */
 export function isDefaultModelForTask(row: { id: string }, task: ModelTaskId): boolean {
-	if (modelDefaultFor(task) === row.id) return true;
-	if (task === 'sourceDecide') return false;
-	if ((task === 'vision' || task === 'sourceReview') && (DEFAULT_TRANSCRIPTION_MODEL_IDS as readonly string[]).includes(row.id)) return true;
-	return !modelDefaultFor(task) && !IMAGE_TASKS.has(task) && row.id === DEFAULT_CHAT_MODEL_ID;
+	return modelDefaultFor(task) === row.id;
 }
 
 /**
