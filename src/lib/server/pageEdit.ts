@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { creditRole, isCreditsPage, storyPages } from "../credits";
 import { logActivity } from "./activity";
+import { undoPsdImport } from "./psdImport";
 import { describePageWithCli, compactSceneNotesWithCli } from "./cliTranslate";
 import { runCompactSceneNotes, type CompactNotesHandlers } from "./compactNotes";
 import { isSingleColorPage, runDescribePage, type DescribePageHandlers } from "./pageDescribe";
@@ -1290,6 +1291,12 @@ export async function undoPageOp(
       throw new PageEditError("Nothing to undo");
     }
     return { op, image: restored[0], images: restored };
+  }
+  if (op.type === "psd-import") {
+    const image = (await listImages(ctx.episode.id)).find((p) => p.id === op.imageId);
+    if (!image) throw new PageEditError("The imported page no longer exists");
+    await undoPsdImport(ctx.episode.id, image, op);
+    return { op, image };
   }
   if (op.type === "reorder") {
     await applyOrder(ctx.episode.id, op.order);

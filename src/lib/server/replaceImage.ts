@@ -95,6 +95,14 @@ async function flattenLayers(psd: Psd): Promise<Sharp> {
 	}).composite(overlays);
 }
 
+/** Every layer with its pixels and text, for importing an exported page back. */
+export function readLayeredPsd(bytes: Buffer): Psd {
+	if (bytes.subarray(0, 4).toString('latin1') !== '8BPS') throw new ReplaceError('Not a PSD file');
+	const head = readPsd(bytes, { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true });
+	if (head.width > MAX_DIM || head.height > MAX_DIM) throw new ReplaceError('PSD is too large');
+	return readPsd(bytes, { useImageData: true, skipThumbnail: true, skipCompositeImageData: true });
+}
+
 async function decodePsd(bytes: Buffer): Promise<Sharp> {
 	// Structure + composite first; layers are only decoded if we need them.
 	const head = readPsd(bytes, { useImageData: true, skipLayerImageData: true, skipThumbnail: true });

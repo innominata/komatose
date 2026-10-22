@@ -11,6 +11,7 @@ import type { ImageRow } from '../types';
 export type PageUndoOp = { description?: string; undoId?: string } & (
 	| { type: 'combine'; originalId: string; removed: ImageRow; geometry: Record<string, GeometrySnapshot> }
 	| { type: 'pixels'; imageId: string; imageIds?: string[]; geometry?: Record<string, GeometrySnapshot> }
+	| { type: 'psd-import'; imageId: string; geometry: GeometrySnapshot; bodies: { id: string; body: string }[] }
 	| { type: 'reorder'; order: { id: string; sortOrder: number }[] }
 	| {
 			type: 'split';
@@ -81,6 +82,10 @@ export function pageUndoSummary(op: PageUndoOp | undefined, images: readonly Ima
 			label = op.description || 'Edit page artwork';
 			effect = op.geometry ? 'Restore the previous image pixels and the saved cleaning, region positions and lettering captured before this edit.' : 'Restore the previous image pixels.';
 			ids = op.imageIds?.length ? op.imageIds : [op.imageId]; break;
+		case 'psd-import':
+			label = 'Import edits from PSD';
+			effect = 'Restore the artwork, region positions, lettering styles and English from before the import.';
+			ids = [op.imageId]; break;
 	}
 	if (op.type !== 'pixels') label = op.description || label;
 	const pages = ids.slice(0, 3).map(id => preparePageLabel(id, images)).join('; ');
@@ -132,6 +137,7 @@ export async function discardDeletedPageUndo(seriesSlug: string, episodeSlug: st
 	const log = await readUndoLog(seriesSlug, episodeSlug);
 	const kept = log.filter(op => {
 		if (op.type === 'pixels') return ![op.imageId, ...(op.imageIds ?? [])].some(id => deleted.has(id));
+		if (op.type === 'psd-import') return !deleted.has(op.imageId);
 		if (op.type === 'combine') return !deleted.has(op.originalId) && !deleted.has(op.removed.id);
 		if (op.type === 'split') return !deleted.has(op.originalId) && !deleted.has(op.createdId);
 		if (op.type === 'reslice') return ![...op.createdIds, ...op.previous.map(page => page.id)].some(id => deleted.has(id));

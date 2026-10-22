@@ -1974,6 +1974,72 @@ test("PNG and PSD composites agree, PSD retains editable text and explicit break
   assert.equal(snap.pages[0].regions[0].line.body, originalText);
 });
 
+
+test("PSD import recovers rotation, skew and scale from a text-layer matrix", async () => {
+  const { decomposeTextMatrix } = await import("../src/lib/server/psdImport");
+  const { textMatrix } = await import("../src/lib/textTransform");
+  for (const style of [{ rotation: 0, skewX: 0, skewY: 0 }, { rotation: -15.8, skewX: 22, skewY: 0 }, { rotation: 140, skewX: -30, skewY: 12 }]) {
+    const m = textMatrix(style).map((v) => v * 1.5) as unknown as [number, number, number, number];
+    const parts = decomposeTextMatrix(m, { rotation: style.rotation + 3, skewX: style.skewX, skewY: style.skewY })!;
+    for (const key of ["rotation", "skewX", "skewY"] as const)
+      assert.ok(Math.abs(parts[key] - style[key]) < 1e-6, `${key}: ${parts[key]} vs ${style[key]}`);
+    assert.ok(Math.abs(parts.scale - 1.5) < 1e-9);
+  }
+});
+
+test("PSD import brings back Photoshop text, transform, colour and artwork edits as one undo step", async () => {
+  const { writePsdBuffer } = await import("ag-psd");
+  const { planPsdImport, applyPsdImport } = await import("../src/lib/server/psdImport");
+  const { undoPageOp } = await import("../src/lib/server/pageEdit");
+  const user = { id: "u", username: "test", role: "admin" as const };
+  const page = (await listImages("e"))[0];
+  const exported = async () => {
+    const snap = await captureExport(series, episode, "psd", true);
+    const one = snap.pages.find((p) => p.image.id === page.id)!;
+    return finishedPsd(one, await renderPage(one));
+  };
+  const untouched = await planPsdImport(series, episode, page.id, await exported());
+  assert.deepEqual(untouched.regions, [], JSON.stringify(untouched.regions));
+  assert.equal(untouched.artwork, undefined);
+
+  const before = (await listLines("e")).find((l) => l.id === "l")!;
+  const regionBefore = getDoc<any>("region:l", {}).data;
+  const psd = readPsd(await exported(), { useImageData: true });
+  const layer = psd.children!.find((l) => l.text)!;
+  layer.text!.text = "Changed in Photoshop";
+  layer.text!.style!.fillColor = { r: 200, g: 16, b: 32 };
+  layer.text!.styleRuns = undefined;
+  const t = layer.text!.transform!;
+  layer.text!.transform = [t[0], t[1], t[2], t[3], t[4] + 30, t[5] - 12];
+  const art = psd.children!.find((l) => l.name === "Cleaned artwork")!;
+  for (let i = 0; i < 50; i++) art.imageData!.data.set([255, 0, 0, 255], i * 4);
+  const edited = Buffer.from(writePsdBuffer(psd, { invalidateTextLayers: true }));
+
+  const plan = await planPsdImport(series, episode, page.id, edited);
+  assert.equal(plan.regions.length, 1, plan.warnings.join("; "));
+  const change = plan.regions[0];
+  assert.equal(change.body, "Changed in Photoshop");
+  assert.equal(change.style.fill, "#c81020");
+  assert.ok(Math.abs(change.move!.dx - 30) < 0.01 && Math.abs(change.move!.dy + 12) < 0.01, JSON.stringify(change.move));
+  assert.equal(change.rotation, undefined);
+  assert.ok(plan.artwork);
+
+  await applyPsdImport(series, episode, user.id, plan);
+  const after = (await listLines("e")).find((l) => l.id === "l")!;
+  assert.equal(after.body, "Changed in Photoshop");
+  assert.ok(Math.abs((after.x! - before.x!) * page.width - 30) < 0.01);
+  const region = getDoc<any>("region:l", {}).data;
+  assert.equal(region.style.fill, "#c81020");
+  assert.equal(region.layout.style.fill, "#c81020", "the refit keeps the imported colour");
+  assert.ok(getDoc<any>(`page:${page.id}`, {}).data.cleanBase);
+
+  await undoPageOp({ series, episode, user });
+  const restored = (await listLines("e")).find((l) => l.id === "l")!;
+  assert.equal(restored.body, before.body);
+  assert.equal(restored.x, before.x);
+  assert.deepEqual(getDoc<any>("region:l", {}).data.style, regionBefore.style);
+});
+
 test("placing a later region immediately after an earlier one shifts the in-between slots up", () => {
   const ids = (items: { id: string }[]) => items.map((item) => item.id);
   const page = ["a", "b", "c", "d", "e"].map((id) => ({ id }));

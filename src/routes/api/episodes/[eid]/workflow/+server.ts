@@ -674,7 +674,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         return putDoc(episode.id, region.id, data, region.revision);
       })();
       let fitted = doc;
-      // Horizontal skew widens each line, and layouts from before per-line skew need re-rendering.
+      // Layouts fitted while horizontal skew changed the fit need re-rendering.
       if ((b.rotation !== undefined || b.skewX !== undefined) && line.body?.trim()) {
         try { fitted = await fitRegion(series, episode, line.id, doc.revision); }
         catch { /* Keep the saved text angle or skew when the region cannot be fitted yet. */ }

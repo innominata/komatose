@@ -15,7 +15,8 @@
 		ondescribe,
 		ondelete,
 		onretranslate,
-		onreplace
+		onreplace,
+		onimportpsd
 	}: {
 		image: ImageRow | null;
 		index?: number;
@@ -31,6 +32,7 @@
 		ondelete?: () => void;
 		onretranslate?: () => void;
 		onreplace?: () => void;
+		onimportpsd?: () => void;
 	} = $props();
 </script>
 
@@ -78,6 +80,9 @@
 		{/if}
 		{#if onreplace}
 			<button class="ed-btn mt-2" type="button" data-find="replace-file" onclick={() => onreplace?.()}>Replace from image / PSD</button>
+		{/if}
+		{#if onimportpsd}
+			<button class="ed-btn mt-2" type="button" data-find="import-psd" title="Bring back text, lettering and artwork edits from a PSD exported from this page, keeping layers editable" onclick={() => onimportpsd?.()}>Import edits from PSD</button>
 		{/if}
 		<p class="hud-kicker mb-0 mt-2">Translators see this. It is not drawn on the page.</p>
 	</div>

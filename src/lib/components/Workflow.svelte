@@ -520,6 +520,7 @@
   let replacementInput = $state<HTMLInputElement>();
   let insertPosition = $state<{ beforeId?: string; afterId?: string }>({});
   let replacementId = "";
+  let psdImportInput = $state<HTMLInputElement>();
   let seriesTerms = $state(series.glossary ?? []);
   const characters = $derived(glossaryCharacters(seriesTerms));
   let assignmentCharacterId = $state<string | null>(null);
@@ -1089,6 +1090,42 @@
       if (!res.ok) throw new Error(data.error);
       await refresh();
       await refreshPageUndo();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+  /** Import edits from a PSD exported from this page: list the changes, confirm, then apply as one undo step. */
+  async function importPsd(file?: File) {
+    if (!file || !page) return;
+    const imageId = page.id;
+    const send = async (apply: boolean) => {
+      const form = new FormData();
+      form.append("file", file);
+      if (apply) form.append("apply", "1");
+      const res = await fetch(`${apiBase}/images/${imageId}/psd`, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      return data as { regions: { layer: string; changes: string[] }[]; artwork: boolean; warnings: string[]; failed?: string[] };
+    };
+    busy = true;
+    try {
+      const plan = await send(false);
+      const notes = plan.warnings.length ? `\n\nNotes:\n${plan.warnings.map((w) => `• ${w}`).join("\n")}` : "";
+      if (!plan.regions.length && !plan.artwork) {
+        window.alert(`“${file.name}” has no changes to import for ${preparePageLabel(imageId, studioState?.images ?? [])}.${notes}`);
+        return;
+      }
+      const lines = [
+        ...(plan.artwork ? ["• Page artwork (cleaned layer and painted layers)"] : []),
+        ...plan.regions.map((r) => `• ${r.layer}: ${r.changes.join(", ")}`),
+      ];
+      if (!window.confirm(`Import these edits from “${file.name}” into ${preparePageLabel(imageId, studioState?.images ?? [])}?\n\n${lines.join("\n")}${notes}\n\nChanged text is refitted. Undo page edit restores everything.`)) return;
+      const result = await send(true);
+      await refresh();
+      await refreshPageUndo();
+      notify(result.failed?.length ? `Imported, but some regions could not be refitted: ${result.failed.join("; ")}` : "Imported edits from PSD");
     } catch (e) {
       error = String(e);
     } finally {
@@ -3960,6 +3997,16 @@
     e.currentTarget.value = "";
   }}
 />
+<input
+  hidden
+  bind:this={psdImportInput}
+  type="file"
+  accept=".psd"
+  onchange={(e) => {
+    void importPsd(e.currentTarget.files?.[0]);
+    e.currentTarget.value = "";
+  }}
+/>
 <div
   class="studio editor-workspace"
   class:wait-cursor={waitCursor}
@@ -4580,6 +4627,7 @@
             oncaption={caption}
             ondescribe={() => page && describe([page.id], true)}
             onreplace={page && canUpload ? () => { replacementId = page.id; replacementInput?.click(); } : undefined}
+            onimportpsd={page && canClean ? () => psdImportInput?.click() : undefined}
             ondelete={() => deletePage(page!.id)}
             onretranslate={() => translatePage(page!.id)}
           />
