@@ -167,7 +167,8 @@ def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
     import mask_fit
     height, width = image.shape[:2]
     raw = koharu_mask.predict(image, device)
-    gray, page = mask_fit.page_statistics(image) if any(_placement(placements, i) for i in range(len(regions))) else (None, None)
+    # Page statistics are needed in every place: outlined marks are recovered for all regions.
+    gray, page = mask_fit.page_statistics(image)
     result = np.zeros((height, width), np.uint8)
     diagnostics = []
     for index, poly in enumerate(regions):
@@ -180,7 +181,7 @@ def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
             clipped = mask_fit.fit_region(gray, raw, allowed, placement, expansion, page)
         else:
             # Unknown place: plain dilation, keeping glyphs that poke out of the box whole.
-            clipped = mask_fit.fit_region(None, raw, allowed, None, expansion, {'scale': mask_fit.page_scale(height, width)})
+            clipped = mask_fit.fit_region(gray, raw, allowed, None, expansion, page)
         result |= clipped
         diagnostics.append({**_region_diagnostics(index, allowed, clipped), **({'placement': placement} if placement else {})})
     meta = {

@@ -20,7 +20,43 @@ def balloon_page():
     return img, seed
 
 
+def outlined_sfx_page():
+    """Black glyphs with a 1 px white outline on dark art, a dot the model missed, and a ring glyph."""
+    img = np.full((200, 400, 3), 40, np.uint8)
+    seed = np.zeros((200, 400), np.uint8)
+    for x0 in (40, 140):
+        cv2.rectangle(img, (x0 - 1, 59), (x0 + 61, 141), (255, 255, 255), 1)
+        cv2.rectangle(img, (x0, 60), (x0 + 60, 140), (0, 0, 0), -1)
+        seed[60:141, x0:x0 + 61] = 255
+    # A ring glyph: its counter shows the art through it and must stay unmasked.
+    cv2.circle(img, (290, 100), 41, (255, 255, 255), 1)
+    cv2.circle(img, (290, 100), 40, (0, 0, 0), 12)
+    cv2.circle(img, (290, 100), 33, (255, 255, 255), 1)
+    cv2.circle(img, (290, 100), 32, (5, 5, 5), -1)
+    ring = np.zeros((200, 400), np.uint8)
+    cv2.circle(ring, (290, 100), 40, 255, 12)
+    seed |= ring
+    # The missed ellipsis dot.
+    cv2.circle(img, (360, 130), 7, (255, 255, 255), -1)
+    cv2.circle(img, (360, 130), 6, (0, 0, 0), -1)
+    return img, seed
+
+
 class MaskFit(unittest.TestCase):
+    def test_missed_outlined_dot_is_added_but_glyph_counters_are_not(self):
+        img, seed = outlined_sfx_page()
+        gray, page = mask_fit.page_statistics(img)
+        allowed = np.zeros_like(seed)
+        allowed[40:160, 20:390] = 255
+        fitted = mask_fit.fit_region(gray, seed, allowed, 'outside', 0, page)
+        self.assertTrue(fitted[130, 360], 'the dot drawn like the glyphs is masked')
+        self.assertFalse(fitted[100, 290], "the ring glyph's counter stays unmasked")
+        # Outside the region nothing is added.
+        allowed_left = np.zeros_like(seed)
+        allowed_left[40:160, 20:220] = 255
+        self.assertFalse(mask_fit.fit_region(gray, seed, allowed_left, 'outside', 0, page)[130, 360])
+
+
     def test_inside_grows_on_flat_paper(self):
         img, seed = balloon_page()
         gray, page = mask_fit.page_statistics(img)
