@@ -223,6 +223,7 @@ export async function openaiChatCompletions(
 				method: 'POST',
 				headers: {
 					...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
+					...appAttributionHeaders(cfg.baseUrl),
 					'content-type': 'application/json',
 				},
 				body: JSON.stringify(body),
@@ -284,10 +285,23 @@ export async function openaiChatCompletions(
 	}
 }
 
+/**
+ * OpenRouter attributes each request to an app by these optional headers. Naming
+ * Komatose means any spend listed as "unknown" did not come from this app.
+ */
+export function appAttributionHeaders(baseUrl: string): Record<string, string> {
+	try {
+		if (!/(^|\.)openrouter\.ai$/i.test(new URL(baseUrl).hostname)) return {};
+	} catch {
+		return {};
+	}
+	return { 'HTTP-Referer': 'https://github.com/innominata/komatose', 'X-Title': 'Komatose' };
+}
+
 export async function openaiListModels(baseUrl: string, apiKey: string, abort?: AbortSignal) {
 	const url = `${baseUrl.replace(/\/$/, '')}/models`;
 	const res = await fetch(url, {
-		headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+		headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...appAttributionHeaders(baseUrl) },
 		signal: abort ?? AbortSignal.timeout(5000),
 	});
 	if (!res.ok) throw new Error(`HTTP ${res.status}`);

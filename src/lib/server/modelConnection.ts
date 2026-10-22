@@ -1,5 +1,5 @@
 import type { ModelRow } from "../modelRegistry";
-import type { AssistantHttpConfig } from "./openaiHttp";
+import { appAttributionHeaders, type AssistantHttpConfig } from "./openaiHttp";
 import { DEFAULT_CHAT_MODEL_ID } from "../modelDefaults";
 import { envVar } from "./envFile";
 import { effectiveManagedRow, managedModelRunning } from "./modelUsage";
@@ -77,7 +77,7 @@ export async function probeModelConnection(
     return { available: false, reason: `${cfg.apiKeyEnv} is not set` };
   try {
     const res = await fetch(`${cfg.baseUrl}/models`, {
-      headers: cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {},
+      headers: { ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}), ...appAttributionHeaders(cfg.baseUrl) },
       signal: AbortSignal.timeout(3000),
     });
     return res.ok
