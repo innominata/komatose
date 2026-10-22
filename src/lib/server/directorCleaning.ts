@@ -22,6 +22,7 @@ import {
 import { listLines } from "./queries";
 import { digest, regionCrop } from "./directorMemory";
 import { directorEvent, directorAsset } from "./directorAudit";
+import { excludeIfNotLettering } from "./directorLettering";
 import { auditedDirectorOperation, pageFingerprint } from "./directorState";
 import { maskedCleaning, runWorkflowPng } from "./workflowImages";
 import { preferences } from "./workflowService";
@@ -576,6 +577,7 @@ export async function cleanDirectorPage(
           "Source text or damaged artwork remains in a locked region; clean other regions and retain this one for review",
       });
   }
+  const damaged = new Map<string, string>();
   const remaining = () =>
     lines.filter((line) => !completed.has(line.id) && inScope(line));
   // A region whose box overlaps a target shares its lettering. Protecting it
@@ -1081,6 +1083,7 @@ export async function cleanDirectorPage(
       for (const line of batch) {
         const review = await inspect(base, limited, method, line);
         if (!review.safe) {
+          if (review.problem === "artwork-damage") damaged.set(line.id, review.reason);
           failure(method, [line], review.reason);
           continue;
         }
@@ -1128,6 +1131,9 @@ export async function cleanDirectorPage(
       methods.push({ id: "lama-manga", editor: false });
       let cleaned = false;
       for (const method of methods) {
+        // Erasing the region erased artwork: it may be artwork boxed as text
+        // (shoelaces read as letters). Ask before trying another method.
+        if (await notLettering(line)) break;
         for (const ghost of [0, GHOST_MASK_GROW]) {
           const base = current;
           let residue = false;
@@ -1192,6 +1198,7 @@ export async function cleanDirectorPage(
             const review = await inspect(base, limited, method.id, line);
             if (!review.safe) {
               residue = review.problem === "remaining-text";
+              if (review.problem === "artwork-damage") damaged.set(line.id, review.reason);
               throw new Error(review.reason);
             }
             await save(limited, line, method.id, selected);
@@ -1205,6 +1212,18 @@ export async function cleanDirectorPage(
         if (cleaned || completed.has(line.id)) break;
       }
     }
+  };
+  // Regions whose clean was rejected for erasing artwork, with the verdict.
+  // Each is checked for lettering once; artwork leaves the page's regions.
+  const checkedLettering = new Set<string>();
+  const notLettering = async (line: LineRow) => {
+    const reason = damaged.get(line.id);
+    if (!reason || checkedLettering.has(line.id)) return false;
+    checkedLettering.add(line.id);
+    if (!(await excludeIfNotLettering(ctx, imageId, call, rawBytes, line, { stage: "Cleaning verification", reason })))
+      return false;
+    lines.splice(lines.indexOf(line), 1);
+    return true;
   };
   await repairRegions(remaining());
   const unresolved = () => remaining().filter((line) => !deferred(line));

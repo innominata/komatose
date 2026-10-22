@@ -20,8 +20,9 @@ import {
 	type TorchEnvironment,
 } from '../computeDevices';
 import { llamaServerBin, llamaServerEnv, sdServerBin } from './gpuMode';
-import { nvtopUsage, readRenderNodes } from './nvtopSnapshot';
+import { nvtopUsage, readRenderNodes, vulkanNamesByPdev } from './nvtopSnapshot';
 import { ROOT } from './paths';
+import { ramResidents } from './ramResidents';
 
 /**
  * What this machine can run models on, and which device each model should use.
@@ -70,6 +71,13 @@ function fileExists(path: string) {
 
 const LIST_LINE = /^\s*([A-Za-z]+\d+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)\s*$/;
 
+/** RADV names an APU's graphics after the CPU, which reads like the wrong card. */
+function igpuLabel(label: string): string {
+	if (!/\b(Ryzen|Processor|Core\(TM\)|Core Ultra)\b/i.test(label)) return label;
+	const cpu = label.replace(/^AMD\s+|^Intel\(R\)\s+/i, '').replace(/\s+\d+-Core Processor$|\s+Processor$/i, '').trim();
+	return `Integrated graphics (${cpu})`;
+}
+
 /** Parses `llama-server --list-devices`; software rasterisers are dropped. */
 export function parseGgmlDevices(text: string): GgmlDevice[] {
 	const devices: GgmlDevice[] = [];
@@ -81,7 +89,7 @@ export function parseGgmlDevices(text: string): GgmlDevice[] {
 		const totalMiB = Number(total);
 		devices.push({
 			name,
-			label: rawLabel.replace(/\s*\((?:RADV|NVIDIA|Intel)[^)]*\)\s*$/i, '').trim() || rawLabel,
+			label: igpuLabel(rawLabel.replace(/\s*\((?:RADV|NVIDIA|Intel)[^)]*\)\s*$/i, '').trim() || rawLabel),
 			backend: ggmlBackend(name),
 			totalMiB,
 			freeMiB: Number(free),
@@ -91,11 +99,11 @@ export function parseGgmlDevices(text: string): GgmlDevice[] {
 	return devices;
 }
 
-/** RADV lists Vulkan0, Vulkan1, … in DRM render-node order, which is how the PCI address is known. */
+/** The PCI address of each Vulkan device, from the render node it pairs with. */
 function attachGgmlPdevs(devices: GgmlDevice[]): GgmlDevice[] {
-	const renders = readRenderNodes().sort((a, b) => a.minor - b.minor);
-	if (!renders.length || renders.length !== devices.length) return devices;
-	return devices.map((device, index) => ({ ...device, pdev: pciKey(renders[index].pdev) || device.pdev }));
+	const byPdev = vulkanNamesByPdev(readRenderNodes(), devices);
+	const pdevOf = new Map([...byPdev].map(([pdev, name]) => [name, pciKey(pdev)]));
+	return devices.map((device) => ({ ...device, pdev: pdevOf.get(device.name) || device.pdev }));
 }
 
 /** Cached, synchronous: launch paths need an answer before they spawn. */
@@ -339,6 +347,17 @@ export function gpuUsage(): GpuUsage[] {
 	return store.usage.value;
 }
 
+/** MemAvailable, so reclaimable page cache does not count as used. */
+function availableMiB(): number {
+	try {
+		const kb = /^MemAvailable:\s+(\d+) kB/m.exec(readFileSync('/proc/meminfo', 'utf8'));
+		if (kb) return Math.round(Number(kb[1]) / 1024);
+	} catch {
+		/* not Linux */
+	}
+	return Math.round(freemem() / MIB);
+}
+
 export function hardwareSnapshot({ refresh = false } = {}): HardwareSnapshot {
 	const ggml = ggmlDevices(refresh ? 0 : GGML_TTL_MS);
 	if (refresh) store.usage = undefined;
@@ -358,7 +377,7 @@ export function hardwareSnapshot({ refresh = false } = {}): HardwareSnapshot {
 	const namedTorch = torch.map((env) => ({ ...env, devices: assignTorchPdevs(env.devices, ggml.devices) }));
 	return {
 		cpu: { model: cpus()[0]?.model?.trim() || 'CPU', cores: cpus().length },
-		ram: { totalMiB: Math.round(totalmem() / MIB), freeMiB: Math.round(freemem() / MIB) },
+		ram: { totalMiB: Math.round(totalmem() / MIB), freeMiB: availableMiB(), residents: ramResidents() },
 		llama: { bin: ggml.bin, found: fileExists(ggml.bin), backend: discrete?.backend || ggml.devices[0]?.backend, devices: ggml.devices, error: ggml.error },
 		imageServer: { bin: sd, found: fileExists(sd) },
 		torch: namedTorch,

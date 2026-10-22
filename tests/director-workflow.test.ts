@@ -255,6 +255,8 @@ const requests: {
   schema: any;
 }[] = [];
 let respond: (purpose: string, data: any) => any = (purpose, data) => {
+  if (purpose === "verify-lettering")
+    return { hasLettering: true, reason: "Lettering is visible in the target area." };
   if (purpose === "learn-region-example")
     return {
       cues: "Rounded balloon and short tail indicate dialogue.",
@@ -2097,6 +2099,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
       }
       if(purpose==='plan-balloon-fills' && opts.failPlan) throw new Error('Balloon assessment unavailable');
       if(purpose==='plan-balloon-fills') return {decisions:data.regions.map((r:any)=>({lineId:r.id,eligible:opts.bubble!==false && r.id===ids[0],plainBubble:!!opts.visualPlain?.includes(ids.indexOf(r.id)),borderIntact:true,borderCrossed:!!opts.crossed,interiorArtwork:false,reason:'Visual balloon assessment'}))};
+      if(purpose==='verify-lettering')return {hasLettering:true,reason:'Lettering is visible in the target area.'};
       assert.equal(purpose,'inspect-cleaning');
       if(data.scope==='whole-page') {
         assert.deepEqual(data.imageOrder,['current cleaned artwork']);
@@ -2381,6 +2384,38 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
 });
 
 
+test("artwork boxed as text is excluded only when a neutral lettering check agrees, and undo restores it",async()=>{
+  const {excludeIfNotLettering}=await import('../src/lib/server/directorLettering');
+  const page=await seedChapter('shoelace-artwork',32);
+  sqlite.prepare('UPDATE lines SET x=?,y=?,w=?,h=?,source=?,body=? WHERE id=?').run(.3,.3,.2,.1,'조사','Investigation',page.lineId);
+  const raw=await sharp({create:{width:400,height:300,channels:3,background:'#8a5a3c'}}).png().toBuffer();
+  const runId=createJob(page.episode.id,'director',{});
+  sqlite.prepare("INSERT INTO director_runs(id,episode_id,user_id,scope,model,proofreader,state,page_ids,created_at,updated_at,version,policy) VALUES(?,?,?,'page',?,?,'running',?,1,1,10,?)")
+    .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(directorPolicy({})));
+  const ctx:any={run:{id:runId},series:page.series,episode:page.episode,user,signal:new AbortController().signal,authorize:async()=>{}};
+  const doubt={stage:'Cleaning verification',reason:'Cleaning erased the white shoelaces.'};
+  const line=()=>sqlite.prepare('SELECT * FROM lines WHERE id=?').get(page.lineId) as any;
+  const asked:string[]=[];
+  const answer=(hasLettering:boolean)=>(async(purpose:string,system:string)=>{
+    asked.push(purpose);assert.match(system,/Do not assume the target contains text/);
+    return {hasLettering,reason:hasLettering?'Hangul strokes are visible.':'Only white shoelaces crossing a brown shoe.'};
+  }) as any;
+  const toLine=(row:any)=>({...row,imageId:row.image_id,sourceState:row.source_state});
+  // Real lettering survives a mistaken doubt.
+  assert.equal(await withDirector({runId,episodeId:page.episode.id,imageId:page.imageId},()=>excludeIfNotLettering(ctx,page.imageId,answer(true),raw,toLine(line()),doubt)),false);
+  assert.equal(line().source_state,'read');
+  // Artwork both checks agree on is a reversible machine exclusion that keeps its text.
+  assert.equal(await withDirector({runId,episodeId:page.episode.id,imageId:page.imageId},()=>excludeIfNotLettering(ctx,page.imageId,answer(false),raw,toLine(line()),doubt)),true);
+  assert.deepEqual(asked,['verify-lettering','verify-lettering']);
+  assert.equal(line().source_state,'ignored');assert.equal(line().source,'조사');assert.match(line().ignore_reason,/shoelaces/);
+  const review=getDoc<any>(`region:${page.lineId}`,{}).data.directorDetectionReview;
+  assert.equal(review.verdict,'non-text');assert.equal(review.lineRevision,line().revision);
+  assert.ok(sqlite.prepare("SELECT 1 FROM director_events WHERE run_id=? AND kind='region:non-text'").get(runId));
+  sqlite.prepare("UPDATE director_runs SET state='completed' WHERE id=?").run(runId);
+  undoDirector({episodeId:page.episode.id,runId});
+  assert.equal(line().source_state,'read');
+});
+
 test("outside-lettering close-ups revoke cached halos and invented lines before a passing page verdict",async(t)=>{
   const {cleanDirectorPage}=await import('../src/lib/server/directorCleaning');
   const {readAsset}=await import('../src/lib/server/workflowStore');
@@ -2406,6 +2441,7 @@ test("outside-lettering close-ups revoke cached halos and invented lines before 
       .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(policy));
     const operations:any[]=[],reviews:any[]=[];
     const call=(async(purpose:string,system:string,data:any,images:Buffer[],schema:any)=>{
+      if(purpose==='verify-lettering')return {hasLettering:true,reason:'Lettering is visible in the target area.'};
       assert.equal(purpose,'inspect-cleaning');reviews.push(data);
       if(data.scope==='whole-page')return {safe:true,problem:'none',reason:'Tall-page preview appears clear'};
       assert.equal(data.regions[0].source,undefined);assert.equal(data.repairFinding,undefined);assert.equal(data.findings,undefined);
@@ -2484,6 +2520,7 @@ test("pixel residue revokes an old clean checkpoint and rechecks connected lobes
     };
     const call=(async(purpose:string,_system:string,data:any,images:Buffer[])=>{
       if(purpose==='plan-balloon-fills')return{decisions:data.regions.map((r:any)=>({lineId:r.id,eligible:!['refused','pending'].includes(mode),plainBubble:!['refused','pending'].includes(mode),borderIntact:!['refused','pending'].includes(mode),borderCrossed:mode==='crossed',interiorArtwork:mode==='artwork',reason:mode==='refused'?'Connected neck is mistakenly called an open boundary':'Closed uniform connected bubble'}))};
+      if(purpose==='verify-lettering')return {hasLettering:true,reason:'Lettering is visible in the target area.'};
       assert.equal(purpose,'inspect-cleaning');reviews.push(data);
       if(data.scope==='region'){
         assert.equal(images.length,4);assert.equal(data.imageOrder.length,4);
@@ -3561,7 +3598,8 @@ test('a missing raw reading is queried as a region follow-up, then frontier tran
     const follow=listJobs(page.episode.id).find(j=>j.payload.followUpOf===parent)!;
     assert.ok(follow);assert.match(String(follow.payload.prompt),/source and your recommended English translation/);
     assert.match(String(follow.payload.prompt),new RegExp(id));
-    assert.equal(follow.payload.prompt,`Please give me the original source and your recommended English translation of the text in the attached context crop, region ${id}.`);
+    // Neutral: the question must not assume the detected region holds text.
+    assert.match(String(follow.payload.prompt),/Is there lettering inside that target area, or is it artwork/);
     assert.doesNotMatch(String(follow.payload.prompt),/Clarification needed|unreadable|empty|normalized|Current proofreader guidance/);
     const sent=proofreaderRequests.slice(pstart);
     assert.deepEqual(sent.map(r=>r.mode),['follow-up','critique','critique']);

@@ -59,7 +59,7 @@ test('two editors that share a pid stay one line, and a venv keeps its environme
 	assert.equal(named[1].kind, 'venv');
 });
 
-test('render-node order is the Vulkan index, joined by PCI address', () => {
+test('Vulkan devices pair with render nodes by integrated, size and memory in use', () => {
 	const names = vulkanNamesByPdev(
 		[
 			{ minor: 130, pdev: '0000:07:00.0' },
@@ -71,6 +71,23 @@ test('render-node order is the Vulkan index, joined by PCI address', () => {
 	assert.equal(names.get('0000:12:00.0'), 'Vulkan0');
 	assert.equal(names.get('0000:03:00.0'), 'Vulkan1');
 	assert.equal(names.get('0000:07:00.0'), 'Vulkan2');
+
+	// RADV lists the iGPU first even though its render node is last; identical cards split by memory in use.
+	const measured = vulkanNamesByPdev(
+		[
+			{ minor: 128, pdev: '0000:03:00.0', totalMiB: 24560, usedMiB: 24204 },
+			{ minor: 129, pdev: '0000:07:00.0', totalMiB: 24560, usedMiB: 15501 },
+			{ minor: 130, pdev: '0000:12:00.0', totalMiB: 512, usedMiB: 364 },
+		],
+		[
+			{ name: 'Vulkan0', integrated: true, totalMiB: 31945, freeMiB: 30936 },
+			{ name: 'Vulkan1', integrated: false, totalMiB: 24560, freeMiB: 355 },
+			{ name: 'Vulkan2', integrated: false, totalMiB: 24560, freeMiB: 9058 },
+		],
+	);
+	assert.equal(measured.get('0000:12:00.0'), 'Vulkan0');
+	assert.equal(measured.get('0000:03:00.0'), 'Vulkan1');
+	assert.equal(measured.get('0000:07:00.0'), 'Vulkan2');
 
 	const parsed = parseNvtopSnapshot(`noise\n[{"pdev":"0000:07:00.0","integrated":false,"mem_total":"25753026560","mem_used":"16591138816","processes":[{"pid":"9","cmdline":"sd-server --diffusion-model /m/qwen-image-edit-2511/w.gguf --token ${TOKEN}","gpu_mem_bytes_alloc":"13244198912","gpu_gtt_bytes":"10485760"}]}]`);
 	assert.equal(parsed[0]?.pdev, '0000:07:00.0');
@@ -85,4 +102,10 @@ test('render-node order is the Vulkan index, joined by PCI address', () => {
 	);
 	assert.equal(JSON.stringify(residents).includes(TOKEN), false);
 	assert.equal(residents[0]?.label, 'Qwen-Image-Edit');
+
+	const foreign = collectResidents([
+		{ pid: 5, cmdline: '/home/u/Strata/engine/strata --serve --pack /home/u/packs/iq2_xs --key secret', vramBytes: 23957 * 1048576, gttBytes: 0 },
+		{ pid: 6, cmdline: '/usr/bin/Hyprland', vramBytes: 174 * 1048576, gttBytes: 0 },
+	]);
+	assert.deepEqual(foreign.map((item) => [item.label, item.kind, item.detail]), [['Strata', 'foreign', 'iq2_xs'], ['Other', 'other', undefined]]);
 });

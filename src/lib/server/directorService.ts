@@ -242,6 +242,15 @@ export async function startDirector(opts: {series:Series;episode:Episode;user:Pu
   return {runId:id,pageIds:ids};
 }
 
+/** Where a region sits inside its proofreader context crop, in words. */
+function targetArea(line:{x:number|null;y:number|null;w:number|null;h:number|null},meta?:{width?:number;height?:number}){
+  const W=meta?.width||1,H=meta?.height||1,w=(line.w??0)*W,h=(line.h??0)*H;
+  // Mirrors proofreaderRegionCrop's padding, before clipping at the page edge.
+  const pad=Math.max(W*0.12,w*0.75,h*0.5);
+  const pw=Math.round(100*w/(w+2*pad)),ph=Math.round(100*h/(h+2*pad));
+  return `the target area is the middle ${pw}% of the width and ${ph}% of the height`;
+}
+
 export function stopDirector(episodeId:string,runId:string,stop=false) {
   const run = runRow(runId,episodeId);
   if (run.state !== 'running') throw new WorkflowError('Director is not running',409);
@@ -373,7 +382,9 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       const {saved,capture}=await rawReading();
       await authorizeDirector(user,series.id);
       const crop=await proofreaderRegionCrop(capture.raw,line);
-      const prompt=`Please give me the original source and your recommended English translation of the text in the attached context crop, region ${line.id}.`;
+      // Neutral on purpose: detectors box artwork (shoelaces, folds) as text, and a
+      // question that assumes text gets text back, often copied from a neighbour.
+      const prompt=`The attached crop is centred on detected region ${line.id}; ${targetArea(line,await sharp(capture.raw).metadata())}. Lettering elsewhere in the crop belongs to other regions. Is there lettering inside that target area, or is it artwork the detector mistook for text? If it is lettering, give its original source and your recommended English translation. If it is not text, say plainly that it is not text and describe what is drawn there.`;
       // Bind cached answers to the actual context image, not just the region ID.
       const sentCropHash=await storeAsset(await sharp(crop).jpeg({quality:95,chromaSubsampling:'4:4:4'}).toBuffer());
       const cached=listJobs(episode.id).find(job=>job.kind==='page-proofread'&&job.state==='completed'&&

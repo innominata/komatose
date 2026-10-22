@@ -2,6 +2,8 @@ import { formatMiB, MIB, type GpuResident } from './computeDevices';
 
 /** Ignore footprints smaller than this. A few megabytes is a driver handshake, not a loaded model. */
 const MIN_MIB = 128;
+/** A process Komatose did not start gets its own line from this size; the desktop stays in Other. */
+export const FOREIGN_MIN_MIB = 1024;
 
 export type GpuCommandInfo = {
 	label: string;
@@ -22,6 +24,17 @@ function arg(cmdline: string, flags: string[]): string | undefined {
 	const parts = cmdline.split(/\s+/);
 	for (let i = 0; i < parts.length - 1; i++) if (flags.includes(parts[i])) return parts[i + 1];
 	return undefined;
+}
+
+export function foreignLabel(exe: string): string {
+	return exe.charAt(0).toUpperCase() + exe.slice(1);
+}
+
+/** The model a process was started with, by file or folder name only. */
+function foreignDetail(cmdline: string): string | undefined {
+	const path = arg(cmdline, ['-m', '--model', '--pack', '--model-path', '--model-dir', '--weights']);
+	const name = path?.replace(/\/+$/, '').split('/').pop()?.replace(/\.(gguf|safetensors|bin|pt)$/i, '');
+	return name && name.length <= 60 ? name : undefined;
 }
 
 /**
@@ -45,7 +58,7 @@ export function describeGpuCommand(cmdline: string): GpuCommandInfo {
 	}
 	const exe = cmdline.split(/\s+/)[0]?.split('/').pop() || 'process';
 	const own = /komatose|stable-diffusion\.cpp|llama\.cpp/.test(cmdline);
-	return { label: exe, kind: own ? 'chat' : 'other', own };
+	return { label: exe, detail: own ? undefined : foreignDetail(cmdline), kind: own ? 'chat' : 'other', own };
 }
 
 export type GpuProcessSample = { pid: number; cmdline: string; vramBytes: number; gttBytes: number };
@@ -61,6 +74,8 @@ export function collectResidents(processes: GpuProcessSample[]): GpuResident[] {
 		const gttMiB = Math.round((proc.gttBytes || 0) / MIB);
 		if (info.own && (vramMiB >= MIN_MIB || gttMiB >= MIN_MIB))
 			shown.push({ pid: proc.pid, label: info.label, detail: info.detail, kind: info.kind, vramMiB, gttMiB });
+		else if (!info.own && vramMiB + gttMiB >= FOREIGN_MIN_MIB)
+			shown.push({ pid: proc.pid, label: foreignLabel(info.label), detail: info.detail, kind: 'foreign', vramMiB, gttMiB });
 		else {
 			otherVram += vramMiB;
 			otherGtt += gttMiB;

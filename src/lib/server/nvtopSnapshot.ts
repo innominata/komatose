@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { MIB, type GgmlDevice, type GpuUsage } from '../computeDevices';
+import { MIB, pciKey, type GgmlDevice, type GpuUsage } from '../computeDevices';
 import { collectResidents, type GpuProcessSample } from '../gpuResidents';
 import { ownedNvtopPath, ownedNvtopReady } from './nvtopBuild';
 
@@ -23,7 +23,7 @@ type SnapshotDevice = {
 	processes?: SnapshotProcess[];
 };
 
-export type RenderNode = { minor: number; pdev: string };
+export type RenderNode = { minor: number; pdev: string; totalMiB?: number; usedMiB?: number };
 
 /** SCAN_NVTOP when it points at a file, otherwise the binary this install built. */
 export function nvtopBin(): string | undefined {
@@ -48,13 +48,52 @@ export function parseNvtopSnapshot(text: string): SnapshotDevice[] {
 	}
 }
 
-/** RADV's Vulkan0, Vulkan1, … follow DRM render-node order. The PCI address joins that to nvtop. */
-export function vulkanNamesByPdev(renders: RenderNode[], devices: { name: string }[]): Map<string, string> {
+/** Cards with less dedicated memory than this are an APU's carve-out, not a discrete GPU. */
+const CARVE_OUT_MIB = 4096;
+
+type VulkanDevice = { name: string; integrated?: boolean; totalMiB?: number; freeMiB?: number };
+
+/**
+ * Which render node each Vulkan device is. Vulkan numbering does not follow
+ * render-node order (RADV can list the iGPU first), so cards are paired by
+ * integrated vs discrete, then size, then how much memory each is using,
+ * which is what tells two identical cards apart.
+ */
+export function vulkanNamesByPdev(renders: RenderNode[], devices: VulkanDevice[]): Map<string, string> {
 	const map = new Map<string, string>();
+	if (!renders.length || renders.length !== devices.length) return map;
 	const ordered = [...renders].sort((a, b) => a.minor - b.minor);
-	if (ordered.length && ordered.length === devices.length)
+	const carveOut = (node: RenderNode) => node.totalMiB != null && node.totalMiB < CARVE_OUT_MIB;
+	const integrated = (device: VulkanDevice) => Boolean(device.integrated);
+	const measured = ordered.every((node) => node.totalMiB != null) && devices.every((device) => device.totalMiB != null);
+	if (!measured) {
 		ordered.forEach((node, index) => map.set(node.pdev.toLowerCase(), devices[index].name));
+		return map;
+	}
+	const used = (value: number | undefined) => value ?? 0;
+	const left = [...devices];
+	for (const node of ordered) {
+		const pool = left.filter((device) => integrated(device) === carveOut(node));
+		const candidates = pool.length ? pool : left;
+		const similar = candidates.filter((device) => Math.abs((device.totalMiB || 0) - (node.totalMiB || 0)) <= (node.totalMiB || 0) * 0.1);
+		const pick = (similar.length && !carveOut(node) ? similar : candidates).sort(
+			(a, b) =>
+				Math.abs(used((a.totalMiB || 0) - (a.freeMiB ?? 0)) - used(node.usedMiB)) -
+				Math.abs(used((b.totalMiB || 0) - (b.freeMiB ?? 0)) - used(node.usedMiB)),
+		)[0];
+		map.set(node.pdev.toLowerCase(), pick.name);
+		left.splice(left.indexOf(pick), 1);
+	}
 	return map;
+}
+
+function sysfsMiB(path: string): number | undefined {
+	try {
+		const value = Number(readFileSync(path, 'utf8').trim());
+		return Number.isFinite(value) && value > 0 ? Math.round(value / MIB) : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function readRenderNodes(): RenderNode[] {
@@ -64,8 +103,11 @@ export function readRenderNodes(): RenderNode[] {
 			const minor = /^renderD(\d+)$/.exec(name);
 			if (!minor) return [];
 			try {
-				const pdev = realpathSync(join(root, name, 'device')).split('/').pop() || '';
-				return pdev ? [{ minor: Number(minor[1]), pdev }] : [];
+				const device = join(root, name, 'device');
+				const pdev = realpathSync(device).split('/').pop() || '';
+				if (!pdev) return [];
+				// amdgpu reports dedicated memory here; other drivers leave both undefined.
+				return [{ minor: Number(minor[1]), pdev, totalMiB: sysfsMiB(join(device, 'mem_info_vram_total')), usedMiB: sysfsMiB(join(device, 'mem_info_vram_used')) }];
 			} catch {
 				return [];
 			}
@@ -96,11 +138,12 @@ function processesOf(device: SnapshotDevice): GpuProcessSample[] {
 export function nvtopUsage(devices: GgmlDevice[]): GpuUsage[] {
 	const snap = readSnapshot();
 	if (!snap.length || !snap.some((device) => device.pdev)) return [];
-	const names = vulkanNamesByPdev(readRenderNodes(), devices);
+	const names = devices.every((device) => device.pdev)
+		? new Map(devices.map((device) => [device.pdev!, device.name]))
+		: vulkanNamesByPdev(readRenderNodes(), devices);
 	const rows: GpuUsage[] = [];
 	for (const device of snap) {
-		const pdev = (device.pdev || '').toLowerCase();
-		const name = names.get(pdev);
+		const name = names.get(pciKey(device.pdev)) || names.get((device.pdev || '').toLowerCase());
 		if (!name || rows.some((row) => row.name === name)) continue;
 		const known = devices.find((item) => item.name === name);
 		rows.push({

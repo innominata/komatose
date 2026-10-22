@@ -298,9 +298,10 @@
     if (show("vision")) items.push({ id: "vision", label: "Read Text / OCR", detail: "Manual image reading" });
     if (show("proofread")) items.push({ id: "proofread", label: "Proofreading", detail: "English and page images" });
     if (show("enquire")) items.push({ id: "enquire", label: "Enquire", detail: "Default chat assistant" });
+    // Before the reviewers: this list feeds every automatic transcription, so it must not sit below the fold.
+    if (show("transcriptionModels")) items.push({ id: "transcription", label: "Transcription", detail: "Automatic OCR and decider" });
     if (show("reviewers")) items.push({ id: "reviewers", label: "Review Transcription", detail: "Independent source readers" });
     if (show("reviseModels")) items.push({ id: "revise", label: "Review Translation", detail: "Translation council" });
-    if (show("transcriptionModels")) items.push({ id: "transcription", label: "Transcription", detail: "Automatic OCR and decider" });
     return items;
   });
   const activeTab = $derived(
@@ -809,10 +810,10 @@
     border-radius: 4px;
     background: transparent;
     color: var(--hud-muted);
-    padding: 0.65rem 0.8rem;
+    padding: 0.45rem 0.8rem;
     text-align: left;
     display: grid;
-    gap: 0.15rem;
+    gap: 0.1rem;
     white-space: normal;
     cursor: pointer;
   }

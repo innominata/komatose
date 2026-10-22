@@ -236,9 +236,9 @@
 .amodels .seg-ocr { background: #5aa9ff; }
 .amodels .seg-venv { background: var(--amber); }
 .amodels .seg-other { background: #4b5566; }
-.amodels .seg-foreign { background: repeating-linear-gradient(45deg, #3a4150 0 4px, #2b313c 4px 8px); }
+.amodels .seg-foreign { background: repeating-linear-gradient(45deg, #d0729a 0 4px, #b45a80 4px 8px); }
 .amodels .seg-pending { background: repeating-linear-gradient(45deg, rgba(242, 181, 68, 0.6) 0 4px, rgba(242, 181, 68, 0.25) 4px 8px); }
-.amodels .seg-used { background: #4b5566; }
+.amodels .seg-used { background: repeating-linear-gradient(45deg, rgba(130, 140, 160, 0.45) 0 4px, rgba(130, 140, 160, 0.2) 4px 8px); }
 .amodels .progress { height: 4px; background: var(--hud-line); overflow: hidden; }
 .amodels .progress > span { display: block; height: 100%; background: var(--amber); transition: width 0.25s linear; }
 .amodels .hero-status { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; padding: 1rem 1.2rem; }

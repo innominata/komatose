@@ -54,11 +54,15 @@ export type GpuResident = {
 	pid: number;
 	label: string;
 	detail?: string;
-	kind: 'chat' | 'ocr' | 'edit' | 'venv' | 'other';
+	/** `foreign` is a large process Komatose did not start, such as a model server of your own. */
+	kind: 'chat' | 'ocr' | 'edit' | 'venv' | 'other' | 'foreign';
 	vramMiB: number;
 	/** System RAM this process has mapped on the GPU. Not part of the VRAM bar on a discrete card. */
 	gttMiB: number;
 };
+
+/** A process's share of system memory (PSS, so shared pages are not counted twice). */
+export type RamResident = { pid: number; label: string; detail?: string; kind: GpuResident['kind']; ramMiB: number };
 
 export type GpuUsage = {
 	name: string;
@@ -73,7 +77,7 @@ export type GpuUsage = {
 
 export type HardwareSnapshot = {
 	cpu: { model: string; cores: number };
-	ram: { totalMiB: number; freeMiB: number };
+	ram: { totalMiB: number; freeMiB: number; residents?: RamResident[] };
 	llama: { bin: string; found: boolean; backend?: GpuBackend; devices: GgmlDevice[]; error?: string };
 	imageServer: { bin: string; found: boolean };
 	torch: TorchEnvironment[];

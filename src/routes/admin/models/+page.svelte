@@ -221,7 +221,7 @@
 					<div class="res-row">
 						<span class="muted">{device.name}</span>
 						<div class="bar">
-							<span class="seg-used" style="width:{Math.min(100, (device.usedMiB / Math.max(1, device.totalMiB)) * 100)}%"></span>
+							<span class="seg-other" style="width:{Math.min(100, (device.usedMiB / Math.max(1, device.totalMiB)) * 100)}%"></span>
 						</div>
 						<span class="small">{formatMiB(device.usedMiB)} / {formatMiB(device.totalMiB)}</span>
 					</div>

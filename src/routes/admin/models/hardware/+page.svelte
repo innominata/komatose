@@ -26,7 +26,49 @@
 		if (kind === 'edit') return 'edit';
 		if (kind === 'venv') return 'venv';
 		if (kind === 'other') return 'other';
+		if (kind === 'foreign') return 'foreign';
 		return 'ocr';
+	}
+	type Segment = { key: string; kind: string; pct: number; title: string; color?: string };
+	/** Hues kept clear of the Komatose kinds (teal, violet, blue, amber). */
+	const FOREIGN_COLORS = ['#d0729a', '#e07b4f', '#8fbf4d', '#c9a227', '#4fb3a9', '#b07cd8', '#e05d5d', '#7d8fe0', '#5fbf7f', '#d98fd0'];
+	/** Every outside program gets its own colour, the same on each card and in system memory. */
+	const foreignColors = $derived.by(() => {
+		const labels = new Set<string>();
+		for (const device of devices) for (const user of device.users) if (user.kind === 'foreign') labels.add(user.label);
+		for (const user of ramResidents) if (user.kind === 'foreign') labels.add(user.label);
+		return new Map([...labels].sort().map((label, index) => [label, FOREIGN_COLORS[index % FOREIGN_COLORS.length]]));
+	});
+	function colorOf(kind: string, label: string): string | undefined {
+		return kind === 'foreign' ? foreignColors.get(label) : undefined;
+	}
+	/** One coloured piece per resident, then grey for memory nobody is listed against. */
+	function segments(parts: { key: string; kind: string; label: string; mib: number }[], usedMiB: number, totalMiB: number): Segment[] {
+		const total = Math.max(1, totalMiB);
+		const out: Segment[] = [];
+		let listed = 0;
+		for (const part of parts) {
+			const mib = Math.min(part.mib, Math.max(0, totalMiB - listed));
+			if (mib <= 0) continue;
+			listed += mib;
+			out.push({ key: part.key, kind: part.kind, pct: (mib / total) * 100, title: `${part.label} · ${formatMiB(part.mib)}`, color: colorOf(part.kind, part.label) });
+		}
+		const rest = Math.min(usedMiB, totalMiB) - listed;
+		if (rest > 0) out.push({ key: 'rest', kind: 'used', pct: (rest / total) * 100, title: `Not attributed · ${formatMiB(rest)}` });
+		return out;
+	}
+	/** A discrete card's bar is VRAM only; on an iGPU the GTT share is the same RAM. */
+	function deviceSegments(device: (typeof devices)[number]): Segment[] {
+		const parts = device.users
+			.map((user, index) => ({
+				key: `${user.pid ?? user.label}:${index}`,
+				kind: swatch(user.kind),
+				label: user.label,
+				mib: (user.vramMiB || 0) + (device.integrated ? user.gttMiB || 0 : 0),
+			}))
+			.filter((part) => part.mib > 0)
+			.sort((a, b) => Number(a.kind === 'other') - Number(b.kind === 'other'));
+		return segments(parts, device.usedMiB, device.totalMiB);
 	}
 	/** Where a pid's bytes actually sit, from the nvtop snapshot. */
 	function residentPlace(pid?: number): string {
@@ -45,6 +87,17 @@
 	const data = $derived($hub!);
 	const devices = $derived(deviceRows(data));
 	const managedRows = $derived(data.rows.filter((row) => row.managedLaunch));
+	const ramUsed = $derived(data.hardware.ram.totalMiB - data.hardware.ram.freeMiB);
+	const ramResidents = $derived(data.hardware.ram.residents || []);
+	const ramSegments = $derived(
+		segments(
+			[...ramResidents]
+				.sort((a, b) => Number(a.kind === 'other') - Number(b.kind === 'other'))
+				.map((user) => ({ key: `${user.pid}:${user.label}`, kind: swatch(user.kind), label: user.label, mib: user.ramMiB })),
+			ramUsed,
+			data.hardware.ram.totalMiB,
+		),
+	);
 	let busy = $state('');
 	let nvtopHelp = $state(false);
 	let nvtopAnnounced = '';
@@ -215,13 +268,13 @@
 		<div class="card device">
 			<div class="spread"><h3>{device.name}</h3><span class="muted small">{cardLabel(device.label)}{device.integrated ? ' · integrated' : ''}</span></div>
 			<div class="bar lg">
-				<span class="seg-used" style="width:{Math.min(100, (device.usedMiB / Math.max(1, device.totalMiB)) * 100)}%"></span>
+				{#each deviceSegments(device) as seg (seg.key)}<span class="seg-{seg.kind}" style="width:{seg.pct}%{seg.color ? `;background:${seg.color}` : ''}" title={seg.title}></span>{/each}
 			</div>
 			<div class="small"><strong>{formatMiB(device.usedMiB)}</strong> / {formatMiB(device.totalMiB)} {device.integrated ? 'shared with RAM' : 'VRAM'}</div>
 			<div class="stack" style="gap:.25rem">
 				{#each device.users as user (`${user.pid ?? user.label}:${user.vramMiB ?? 0}:${user.gttMiB ?? 0}`)}
 					<div class="resident small">
-						<span class="row"><i class="sw seg-{swatch(user.kind)}" style="width:10px;height:10px;display:inline-block"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
+						<span class="row"><i class="sw seg-{swatch(user.kind)}" style="width:10px;height:10px;display:inline-block{colorOf(user.kind, user.label) ? `;background:${colorOf(user.kind, user.label)}` : ''}"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
 						<span class="actions">
 							{#if formatResidentMemory(user)}<span class="muted mem">{formatResidentMemory(user)}</span>{/if}
 							{#if user.stop}<button class="btn ghost sm" disabled={!!busy} onclick={() => void stopGpu({ scope: 'one', kind: user.stop?.kind, id: user.stop?.id, pid: user.pid, label: user.label })}>Stop</button>{/if}
@@ -235,8 +288,18 @@
 	{/each}
 	<div class="card device">
 		<div class="spread"><h3>System memory</h3><span class="muted small">{data.hardware.cpu.model}</span></div>
-		<div class="bar lg"><span class="seg-used" style="width:{Math.min(100, ((data.hardware.ram.totalMiB - data.hardware.ram.freeMiB) / Math.max(1, data.hardware.ram.totalMiB)) * 100)}%"></span></div>
-		<div class="small"><strong>{formatMiB(data.hardware.ram.totalMiB - data.hardware.ram.freeMiB)}</strong> / {formatMiB(data.hardware.ram.totalMiB)} used · {data.hardware.cpu.cores} cores</div>
+		<div class="bar lg">
+			{#each ramSegments as seg (seg.key)}<span class="seg-{seg.kind}" style="width:{seg.pct}%{seg.color ? `;background:${seg.color}` : ''}" title={seg.title}></span>{/each}
+		</div>
+		<div class="small"><strong>{formatMiB(ramUsed)}</strong> / {formatMiB(data.hardware.ram.totalMiB)} used · {data.hardware.cpu.cores} cores</div>
+		<div class="stack" style="gap:.25rem">
+			{#each ramResidents as user (`${user.pid}:${user.label}`)}
+				<div class="resident small">
+					<span class="row"><i class="sw seg-{swatch(user.kind)}" style="width:10px;height:10px;display:inline-block{colorOf(user.kind, user.label) ? `;background:${colorOf(user.kind, user.label)}` : ''}"></i>{user.label}{#if user.detail} <span class="muted">· {user.detail}</span>{/if}</span>
+					<span class="actions"><span class="muted mem">{formatMiB(user.ramMiB)}</span></span>
+				</div>
+			{/each}
+		</div>
 	</div>
 </div>
 
