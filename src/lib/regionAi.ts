@@ -191,13 +191,15 @@ export function sameReviseModel(a: TaskEngine, b: TaskEngine): boolean {
   return a.engine === b.engine && (a.model || "") === (b.model || "");
 }
 
-export function reviseSampleCount(_model: TaskEngine): number {
-  return 1;
+/** A fast specialist translator is sampled at several temperatures for varied wording; thinking models once. */
+export function reviseSampleCount(model: TaskEngine): number {
+  return translationModel(model.engine) ? FAST_REVISE_SAMPLES : 1;
 }
 
+/** Proofreaders read page images; they cannot revise text, so they never join the council. */
 export function defaultReviseModels(translate: TaskEngine, proofread: TaskEngine): TaskEngine[] {
   const out = [translate];
-  if (sameReviseModel(translate, proofread)) return out;
+  if (sameReviseModel(translate, proofread) || isProofreaderTranslator(proofread)) return out;
   return [...out, proofread];
 }
 
@@ -207,7 +209,7 @@ export function reviseCouncil(
 ): TaskEngine[] {
   const saved: TaskEngine[] = [];
   for (const model of settings.reviseModels ?? []) {
-    if (!model?.engine) continue;
+    if (!model?.engine || isProofreaderTranslator(model)) continue;
     if (saved.some((item) => sameReviseModel(item, model))) continue;
     saved.push({ engine: model.engine, model: model.model || "" });
     if (saved.length >= MAX_REVISE_MODELS) break;

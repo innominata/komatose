@@ -45,7 +45,8 @@ process.env.HOME = join(root, 'home');
 process.env.PATH = '/usr/bin:/bin';
 
 const TRANSLATE_JSON = JSON.stringify({
-	items: [{ i: 0, literal: 'テスト', translation: 'Wait!', reasoning: 'pack-flow' }],
+	// The Translate test's fixture is テスト: a passing answer keeps its meaning.
+	items: [{ i: 0, literal: 'テスト', translation: 'Test.', reasoning: 'pack-flow' }],
 });
 
 const fakeHttp = createServer(async (req, res) => {
@@ -77,6 +78,9 @@ const {
 	updateRegistryRow,
 	writeModelOverlay,
 } = await import('../src/lib/server/modelRegistryStore');
+
+/** Profiles name only models that passed their jobs; record passes as the Jobs grid would. */
+const { fixturePasses } = await import('./local-ocr-fixture');
 
 /** The chat model ships as a launch preset: add the row an operator adds in
  * Setup → Local models so the pack profile's chat refs resolve on this install. */
@@ -162,6 +166,8 @@ describe('model pack import to task', { concurrency: 1 }, () => {
 
 		const profile = readModelProfiles().find((item) => item.id === 'profile-studio');
 		assert.ok(profile);
+		await fixturePasses('studio-gpt4o', ['translate', 'vision']);
+		await fixturePasses(QWEN_38_27B_ID, ['proofreadEnglish', 'vision']);
 		const before = regionAiSettings({
 			translate: { engine: 'composer-2.5', model: '' },
 			describe: { engine: QWEN_38_27B_ID, model: '' },
@@ -180,7 +186,7 @@ describe('model pack import to task', { concurrency: 1 }, () => {
 		assert.ok(row);
 		const sample = await probeModelRow(row, 'translate');
 		assert.equal(sample.ok, true, sample.reason);
-		assert.match(sample.outputPreview || '', /Wait!/);
+		assert.match(sample.outputPreview || '', /Test\./);
 	});
 
 	test('failed profile write restores overlay and leaves no journal', async () => {

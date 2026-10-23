@@ -54,7 +54,8 @@ process.env.PATH = `/usr/bin:/bin`;
 process.env.LLAMASWAP_URL = 'http://127.0.0.1:1/v1';
 
 const TRANSLATE_JSON = JSON.stringify({
-	items: [{ i: 0, literal: 'テスト', translation: 'Wait!', reasoning: 'isolated-smoke' }],
+	// The Translate test's fixture is テスト: a passing answer keeps its meaning.
+	items: [{ i: 0, literal: 'テスト', translation: 'Test.', reasoning: 'isolated-smoke' }],
 });
 
 const hits = { models: 0, localChat: 0, remoteChat: 0 };
@@ -198,6 +199,9 @@ test('isolated fresh install: startup, setup, registration, profiles, one task p
 		baseUrl: fakeBase,
 	});
 	updateRegistryRow(localChat.id, { requestPreset: 'qwen-thinking' });
+	// Translate counts as covered once a model has passed its Translate test.
+	const { fixturePasses } = await import('./local-ocr-fixture');
+	await fixturePasses(localChat.id, ['translate', 'proofreadEnglish', 'vision']);
 	const ready = await loadSetupReport();
 	assert.equal(ready.items.find((item) => item.id === `local:${localChat.id}`)?.state, 'configured');
 	assert.equal(ready.items.find((item) => item.id === 'cli:grok')?.state, 'configured');
@@ -261,7 +265,7 @@ test('isolated fresh install: startup, setup, registration, profiles, one task p
 	for (const [kind, row] of tasks) {
 		const sample = await probeModelRow(row, 'translate');
 		assert.equal(sample.ok, true, `${kind}: ${sample.reason}`);
-		assert.match(sample.outputPreview || '', /Wait!/);
+		assert.match(sample.outputPreview || '', /Test\./);
 	}
 	assert.ok(hits.localChat >= 1, 'local HTTP translate');
 	assert.ok(hits.remoteChat >= 1, 'remote HTTP translate');

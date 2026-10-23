@@ -13,14 +13,16 @@ test('unknown translator package receives all context and preserves region ident
  for(const [key,value] of Object.entries(context)) assert.equal(input[key],value);
  assert.equal(boxes[0].translation,'');
 });
-test('unavailable selections, overrides and cancelled requests never silently fall back',async()=>{
+test('unavailable selections and cancelled requests never silently fall back; an override runs the named model',async()=>{
  const before=(await calls()).length;
  await assert.rejects(runTranslationTask({engine:'missing',boxes,...context}),/Unsupported/);
- await assert.rejects(runTranslationTask({engine:id,boxes,...context,model:'different'}),/current passing/);
  await assert.rejects(runTranslationTask({engine:id,boxes,...context,abort:AbortSignal.abort()}));
  assert.equal((await calls()).length,before);
+ // Eligibility comes from the tested row; the request names the model the endpoint runs.
+ await runTranslationTask({engine:id,boxes,...context,model:'different'});
+ assert.equal((await calls()).at(-1).model.slug,'different');
 });
 test('an unsupported retest prevents production translation',async()=>{
  store.saveProbeResult(id,{operation:'translate',ok:false,outcome:'unsupported',at:Date.now()});
- await assert.rejects(runTranslationTask({engine:id,boxes,...context}),/current passing/);
+ await assert.rejects(runTranslationTask({engine:id,boxes,...context}),/failed the Translate test/);
 });

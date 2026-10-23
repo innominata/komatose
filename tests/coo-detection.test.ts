@@ -16,14 +16,18 @@ test('malformed COO output is rejected',()=>{
  for(const raw of [null,{},[{}],[{...sfx,score:NaN}],[{...sfx,box:[100,100,NaN,200]}],
   [{...sfx,polygon:[{x:2,y:0},...shape]}],[{...sfx,polygon:[]}]] ) assert.deepEqual(parseSfxRegions(raw),[]);
 });
-test('a Koharu segment alone is evidence, not a region', () => {
+test('lettering only Koharu marks becomes its own region; a box detector keeps what it claims', () => {
  const found = composeDetections({
   rtdetr: [{ cls: 'text_bubble', score: 0.9, box: [10, 10, 80, 60] }, { cls: 'text_free', score: 0.9, box: [300, 300, 340, 380] }],
   ctd: [],
   koharu: parseKoharuRegions([{ box: [10, 12, 78, 58], score: 0.8 }, { box: [200, 200, 260, 240], score: 0.8 }, { box: [1] }]),
  }, 500, 500);
- assert.equal(found.length, 2);
- assert.ok(found.every((row) => row.provenance?.backend === 'rtdetr'));
+ // The block inside the bubble stays the box detector's region; the unclaimed one is adopted.
+ assert.equal(found.length, 3);
+ assert.equal(found.filter((row) => row.provenance?.backend === 'rtdetr').length, 2);
+ const adopted = found.find((row) => row.provenance?.backend === 'koharu');
+ assert.ok(adopted, 'unclaimed lettering is its own region');
+ assert.ok(adopted!.score < 0.9, 'an adopted region scores below a detector box');
 });
 test('with no box detector Koharu supplies the regions', () => {
  const found = composeDetections({ koharu: parseKoharuRegions([{ box: [200, 200, 260, 240], score: 0.8 }]) }, 500, 500);

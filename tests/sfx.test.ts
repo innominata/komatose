@@ -25,8 +25,9 @@ test('standalone SFX matches exact, punctuated, kana, and elongated forms', () =
 });
 
 test('repeated SFX collapse to the dictionary stem', () => {
-  assert.equal(lookupStandaloneSfx('ドキドキドキドキ')?.source, 'ドキドキ');
-  assert.equal(lookupStandaloneSfx('ゴゴゴゴゴ')?.source, 'ゴゴゴ');
+  // The closest dictionary entry wins: longer repeats have their own entries.
+  assert.equal(lookupStandaloneSfx('ドキドキドキドキ')?.source, 'ドキドキドキ');
+  assert.equal(lookupStandaloneSfx('ゴゴゴゴゴ')?.source, 'ゴゴゴゴ');
   assert.equal(lookupStandaloneSfx('ドンドンドン')?.source, 'ドン');
 });
 
@@ -90,8 +91,11 @@ test('a detector that cannot place the text is judged by the shape of the readin
   assert.equal(classifyRegionLineType('bubble', 'はあ……'), '""');
   assert.equal(classifyRegionLineType('bubble', 'ドキドキ'), '::');
   assert.equal(classifyRegionLineType('bubble', 'ちゅううううう'), '::');
-  // Inside a detected bubble only the dictionary decides.
-  assert.equal(classifyRegionLineType('bubble', 'ババババ'), '""');
+  // Inside a detected bubble only the dictionary decides: a dictionary sound is SFX,
+  // the same shape of reading that is not in it is speech.
+  assert.equal(classifyRegionLineType('bubble', 'ババババ'), '::');
+  assert.equal(classifyRegionLineType('bubble', 'ナナナナ'), '""');
+  assert.equal(classifyRegionLineType('unknown', 'ナナナナ'), '::');
 });
 
 test('the sound-effect detector outranks a misread that looks like a word, but not a sentence', () => {

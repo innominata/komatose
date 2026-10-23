@@ -57,11 +57,31 @@ function cliRow(id: string, slug: string, cliAdapter: ModelRow['cliAdapter'], na
 		operationsLocked: true,
 	};
 }
+/** A row whose job tests passed, as the Jobs grid records them. */
+function passed(row: ModelRow, operations: string[]): ModelRow {
+	const probes = Object.fromEntries(operations.map((operation) => [operation, { operation, ok: true, outcome: 'passed', at: 1 }]));
+	return { ...row, probes: { ...(row.probes || {}), ...probes } } as ModelRow;
+}
+
+/**
+ * This machine's rows: chat models are added by the operator, not seeded, and
+ * every model needs a passing test before a profile may name it.
+ */
+const ROWS: ModelRow[] = [
+	...SEED_ROWS.map((row) => (['hayai-ocr-v2', 'paddleocr-vl-1.6'].includes(row.id) ? passed(row, ['vision']) : row)),
+	passed({
+		id: QWEN_38_27B_ID, name: 'Qwen 3.8 27B', slug: QWEN_38_27B_ID, access: 'local_http', runtime: 'llamacpp',
+		operations: [...CHAT_AND_CLI_OPERATIONS], roles: ['admin', 'translator', 'proofreader', 'typesetter'], seeded: false, operationsLocked: false,
+	} as ModelRow, ['translate', 'describe', 'proofreadEnglish', 'vision', 'advisory', 'chapterReview']),
+];
+
 const discoveredRows: ModelRow[] = [
-	...SEED_ROWS,
-	cliRow('grok-4.6', 'grok-4.6', 'grok', 'Grok 4.6'),
-	cliRow('gpt-5.4', 'gpt-5.4', 'codex', 'GPT-5.4'),
-	cliRow('composer-2.5', 'composer-2.5', 'cursor', 'Composer 2.5')
+	...ROWS,
+	...[
+		cliRow('grok-4.6', 'grok-4.6', 'grok', 'Grok 4.6'),
+		cliRow('gpt-5.4', 'gpt-5.4', 'codex', 'GPT-5.4'),
+		cliRow('composer-2.5', 'composer-2.5', 'cursor', 'Composer 2.5'),
+	].map((row) => passed(row, ['translate', 'proofreadEnglish', 'vision'])),
 ];
 
 const cliSelections = {
@@ -87,7 +107,7 @@ function resetProfiles() {
 	if (existsSync(modelProfilesPath())) unlinkSync(modelProfilesPath());
 }
 
-function disabledRows(id: string, base = SEED_ROWS) {
+function disabledRows(id: string, base = ROWS) {
 	return base.map((row) => (row.id === id ? { ...row, disabled: true } : row));
 }
 
@@ -129,7 +149,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 		assert.equal(readModelProfiles().length, 2);
 
 		const before = currentSettings();
-		const applied = applyProfileSelections(before, local.selections, SEED_ROWS);
+		const applied = applyProfileSelections(before, local.selections, ROWS);
 		assert.equal(applied.ok, true);
 		assert.deepEqual(applied.settings.translate, localSelections.translate);
 		assert.deepEqual(applied.settings.proofread, localSelections.proofread);
@@ -161,7 +181,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 				reviewers: localSelections.reviewers,
 				transcriptionModels: ['missing-ocr'],
 			},
-			SEED_ROWS,
+			ROWS,
 		);
 		assert.equal(missing.ok, false);
 		assert.deepEqual(missing.settings, before);
@@ -185,7 +205,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 				reviewers: [],
 				transcriptionModels: ['hayai-ocr-v2'],
 			},
-			SEED_ROWS,
+			ROWS,
 		);
 		assert.equal(leftover.ok, false);
 		assert.ok(leftover.issues.some((item) => item.status === 'missing'));
@@ -202,7 +222,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 				reviewers: [{ engine: QWEN_38_27B_ID, model: '' }],
 				transcriptionModels: [QWEN_38_27B_ID],
 			},
-			SEED_ROWS,
+			ROWS,
 		);
 		assert.equal(unsupported.ok, false);
 		assert.ok(unsupported.issues.some((item) => item.field === 'translate' && item.status === 'unsupported'));
@@ -223,7 +243,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 				...localSelections,
 				transcriptionModels: ['hayai-ocr-v2'],
 			}),
-			SEED_ROWS,
+			ROWS,
 		);
 		assert.deepEqual(emptyTranscribe, []);
 		assert.throws(() => parseProfileSelections({ ...localSelections, transcriptionModels: [] }), /at least one|Choose a/i);
@@ -232,7 +252,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 				...localSelections,
 				transcriptionModels: [],
 			},
-			SEED_ROWS,
+			ROWS,
 		);
 		assert.ok(issues.some((item) => item.field === 'transcriptionModels' && item.status === 'invalid'));
 		assert.equal(
@@ -245,7 +265,7 @@ describe('model profiles', { concurrency: 1 }, () => {
 		resetProfiles();
 		const saved = applyModelProfileAction('save', { name: 'Local only', selections: localSelections });
 		assert.equal(saved.profile?.name, 'Local only');
-		const validated = applyModelProfileAction('validate', { id: saved.profile?.id }, SEED_ROWS);
+		const validated = applyModelProfileAction('validate', { id: saved.profile?.id }, ROWS);
 		assert.deepEqual(validated.issues, []);
 		const updated = applyModelProfileAction('save', {
 			name: 'Local only',

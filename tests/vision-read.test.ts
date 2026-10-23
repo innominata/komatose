@@ -12,16 +12,18 @@ test('vision workflow uses an unknown package and forwards context and image att
  assert.equal(last.attachments.length,1);
  assert.equal(last.model.slug,'fixture-revision');
 });
-test('unknown selection and untested model override never reach the adapter',async()=>{
+test('an unknown selection never reaches the adapter; a model override on a tested row runs that model',async()=>{
  const before=(await calls()).length;
  await assert.rejects(runVisionRead('missing',{jpeg:Buffer.from('fixture')}),/Unsupported/);
- await assert.rejects(runVisionRead(id,{jpeg:Buffer.from('fixture'),model:'new-revision'}),/current passing/);
  assert.equal((await calls()).length,before);
+ // Eligibility comes from the tested row; the request names the model the endpoint runs.
+ await runVisionRead(id,{jpeg:Buffer.from('fixture'),model:'new-revision'});
+ assert.equal((await calls()).at(-1).model.slug,'new-revision');
 });
 test('cancellation and failed evidence block production reads',async()=>{
  const before=(await calls()).length;
  await assert.rejects(runVisionRead(id,{jpeg:Buffer.from('fixture'),abort:AbortSignal.abort()}));
  store.saveProbeResult(id,{operation:'vision',ok:false,outcome:'unsupported',at:Date.now()});
- await assert.rejects(runVisionRead(id,{jpeg:Buffer.from('fixture')}),/current passing/);
+ await assert.rejects(runVisionRead(id,{jpeg:Buffer.from('fixture')}),/failed the Read Text \/ OCR test/);
  assert.equal((await calls()).length,before);
 });
