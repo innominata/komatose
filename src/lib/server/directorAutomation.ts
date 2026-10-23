@@ -2993,6 +2993,12 @@ async function checkPage(
 export async function runAutomationPage(
   ctx: AutomationContext,
   imageId: string,
+  options: {
+    /** Stop when this stage is reached: a look-ahead page runs only its text stages. */
+    stopBefore?: DirectorStage;
+    /** Told as each selected stage starts. */
+    onStage?: (stage: DirectorStage) => void;
+  } = {},
 ) {
   const policy = directorPolicy(JSON.parse(ctx.run.policy));
   const primary = JSON.parse(ctx.run.model) as TaskEngine;
@@ -3000,6 +3006,7 @@ export async function runAutomationPage(
   const selected = directorTaskStages(policy.tasks);
   for (const stage of DIRECTOR_STAGES) {
     ctx.signal.throwIfAborted();
+    if (stage === options.stopBefore) break;
     await ctx.authorize();
     if (!selected.has(stage)) {
       emit(ctx, imageId, "stage:skipped", { stage, reason: "Not selected" });
@@ -3012,6 +3019,7 @@ export async function runAutomationPage(
       });
       break;
     }
+    options.onStage?.(stage);
     const fingerprint = await stageFingerprint(ctx, imageId, stage);
     let previous = sqlite
       .prepare(

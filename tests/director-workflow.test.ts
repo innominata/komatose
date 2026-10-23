@@ -1089,6 +1089,31 @@ test("visual lettering defects stay blockers after bounded repairs", async () =>
   }
 });
 
+test("a chapter run reads the next page while the current page cleans, and reuses that work", async () => {
+  const page = await seedChapter("chapter-lookahead", 6);
+  // A second page with its own region, copied from the first.
+  const second = { imageId: "chapter-lookahead-page-2", lineId: "chapter-lookahead-line-2" };
+  sqlite.prepare(`INSERT INTO images(id,episode_id,filename,original_name,sort_order,width,height,created_at,updated_at,page_number,caption)
+    SELECT ?,episode_id,filename,original_name,1,width,height,created_at,updated_at,2,caption FROM images WHERE id=?`).run(second.imageId, page.imageId);
+  sqlite.prepare(`INSERT INTO lines(id,episode_id,image_id,body,line_type,status,placed,x,y,w,h,sort_order,updated_at,updated_by,source,source_state)
+    VALUES(?,?,?,'Hello','plain','none',1,.2,.2,.5,.3,0,1,'u','こんにちは','read')`).run(second.lineId, page.episode.id, second.imageId);
+  for (const [from, to] of [[`page:${page.imageId}`, `page:${second.imageId}`], [`region:${page.lineId}`, `region:${second.lineId}`]]) {
+    const doc = getDoc<any>(to, {});
+    putDoc(page.episode.id, doc.id, getDoc<any>(from, {}).data, doc.revision);
+  }
+  const { runId } = await startDirector({ ...page, user, scope: "chapter", model: selected });
+  await waitRun(runId);
+  const result = await directorOverviewAsync(page.episode.id, runId);
+  for (const id of [page.imageId, second.imageId])
+    assert.equal(result.pages.find((p) => p.id === id)?.state, "passed", result.pages.find((p) => p.id === id)?.detail);
+  const events = sqlite.prepare("SELECT id,image_id,kind,detail FROM director_events WHERE run_id=? ORDER BY id").all(runId) as any[];
+  const firstRead = events.find((e) => e.image_id === second.imageId && e.kind === "stage" && JSON.parse(e.detail).stage === "read");
+  const firstDone = events.find((e) => e.image_id === page.imageId && e.kind === "page" && JSON.parse(e.detail).state === "passed");
+  assert.ok(firstRead && firstDone && firstRead.id < firstDone.id, "page 2 starts reading before page 1 finishes");
+  assert.ok(events.some((e) => e.image_id === second.imageId && e.kind === "stage:reused" && JSON.parse(e.detail).stage === "read"),
+    "page 2's own turn reuses the read it already did");
+});
+
 test("unreadable page does not stop other chapter pages", async () => {
   const page = await seedChapter("chapter-continues", 6);
   sqlite

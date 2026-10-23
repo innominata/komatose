@@ -67,7 +67,8 @@ async function waitChild(run: Run, control: { abort: AbortController; child?: { 
   try {
     if (!id) throw new WorkflowError(`${kind} did not create a job`);
     while (true) {
-      control.abort.signal.throwIfAborted();
+      // Two pages can each wait on a child; each cancels its own when the run stops.
+      if (control.abort.signal.aborted) { cancelChild(run,{kind,id}); control.abort.signal.throwIfAborted(); }
       const job = childJob(run.episode_id, id);
       if (!job) throw new WorkflowError(`${kind} job disappeared`);
       if (Date.now()-job.updated_at>idle) { cancelChild(run,control.child); throw new WorkflowError(`${kind} stopped making progress`); }
@@ -129,14 +130,35 @@ async function execute(run: Run, series: Series, episode: Episode, user: PublicU
         recordNumberingChange(run.id,episode.id,before,after,stale,0);
       }
       recoverDirectorOperations(run.id);
+      // While a page cleans (image models), the next page reads, types and translates
+      // (Strata) in the background; its own turn then reuses those stages.
+      let lookahead:{imageId:string;done:Promise<void>}|undefined;
+      const startLookahead=(imageId:string)=>{
+        const own={abort:control.abort} as {abort:AbortController;child?:{kind:string;id?:string}};
+        const context=automationContext(run,series,episode,user,imageId,own);
+        const done=withDirector({runId:run.id,episodeId:episode.id,imageId},()=>runAutomationPage(context,imageId,{stopBefore:'clean'}))
+          .then(()=>{})
+          .catch((error)=>{
+            if(control.abort.signal.aborted) return;
+            // Its turn redoes what did not pass, with full retries.
+            sqlite.prepare("DELETE FROM director_stages WHERE run_id=? AND image_id=? AND state<>'passed'").run(run.id,imageId);
+            directorEvent(run.id,episode.id,imageId,'stage:error',{stage:'lookahead',error:error instanceof Error?error.message:String(error)});
+          });
+        lookahead={imageId,done};
+      };
       for (let index=run.current_index; index<ids.length; index++) {
         control.abort.signal.throwIfAborted();
         const imageId = ids[index];
+        if (lookahead?.imageId===imageId) await lookahead.done;
+        lookahead=undefined;
         setRun(run.id,'running',`Directing page ${index+1} of ${ids.length}`,index);
         setPage(run,imageId,'working','Director is working');
+        const next=ids[index+1];
         try {
           const context=automationContext(run,series,episode,user,imageId,control);
-          const result=await withDirector({runId:run.id,episodeId:episode.id,imageId},()=>runAutomationPage(context,imageId));
+          const result=await withDirector({runId:run.id,episodeId:episode.id,imageId},()=>runAutomationPage(context,imageId,{
+            onStage:(stage)=>{ if(stage==='clean' && next && !lookahead && run.scope==='chapter') startLookahead(next); },
+          }));
           const outcome=directorPageOutcome(result.findings,fullDirectorTasks(tasks));
           setPage(run,imageId,outcome.state,outcome.detail,pageFingerprint(episode.id,imageId));
         } catch (error) {
