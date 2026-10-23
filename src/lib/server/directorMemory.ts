@@ -217,6 +217,7 @@ export async function referenceCandidates(seriesId: string, target: Episode) {
     imageId: string;
     lineId: string;
     typeId: string;
+    source: string;
     fingerprint: string;
   }[] = [];
   for (const { id } of chapters) {
@@ -261,6 +262,7 @@ export async function referenceCandidates(seriesId: string, target: Episode) {
         imageId: image.id,
         lineId: line.id,
         typeId: line.lineType,
+        source: line.source ?? "",
         fingerprint: digest({
           image: [image.filename, image.updatedAt],
           source: [page.prepared, page.cleaned, page.cleanBase],
@@ -279,6 +281,49 @@ export async function referenceCandidates(seriesId: string, target: Episode) {
   }
   return { settings, types, candidates };
 }
+const REFERENCE_MATCH_CHARS = 6;
+
+/** Source text compared without spacing, line breaks or punctuation. */
+export function sourceKey(source: string | null | undefined): string {
+  return String(source || "").normalize("NFKC").replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+/**
+ * Types your reference chapters gave the same source text. A finished copy of
+ * the chapter being directed answers "what type is this?" outright: identical
+ * lettering there was typed by hand. Only an unambiguous match counts.
+ */
+export async function referenceTypeMatches(
+  seriesId: string,
+  target: Episode,
+  lines: { id: string; source?: string | null }[],
+): Promise<Map<string, { typeId: string; episodeId: string; lineId: string }>> {
+  const matches = new Map<string, { typeId: string; episodeId: string; lineId: string }>();
+  const wanted = new Map<string, string>();
+  for (const line of lines) {
+    // Short lines ("뭐?", "응", "はい") recur with different types; only a line long
+    // enough to be the same caption or sentence counts as the same lettering.
+    const key = sourceKey(line.source);
+    if (key.length >= REFERENCE_MATCH_CHARS) wanted.set(line.id, key);
+  }
+  if (!wanted.size) return matches;
+  const { candidates } = await referenceCandidates(seriesId, target);
+  const byKey = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    const key = sourceKey(candidate.source);
+    if (key.length < REFERENCE_MATCH_CHARS) continue;
+    byKey.set(key, [...(byKey.get(key) || []), candidate]);
+  }
+  for (const [lineId, key] of wanted) {
+    const found = byKey.get(key);
+    if (!found?.length) continue;
+    const types = new Set(found.map((item) => item.typeId));
+    if (types.size !== 1) continue;
+    matches.set(lineId, { typeId: found[0].typeId, episodeId: found[0].episode.id, lineId: found[0].lineId });
+  }
+  return matches;
+}
+
 export async function memoryFingerprint(seriesId: string, target: Episode) {
   const { settings, types, candidates } = await referenceCandidates(
     seriesId,

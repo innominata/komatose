@@ -502,6 +502,30 @@ export async function cleaningDetailCrop(
     .toBuffer();
 }
 
+/**
+ * Share of the masked pixels a cleaner actually changed. An image editor that
+ * returns the lettering untouched (page 44: Qwen kept a glowing caption pixel for
+ * pixel) changes almost none, and retrying it with a wider mask only costs time.
+ */
+export async function changedShare(before: Buffer, after: Buffer, mask: Buffer): Promise<number> {
+  const a = await sharp(before).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = a.info;
+  const b = await sharp(after).removeAlpha().resize(width, height, { fit: "fill" }).raw().toBuffer();
+  const m = await sharp(mask).greyscale().resize(width, height, { fit: "fill", kernel: "nearest" }).extractChannel(0).raw().toBuffer();
+  let inside = 0, changed = 0;
+  for (let i = 0; i < width * height; i++) {
+    if (m[i] < 128) continue;
+    inside++;
+    let diff = 0;
+    for (let c = 0; c < channels; c++) diff = Math.max(diff, Math.abs(a.data[i * channels + c] - b[i * channels + c]));
+    if (diff > 24) changed++;
+  }
+  return inside ? changed / inside : 1;
+}
+
+/** An editor that changed less than this share of the letters left them in place (page 44: 6%; real erases 88-100%). */
+export const EDITOR_NO_OP_SHARE = 0.1;
+
 /** Repainted areas with this much more structure than the art around them are blotches. */
 export const BLOTCH_RATIO = 3;
 

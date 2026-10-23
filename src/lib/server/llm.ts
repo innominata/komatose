@@ -5,7 +5,7 @@ import { sfxTranslateHit, withSfxGlossary } from '../sfx';
 import { translateWithSpecialist } from './specialistTranslation';
 import { LINE_TYPES, LINE_TYPE_LABELS, type LineType, type OcrLang } from '../types';
 import { appendJobLog, jobContext, sanitizeLlmMessages, summarizeModelOutput } from './jobs';
-import { currentAssistantHttp, openaiChatCompletions } from './openaiHttp';
+import { currentAssistantHttp, openaiChatCompletions, withSchemaInstructions } from './openaiHttp';
 
 const TILE_TIMEOUT_MS = 10 * 60 * 1000;
 const SWAP_RETRY_MS = 8000;
@@ -443,9 +443,15 @@ export async function chatCompletions(
 		maxTokens?: number;
 		thinking?: boolean;
 		model?: string;
+		/** Ask for plain JSON with the schema in the prompt, for a server that rejects rather than constrains. */
+		looseSchema?: boolean;
 	}
 ): Promise<string> {
 	assertGeneralModel(opts.model);
+	if (opts.looseSchema && opts.schema) {
+		messages = withSchemaInstructions(messages, opts.schema);
+		opts = { ...opts, schema: { type: 'json_object' } };
+	}
 	const override = currentAssistantHttp();
 	if (override?.profile === 'openai') {
 		return openaiChatCompletions(messages, {

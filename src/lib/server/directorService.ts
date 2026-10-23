@@ -346,9 +346,18 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       (job.progress.snapshot as any)?.raw===raw&&typeof job.progress.critique==='string').slice(0,2).reverse();
     const timeline=[...replies.map(job=>({job,kind:'question'})),...later.map(job=>({job,kind:'critique'}))]
       .sort((a,b)=>a.job.created_at-b.job.created_at);
+    // Corrections Director applied from a critique. The check after them reuses that
+    // critique instead of asking again, so record the corrected script here: a later
+    // run must keep the revision rather than fall back to the critique's old capture.
+    const appliedAfter=(job:any)=>{
+      const rows=sqlite.prepare("SELECT detail FROM director_events WHERE image_id=? AND kind='edit' AND created_at>=? AND json_extract(detail,'$.phase')='critique' ORDER BY id").all(imageId,job.created_at) as {detail:string}[];
+      const latest=new Map<string,string>();
+      for(const row of rows){const edit=JSON.parse(row.detail);if(edit.after?.english)latest.set(edit.lineId,edit.after.english);}
+      return latest.size?`\nDirector applied that critique's corrections; the corrected rendering shows:\n${[...latest].map(([id,english])=>`Region ${id}: English shown: ${english}`).join('\n')}`:'';
+    };
     const critique=[String(saved.progress.critique),...timeline.map(({job,kind})=>kind==='question'
       ? `Question: ${job.payload.prompt || ''}\nProofreader answer: ${job.progress.critique}`
-      : `Later rendered-page proofreader critique (newer corrections take precedence):\n${job.progress.critique}\nScript shown in that captured version:\n${((job.progress.snapshot as any)?.script||[]).map((line:any)=>`Region ${line.id}: English shown: ${line.english}`).join('\n')}`)].join('\n\n');
+      : `Later rendered-page proofreader critique (newer corrections take precedence):\n${job.progress.critique}\nScript shown in that captured version:\n${((job.progress.snapshot as any)?.script||[]).map((line:any)=>`Region ${line.id}: English shown: ${line.english}`).join('\n')}${appliedAfter(job)}`)].join('\n\n');
     return {saved,raw,capture,critique};
   }
   return {run,series,episode,user,signal:control.abort.signal,authorize:()=>authorizeDirector(user,series.id),

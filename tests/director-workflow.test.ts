@@ -2407,7 +2407,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
 });
 
 
-test("a final-check critique rewords a region once per run; later rewordings are held so the page can pass",async()=>{
+test("a final-check critique rewords a region once; the corrected rendering is checked without asking for another critique",async()=>{
   const page=await seedChapter('critique-settles',34);
   let round=0;const normal=respond;
   proofreaderReply=(mode,{rows})=>mode==='critique'?`Region ${page.lineId}: polish the wording (round ${++round}).`:rows.map((l:any)=>`Region ${l.id}: Original source: ${l.source||'こんにちは'}; English: ${l.body||'Hello'}`).join('\n');
@@ -2419,7 +2419,8 @@ test("a final-check critique rewords a region once per run; later rewordings are
     assert.equal(result.overview.pages[0].state,'passed',result.overview.pages[0].detail);
     const edits=(sqlite.prepare("SELECT detail FROM director_events WHERE run_id=? AND kind='edit'").all(result.runId) as any[]).map(r=>JSON.parse(r.detail)).filter(e=>e.phase==='critique');
     assert.equal(edits.length,1,'only the first final check rewords the region');
-    assert.ok(sqlite.prepare("SELECT 1 FROM director_events WHERE run_id=? AND kind='edit:held'").get(result.runId),'later suggestions are kept for review');
+    // The applied critique is reused for the visual re-check: a fresh one would only propose another wording.
+    assert.equal(round,1,'the proofreader is asked for one final critique');
     assert.equal((await listLines(page.episode.id)).find(l=>l.id===page.lineId)!.body,'Hello, version 1');
   }finally{respond=normal;proofreaderReply=undefined;}
 });
@@ -3667,7 +3668,8 @@ test('a missing raw reading is queried as a region follow-up, then frontier tran
     assert.match(String(follow.payload.prompt),/Is there lettering inside that target area, or is it artwork/);
     assert.doesNotMatch(String(follow.payload.prompt),/Clarification needed|unreadable|empty|normalized|Current proofreader guidance/);
     const sent=proofreaderRequests.slice(pstart);
-    assert.deepEqual(sent.map(r=>r.mode),['follow-up','critique','critique']);
+    // The applied critique is reused for the re-check; the proofreader is not asked again.
+    assert.deepEqual(sent.map(r=>r.mode),['follow-up','critique']);
     assert.equal(sent[0].imageCount,2,'Follow-up API gets the whole raw page and the region crop');
     assert.match(sent[0].prompt,/Previous critique/);
     assert.ok(result.overview.events.some(e=>e.kind==='proofreader:question'&&e.detail.lineId===id&&e.detail.parentJobId===parent&&e.detail.crop));

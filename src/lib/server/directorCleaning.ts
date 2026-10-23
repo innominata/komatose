@@ -27,6 +27,7 @@ import { excludeIfNotLettering } from "./directorLettering";
 import { ghostMask } from "./cleaningTouchUp";
 import { auditedDirectorOperation, pageFingerprint } from "./directorState";
 import { maskedCleaning, runWorkflowPng } from "./workflowImages";
+import { cachedMaskOperation } from "./directorMaskCache";
 import { preferences } from "./workflowService";
 import { cleaningFallbackModel } from "./modelImageWorkflow";
 import {
@@ -39,6 +40,8 @@ import {
   cleaningComparison,
   repaintStructure,
   BLOTCH_RATIO,
+  changedShare,
+  EDITOR_NO_OP_SHARE,
   flatEnclosureInspector,
   outlineResidueInspector,
   type CleaningRegion,
@@ -58,6 +61,8 @@ const EDITOR_MASK_GROW = 6;
 // Ghosts of lettering (grey fringes, outline halos) left by a clean usually sit
 // just past the detected mask. A repair that leaves them retries once this much wider.
 const GHOST_MASK_GROW = 8;
+/** A candidate where the detector still finds this share of the original lettering failed outright. */
+const LETTERING_LEFT_SHARE = 0.5;
 // The same instructions as Clean in the editor. Director's own wording told the editor to
 // keep "artwork INSIDE the mask", which it read as the black strokes of outlined lettering:
 // it removed the white outline and left the letters (page 15, 우드득).
@@ -203,7 +208,7 @@ export async function cleanDirectorPage(
   const decoratedBubbles = new Set<string>();
   const artworkRepairs = new Map<string, string>();
   const damagedBoundaries = new Set<string>();
-  const operation = ctx.imageOperation ?? runWorkflowPng;
+  const operation = cachedMaskOperation(ctx.run.id, ctx.imageOperation ?? runWorkflowPng);
   let current = pageArtwork(initial.data)!;
   let fingerprint = pageFingerprint(ctx.episode.id, imageId);
   const assertCurrent = () => {
@@ -359,6 +364,8 @@ export async function cleanDirectorPage(
   const artworkBounds = (line: LineRow) => cleaningArtworkBounds(
     reviewBounds(line), { width: rawSize.width!, height: rawSize.height! },
   );
+  // Assigned once the mask helper exists below; checks that run earlier skip it.
+  let letteringLeft: (line: LineRow, artifact: string) => Promise<number | undefined> = async () => undefined;
   const inspect = async (
     base: string,
     artifact: string,
@@ -379,6 +386,22 @@ export async function cleanDirectorPage(
       target ? [target] : lines,
     );
     if (residue) return residue;
+    // Most of the original lettering still detected is a failed clean however a
+    // model would word it: reject it here instead of spending model checks on it.
+    // Balloons already had the pixel residue check above; this is for lettering over artwork.
+    if (target && artifact !== raw && !bubbleToolsOnly(target)) {
+      const left = await letteringLeft(target, artifact);
+      if (left !== undefined && left >= LETTERING_LEFT_SHARE) {
+        for (const hash of [raw, base, artifact]) directorAsset(ctx.run.id, hash);
+        emit("clean:residue", { method, raw, previous: base, candidate: artifact, findings: [{ lineId: target.id, share: Number(left.toFixed(2)) }], kind: "detected" });
+        return {
+          safe: false,
+          problem: "remaining-text",
+          affectedLineIds: [target.id],
+          reason: `The text detector still finds ${Math.round(left * 100)}% of the original lettering in this region`,
+        };
+      }
+    }
     const outside = target && !bubbleToolsOnly(target);
     const images = target
       ? await Promise.all(
@@ -790,12 +813,15 @@ export async function cleanDirectorPage(
     );
     assertCurrent();
     maskPixels = typeof result.result?.pixels === "number" ? result.result.pixels : undefined;
+    maskDetector = typeof result.result?.maskEngine === "string" ? result.result.maskEngine : undefined;
     return result.artifact;
   };
   // A fill of a connected or overlapping balloon can clear a neighbour's
   // lettering too. When the detector finds nothing left, review the current
   // artwork and record those regions as clean instead of inpainting an empty mask.
   let maskPixels: number | undefined;
+  // The detector that read the image for the last mask; a geometric mask reads nothing.
+  let maskDetector: string | undefined;
   // Regions confirmed clean with nothing left to detect in them.
   const confirmedEmpty = new Set<string>();
   const alreadyClean = async (targets: LineRow[]) => {
@@ -813,13 +839,53 @@ export async function cleanDirectorPage(
   // those pixels: first whatever the text detector still finds in the
   // candidate, else faint marks inside the original lettering's footprint.
   // Original lettering per region, from raw: how much a candidate left behind is judged against it.
-  const originalLetters = new Map<string, { asset: string; pixels: number }>();
-  const touchUp = async (line: LineRow, candidate: string, base: string, from: string) => {
+  const originalLetters = new Map<string, { asset: string; pixels: number; detector?: string }>();
+  const originalLettering = async (line: LineRow) => {
     if (!originalLetters.has(line.id)) {
       const asset = await mask([line], false, 0, raw);
-      originalLetters.set(line.id, { asset, pixels: maskPixels ?? 0 });
+      originalLetters.set(line.id, { asset, pixels: maskPixels ?? 0, detector: maskDetector });
     }
-    const original = originalLetters.get(line.id)!;
+    return originalLetters.get(line.id)!;
+  };
+  letteringLeft = async (line, artifact) => {
+    const before = maskPixels;
+    try {
+      const original = await originalLettering(line);
+      // Only a detector that reads the image can say how much lettering is left.
+      if (!original.pixels || !original.detector) return undefined;
+      await mask([line], false, 0, artifact);
+      if (!maskDetector || maskPixels === undefined) return undefined;
+      return maskPixels / original.pixels;
+    } finally {
+      maskPixels = before;
+    }
+  };
+  const touchUp = async (line: LineRow, candidate: string, base: string, from: string) => {
+    // Leftovers are usually a glow or halo the lettering mask stopped short of, not
+    // faint pixels inside the letters. Redo LaMa from the original page with the mask
+    // grown past the glow: page 44's glowing captions cleaned this way in seconds,
+    // where repainting the smudge from its smudged surroundings never could.
+    if (!bubbleToolsOnly(line)) {
+      const wider = await mask([line], false, GHOST_MASK_GROW, raw);
+      if (maskPixels) {
+        const input = await maskedCleaning(base, wider, raw);
+        emit("clean:request", { method: "lama-manga", regionIds: [line.id], scope: "touch-up", maskMode: "grown-lettering", from,
+          reason: `Touch up ${from}: redo LaMa from the original lettering with the mask grown ${GHOST_MASK_GROW}px past its glow`, ...await cleanInputs(ctx.run.id, input, wider) });
+        try {
+          const result = await operation({ cmd: "clean", path: assetPath(input), mask: assetPath(wider), method: "lama-manga" }, ctx.signal);
+          const limited = await maskedCleaning(input, wider, result.artifact);
+          const review = await inspect(base, limited, "lama-wider", line);
+          if (review.safe) {
+            await save(limited, line, `${from}+lama-wider`, wider);
+            return true;
+          }
+          failure("lama-wider", [line], review.reason);
+        } catch (error) {
+          failure("lama-wider", [line], error);
+        }
+      }
+    }
+    const original = await originalLettering(line);
     let selected = await mask([line], false, 2, candidate);
     // Most of the lettering still there means the method failed outright;
     // touching up is for the remnants of a nearly clean result.
@@ -1295,6 +1361,16 @@ export async function cleanDirectorPage(
               },
               ctx.signal,
             );
+            if (method.editor) {
+              // Measured on the letters themselves: erasing them must change them, while a
+              // mask grown past thin glyphs is mostly background either way.
+              const letters = await mask([line], false, 0, raw);
+              const share = await changedShare(await readAsset(input), await readAsset(candidate.artifact), await readAsset(letters));
+              // Not leftover lettering: the editor declined to edit. A wider mask will not
+              // change its mind, so go to the next method instead of another long call.
+              if (share < EDITOR_NO_OP_SHARE)
+                throw new Error(`${method.id} left the lettering in place (changed ${Math.round(share * 100)}% of the letters)`);
+            }
             const bounds = reviewBounds(line);
             const blendedMask = artwork ? await storeAsset(await featherCleaningMask(await readAsset(selected), {
               id: line.id, box: [bounds.x, bounds.y, bounds.w, bounds.h],

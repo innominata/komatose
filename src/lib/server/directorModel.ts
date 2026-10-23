@@ -28,6 +28,14 @@ const truncated = /finish_reason=length|output was incomplete|increase the outpu
 const isTransient = (message: string) =>
   transient.test(message) && !invalidOutput.test(message);
 
+/**
+ * Rows whose server rejected a reply for its shape (llama-swap's
+ * structured_output_failed). Those servers validate instead of constraining, so
+ * later calls ask for plain JSON and Komatose mends and validates the reply itself.
+ */
+const validatingServers = new Set<string>();
+const shapeRejected = /structured_output_failed/i;
+
 export type DirectorModelCall = <T>(
   purpose: string,
   system: string,
@@ -107,6 +115,7 @@ export function directorModel(
             model: model.model,
             thinking: false,
             ...(maxTokens ? { maxTokens } : {}),
+            ...(validatingServers.has(row.id) ? { looseSchema: true } : {}),
           };
           event("automation:request", {
             purpose,
@@ -140,6 +149,9 @@ export function directorModel(
           // Repeating the same over-budget request immediately does not help.
           // Only an explicitly configured fallback may handle this failure.
           if (deadline.aborted) break;
+          if (shapeRejected.test(message)) {
+            try { validatingServers.add(resolveLiveAssistant(model.engine, model.model).row.id); } catch { /* row gone */ }
+          }
           if (
             ((error instanceof ModelTaskError &&
               error.outcome === "failed_validation") ||

@@ -6,6 +6,7 @@ import { ModelTaskError, taskLabel, validateTaskOutput, type ModelTaskId } from 
 import { modelPackage, modelPackageError, fingerprint, type DiscoveredPackage } from './modelPackages';
 import { invokePackage, superviseModel } from './modelSupervisor';
 import { invokeBuiltinAdapter, type TaskInput } from './modelAdapters';
+import { repairToSchema } from './schemaRepair';
 import { isDiagnosticRun } from './assistantRoute';
 import { directorContext, directorEvent, directorTraceValue } from './directorAudit';
 
@@ -61,6 +62,8 @@ export async function executeModelTask(row: ModelRow, task: ModelTaskId, input: 
     else if (pkg.manifest.adapter.command) output = await invokePackage(pkg, 'execute', input, { task, signal: opts.abort, slug: input.model || row.slug });
     else output = await invokeBuiltinAdapter(pkg, row, task, input, opts.abort, release => releases.push(release));
   opts.abort?.throwIfAborted();
+  // Director replies are mended for the usual near-misses before they are judged.
+  if (task === 'director' && input.schema && !opts.diagnostic) output = repairToSchema(output, input.schema);
   validateTaskOutput(task, output, opts.diagnostic && opts.independentDiagnosticFields ? { required: [] } : input.schema);
   if (task === 'sourceDecide') {
     try { validateTranscriptionChoice(output, input.candidates); }
