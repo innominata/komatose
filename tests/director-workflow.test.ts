@@ -704,7 +704,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
   ) => {
     assert.equal(purpose, "summarize-region-type");
     assert.deepEqual(images, []);
-    assert.ok(data.examples.length <= 3);
+    assert.ok(data.examples.length <= 8);
     assert.ok(JSON.stringify(data).length < 12000);
     assert.ok(!JSON.stringify(data).includes("PRIVATE-"));
     assert.equal(schema.properties.description.maxLength, 1400);
@@ -725,7 +725,8 @@ test("type descriptions compact large cached evidence in bounded text-only batch
     call,
     signal,
   );
-  assert.equal(calls.length, 4);
+  // Batches are bounded by text size: four of these long descriptions fit in one call.
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].previousSummary, null);
   assert.equal(calls[1].previousSummary.description, "Merged description 1");
   assert.ok(
@@ -735,7 +736,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
     summary.exampleIds,
     examples.map((e) => e.id),
   );
-  assert.equal(summary.description, "Merged description 4");
+  assert.equal(summary.description, "Merged description 3");
   assert.deepEqual(
     await summarizeTypeDescription(
       "s",
@@ -749,7 +750,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
   );
   assert.equal(
     calls.length,
-    4,
+    3,
     "unchanged descriptions do not require model calls",
   );
   await summarizeTypeDescription(
@@ -762,7 +763,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
   );
   assert.equal(
     calls.length,
-    8,
+    6,
     "manual rules invalidate the matching type summary",
   );
   await summarizeTypeDescription(
@@ -775,7 +776,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
   );
   assert.equal(
     calls.length,
-    12,
+    9,
     "excluded references invalidate the matching type summary",
   );
   const modified = examples
@@ -793,7 +794,7 @@ test("type descriptions compact large cached evidence in bounded text-only batch
   );
   assert.equal(
     calls.length,
-    16,
+    12,
     "changed cached example descriptions are not reused",
   );
   await assert.rejects(

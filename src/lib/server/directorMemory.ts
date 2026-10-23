@@ -15,7 +15,7 @@ import { getDoc, putDoc, storeAsset, WorkflowError } from "./workflowStore";
 import { capturePageImages } from "./pageImages";
 import { listImages, listLines, getEpisode } from "./queries";
 import { saveStyleAsRegionType } from "./workflowService";
-import { directorEvent } from "./directorAudit";
+import { directorContext, directorEvent } from "./directorAudit";
 import {
   objectSchema,
   requiredString,
@@ -56,6 +56,10 @@ export type MemoryTypeDescription = {
   exampleIds: string[];
 };
 const DESCRIPTION_VERSION = "compact-type-v1";
+/** Learned examples per region type: enough to cover a type's variants across a series. */
+export const EXAMPLES_PER_TYPE = 50;
+/** Bumped when learning changes enough that every series should fill in missing examples once. */
+const LEARNING_VERSION = "examples-50-v1";
 const descriptionSchema = objectSchema({
   // The prompt asks for 700 and 250; the schema allows overrun and the result
   // is trimmed, because a strict cap fails the whole call on a long answer.
@@ -145,9 +149,8 @@ export function saveMemorySettings(
     if (rebuild) {
       const relearn = getDoc(relearnDocId(seriesId), {});
       putDoc(null, relearn.id, { pending: true }, relearn.revision);
-      sqlite
-        .prepare("DELETE FROM director_examples WHERE series_id=?")
-        .run(seriesId);
+      // Learned examples are kept: each is re-learned only when its reference region
+      // changed. The type descriptions are summarised again from them.
       sqlite
         .prepare("DELETE FROM director_type_descriptions WHERE series_id=?")
         .run(seriesId);
@@ -161,14 +164,18 @@ const relearnDocId = (seriesId: string) => `director-relearn:${seriesId}`;
  * A series with reference pages but nothing learned (a rebuild from before the
  * flag existed, or a new series) counts as pending too. */
 export function relearnPending(seriesId: string) {
-  if (getDoc<{ pending?: boolean }>(relearnDocId(seriesId), {}).data.pending === true) return true;
+  const flag = getDoc<{ pending?: boolean; version?: string }>(relearnDocId(seriesId), {}).data;
+  if (flag.pending === true) return true;
   const { data } = memorySettings(seriesId);
   if (!data.imageIds.length && !data.episodeIds.length) return false;
+  // A series learned under an older, smaller limit fills in its missing examples once.
+  if (flag.version !== LEARNING_VERSION) return true;
   return !sqlite.prepare("SELECT 1 FROM director_examples WHERE series_id=? LIMIT 1").get(seriesId);
 }
 export function clearRelearn(seriesId: string) {
-  const doc = getDoc<{ pending?: boolean }>(relearnDocId(seriesId), {});
-  if (doc.data.pending) putDoc(null, doc.id, { pending: false }, doc.revision);
+  const doc = getDoc<{ pending?: boolean; version?: string }>(relearnDocId(seriesId), {});
+  if (doc.data.pending || doc.data.version !== LEARNING_VERSION)
+    putDoc(null, doc.id, { pending: false, version: LEARNING_VERSION }, doc.revision);
 }
 
 /** Human completion is evidence only while all its content stamps still match. */
@@ -384,7 +391,7 @@ export async function summarizeTypeDescription(
     signal.throwIfAborted();
     const batch: { cues: string; conflicts: string }[] = [];
     let length = 0;
-    while (offset < examples.length && batch.length < 3) {
+    while (offset < examples.length && batch.length < 8) {
       const { cues, conflicts } = examples[offset];
       const item = { cues, conflicts },
         size = JSON.stringify(item).length;
@@ -491,26 +498,27 @@ export async function loadSeriesMemory(
     types,
     candidates: candidates.map((x) => [x.id, x.fingerprint]),
   });
+  const learnedIds = new Set(
+    (sqlite.prepare("SELECT id,fingerprint FROM director_examples WHERE series_id=?").all(series.id) as { id: string; fingerprint: string }[])
+      .filter((row) => candidates.some((x) => x.id === row.id && x.fingerprint === row.fingerprint))
+      .map((row) => row.id),
+  );
   const selected: typeof candidates = [];
   for (const type of types) {
     const matches = candidates.filter((x) => x.typeId === type.id);
-    // Include different pages before taking a second example from the same page.
-    const firstPerPage = new Set(
-      matches
-        .filter(
-          (item, index, all) =>
-            all.findIndex((x) => x.imageId === item.imageId) === index,
-        )
-        .map((item) => item.id),
-    );
-    matches.sort(
-      (a, b) => Number(firstPerPage.has(b.id)) - Number(firstPerPage.has(a.id)),
-    );
-    const limit =
-      options.learnTypes && !options.learnTypes.includes(type.id)
-        ? 2
-        : (options.limit ?? 2);
-    selected.push(...matches.slice(0, Math.min(4, limit)));
+    // Learned examples keep their place, so adding finished pages only adds
+    // examples. New ones are taken round-robin across pages, so fifty examples
+    // span the series instead of one long scene.
+    const learned = matches.filter((x) => learnedIds.has(x.id));
+    const byPage = new Map<string, typeof matches>();
+    for (const item of matches) if (!learnedIds.has(item.id)) byPage.set(item.imageId, [...(byPage.get(item.imageId) || []), item]);
+    const spread: typeof matches = [];
+    for (let round = 0; spread.length + learned.length < EXAMPLES_PER_TYPE; round++) {
+      const next = [...byPage.values()].map((list) => list[round]).filter(Boolean);
+      if (!next.length) break;
+      spread.push(...next);
+    }
+    selected.push(...[...learned, ...spread].slice(0, EXAMPLES_PER_TYPE));
   }
   const examples: MemoryExample[] = [];
   const warnings: string[] = [];
@@ -520,16 +528,18 @@ export async function loadSeriesMemory(
       .get(id, series.id) as { fingerprint: string } | undefined)?.fingerprint;
   // A type with references but nothing learned yet (a new series, or right after
   // "Rebuild learned memory") is learned once even when no decision is uncertain.
+  // After a rebuild or a memory upgrade, every selected example still missing is
+  // learned once; afterwards learning is cached and runs only for new references.
   const unlearned = new Set(
     options.learnMissing
       ? types
-          .filter((type) => {
-            const own = selected.filter((x) => x.typeId === type.id);
-            return own.length && own.every((x) => cachedFingerprint(x.id) !== x.fingerprint);
-          })
+          .filter((type) => selected.some((x) => x.typeId === type.id && cachedFingerprint(x.id) !== x.fingerprint))
           .map((type) => type.id)
       : [],
   );
+  const toLearn = selected.filter((x) => cachedFingerprint(x.id) !== x.fingerprint &&
+    (!options.learnTypes || options.learnTypes.includes(x.typeId) || unlearned.has(x.typeId)));
+  let learnedNow = 0;
   for (const candidate of selected) {
     signal.throwIfAborted();
     const cached = sqlite
@@ -551,6 +561,12 @@ export async function loadSeriesMemory(
     )
       continue;
     try {
+      const director = directorContext();
+      if (director && toLearn.length > 4)
+        directorEvent(director.runId, director.episodeId, director.imageId || null, "memory:learning", {
+          typeId: candidate.typeId, done: learnedNow, total: toLearn.length,
+        });
+      learnedNow++;
       const capture = await capturePageImages(
         series,
         candidate.episode,
