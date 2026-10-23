@@ -51,7 +51,10 @@ export function ocrTranslatorLabel(engine?: TranslateEngine | string, model?: st
  try {
   const resolved = resolveLiveAssistant(engine || DEFAULT_CHAT_MODEL_ID, model || '');
   return resolved.slug !== resolved.row.slug ? resolved.slug : resolved.row.name;
- } catch { return (model || engine || DEFAULT_CHAT_MODEL_ID).trim(); }
+ } catch {
+  // No model is built in: an unchosen translator is credited generically, never by a guessed name.
+  return (model || engine || 'Translation').trim();
+ }
 }
 
 export function ocrSourceAttribution(ocrLabel: string, translatorLabel = '') {

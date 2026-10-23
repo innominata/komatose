@@ -91,7 +91,8 @@ test('proofread edited English forwards items, pack fields, model and cancellati
 });
 
 test('a proofreader and unknown engines are rejected before proofread edited English', async () => {
-	for (const engine of ['proofreader-a', 'unknown', 'claude', '']) {
+	// An empty engine is "not chosen" and follows the operator's default; it is not unknown.
+	for (const engine of ['proofreader-a', 'unknown', 'claude']) {
 		const { calls, handlers } = trackers();
 		await assert.rejects(
 			runProofreadEnglish(engine, items, opts, handlers),

@@ -76,7 +76,8 @@ test('alternative phrasing forwards source, current, pack fields, model and canc
 });
 
 test('a proofreader and unknown engines are rejected before alternative phrasing', async () => {
-	for (const engine of ['proofreader-a', 'unknown', 'claude', '']) {
+	// An empty engine is "not chosen" and follows the operator's default; it is not unknown.
+	for (const engine of ['proofreader-a', 'unknown', 'claude']) {
 		const { calls, handlers } = trackers();
 		await assert.rejects(
 			runAlternatives(engine, opts, handlers),

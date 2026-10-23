@@ -87,12 +87,14 @@ test('cancellation is propagated instead of saved as a decider error', async () 
   await assert.rejects(decideTranscription(Buffer.from('image'), readings, abort.signal, 'japanese',
     { selection: { engine: 'd1-3b', model: '' } }, undefined, async () => { abort.abort(); throw abort.signal.reason; }), { name: 'AbortError' });
 });
+// Profiles store explicit choices and no model is built in, so name the ones a profile needs.
+const chosen = { translate: { engine: 'chat-fixture', model: '' }, proofread: { engine: 'chat-fixture', model: '' }, transcriptionModels: ['paddleocr-vl-1.6'] };
 test('settings and profiles preserve Default, explicit Off, selected model and thresholds', () => {
   assert.equal(regionAiSettings().transcriptionDecider, undefined);
   assert.equal(regionAiSettings({ transcriptionDecider: null }).transcriptionDecider, null);
   for (const v of [-1, 2, '0.8', null, NaN]) assert.throws(() => decisionThreshold(v, .8));
   const selected = { engine: 'd1-3b', model: '' };
-  const settings = regionAiSettings({ transcriptionDecider: selected, deciderMinProbability: .81, deciderMinMargin: .17 });
+  const settings = regionAiSettings({ ...chosen, transcriptionDecider: selected, deciderMinProbability: .81, deciderMinMargin: .17 });
   const snapshot = snapshotProfileSelections(settings);
   assert.deepEqual(parseProfileSelections(snapshot), snapshot);
   assert.deepEqual(mergeProfileIntoSettings(regionAiSettings(), snapshot).transcriptionDecider, selected);
@@ -265,7 +267,7 @@ test('OCR pipeline decides before translating and applies a confident minority o
 
 test('model packs retain selected deciders, Off and thresholds, and report missing decider dependencies', async () => {
   const { previewPackExport, parseModelPack } = await import('../src/lib/modelPack');
-  const selections = snapshotProfileSelections(regionAiSettings({ transcriptionDecider: { engine: 'd1-3b', model: '' }, deciderMinProbability: .87 }));
+  const selections = snapshotProfileSelections(regionAiSettings({ ...chosen, transcriptionDecider: { engine: 'd1-3b', model: '' }, deciderMinProbability: .87 }));
   const result = previewPackExport([], [{ id: 'decider-profile', name: 'Decider', updatedAt: 1, selections }]);
   assert.deepEqual(parseModelPack(result.pack).profiles[0].selections, selections);
   assert.ok(result.profilesNeedingConfig[0].excludedModels.some(item => item.id === 'd1-3b'));

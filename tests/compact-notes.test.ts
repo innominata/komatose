@@ -63,7 +63,8 @@ test('compact notes keep model, abort and page captions attached to their indexe
 });
 
 test('a proofreader and unknown engines are rejected before compacting notes', async () => {
-	for (const engine of ['proofreader-a', 'unknown', 'claude', '']) {
+	// An empty engine is "not chosen" and follows the operator's default; it is not unknown.
+	for (const engine of ['proofreader-a', 'unknown', 'claude']) {
 		const { calls, handlers } = trackers();
 		await assert.rejects(
 			runCompactSceneNotes(engine, rows, { model: 'chosen-model' }, handlers),

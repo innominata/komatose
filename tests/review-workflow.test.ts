@@ -34,7 +34,9 @@ for (const slug of ['review-mask-fixture', 'proofreader-fixture', 'fixture']) {
   await fixturePasses(row.id, ['sourceReview', 'pageImageProofread', 'proofreadEnglish', 'translate', 'vision']);
 }
 const fixtureSettings = getDoc('series:s', {});
-putDoc(null, fixtureSettings.id, { regionAi: { translate: { engine: 'fixture', model: '' } } }, fixtureSettings.revision);
+// No transcription set is built in: the series names the two readers these tests compare.
+const OCR_PAIR = ['hayai-ocr-v2', 'paddleocr-vl-1.6'];
+putDoc(null, fixtureSettings.id, { regionAi: { translate: { engine: 'fixture', model: '' }, transcriptionModels: OCR_PAIR } }, fixtureSettings.revision);
 const series = (await getSeries('s'))!, episode = (await getEpisode('e'))!;
 const pair = (hayai: string, paddle: string) => compareOcrReadings([
   { model: 'hayai-ocr-v2', source: hayai }, { model: 'paddleocr-vl-1.6', source: paddle },
@@ -69,7 +71,7 @@ test('consensus OCR and Qwen hints receive the chapter language', async () => {
   }, async (_source, _abort, lang) => {
     seen.push(`translate:${lang}`);
     return 'Hi';
-  }, 'korean');
+  }, 'korean', OCR_PAIR);
   assert.equal(result.agreed, false);
   assert.deepEqual(seen, ['read:korean', 'read:korean', 'translate:korean', 'translate:korean']);
 });
@@ -109,7 +111,7 @@ test('automatic OCR reuses one page mask and both recognizers receive only the k
         assert.deepEqual(sent, crop);
         readers.push(model);
         return '原文';
-      });
+      }, undefined, undefined, OCR_PAIR);
       assert.deepEqual(readers, ['hayai-ocr-v2', 'paddleocr-vl-1.6']);
     }
     assert.equal((await fixture.calls()).length, 1, 'one detector call for the whole page');
@@ -202,7 +204,7 @@ test('one recognizer failing retains the other reading, translates it, and cance
   const result = await readOcrConsensus(Buffer.from('fixture'), new AbortController().signal, async id => {
     if (id === 'hayai-ocr-v2') throw new Error('Fixture failure');
     return '안녕';
-  }, async source => `EN ${source}`);
+  }, async source => `EN ${source}`, undefined, OCR_PAIR);
   assert.equal(result.agreed, true);
   assert.equal(result.source, '안녕');
   assert.equal(result.readings[1].source, '안녕');
@@ -211,7 +213,7 @@ test('one recognizer failing retains the other reading, translates it, and cance
   let calls = 0;
   await assert.rejects(readOcrConsensus(Buffer.from('fixture'), abort.signal, async () => {
     calls++; abort.abort(); return '안녕';
-  }), { name: 'AbortError' });
+  }, undefined, undefined, OCR_PAIR), { name: 'AbortError' });
   assert.equal(calls, 1);
 });
 

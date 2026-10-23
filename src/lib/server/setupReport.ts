@@ -309,8 +309,9 @@ export async function buildSetupReport(deps: SetupDeps): Promise<SetupReport> {
 	const reviewId = modelDefaultFor('chapterReview');
 	const defaultTranslate = translateId ? deps.rows.find((row) => row.id === translateId) : undefined;
 	const defaultReview = reviewId ? deps.rows.find((row) => row.id === reviewId) : undefined;
-	if (defaultTranslate && !ready(defaultTranslate) && translateReady.length) {
-		// With one ready translator Komatose uses it, so only a real choice needs a warning.
+	// No translate default, or one that is not ready: with one ready translator Komatose
+	// uses it, so only a real choice needs a warning.
+	if ((!defaultTranslate || !ready(defaultTranslate)) && translateReady.length) {
 		if (translateReady.length === 1) {
 			items.push({
 				id: 'default:translate',
@@ -325,10 +326,14 @@ export async function buildSetupReport(deps: SetupDeps): Promise<SetupReport> {
 				label: 'Default translate model',
 				group: 'Task coverage',
 				state: 'unavailable',
-				detail: 'The default translate model is not ready. Another translation model is.',
+				detail: defaultTranslate
+					? 'The default translate model is not ready. Another translation model is.'
+					: 'No default translate model is chosen, and several are ready.',
 				next: step(
 					'select_model',
-					`Select ${translateReady[0].name} (or another ready model) on a chapter instead of ${defaultTranslate.name}.`,
+					defaultTranslate
+						? `Select ${translateReady[0].name} (or another ready model) on a chapter instead of ${defaultTranslate.name}.`
+						: `Choose ${translateReady[0].name} (or another ready model) as the Translate default under Admin → Models.`,
 				),
 			});
 		}
@@ -339,7 +344,7 @@ export async function buildSetupReport(deps: SetupDeps): Promise<SetupReport> {
 	const reviewAlternatives = translateReady.filter(
 		(row) => row.access === 'cli' || row.access === 'remote_http' || localChatReady(row),
 	);
-	if (defaultReview && !ready(defaultReview) && reviewAlternatives.length) {
+	if ((!defaultReview || !ready(defaultReview)) && reviewAlternatives.length) {
 		if (reviewAlternatives.length === 1) {
 			items.push({
 				id: 'default:review',
@@ -354,8 +359,12 @@ export async function buildSetupReport(deps: SetupDeps): Promise<SetupReport> {
 				label: 'Default review model',
 				group: 'Task coverage',
 				state: 'unavailable',
-				detail: `The default review model (${defaultReview.name}) is not ready.`,
-				next: step('select_model', `Select ${reviewAlternatives[0].name} for review instead.`),
+				detail: defaultReview
+					? `The default review model (${defaultReview.name}) is not ready.`
+					: 'No default review model is chosen, and several are ready.',
+				next: step('select_model', defaultReview
+					? `Select ${reviewAlternatives[0].name} for review instead.`
+					: `Choose ${reviewAlternatives[0].name} (or another ready model) as the review default under Admin → Models.`),
 			});
 		}
 	}

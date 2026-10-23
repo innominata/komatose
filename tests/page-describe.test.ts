@@ -67,7 +67,8 @@ test('page description forwards jpeg, model and cancellation', async () => {
 });
 
 test('a proofreader and unknown engines are rejected before page description', async () => {
-	for (const engine of ['proofreader-a', 'unknown', 'claude', '']) {
+	// An empty engine is "not chosen" and follows the operator's default; it is not unknown.
+	for (const engine of ['proofreader-a', 'unknown', 'claude']) {
 		const { calls, handlers } = trackers();
 		await assert.rejects(
 			runDescribePage(engine, { jpeg, model: 'chosen-model' }, handlers),
