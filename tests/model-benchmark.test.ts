@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, rmSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import sharp from 'sharp';
 import { GOLD_PAGES, goldRequired, goldTranslationLines, type GoldBox } from '../src/lib/benchmarkGold';
 import {
@@ -36,7 +36,9 @@ const root = await mkdtemp(join(tmpdir(), 'scan-benchmark-'));
 process.env.SCAN_ROOT = root;
 process.env.SCAN_DATA_DIR = join(root, 'data');
 process.env.DATABASE_URL = join(root, 'data', 'test.db');
-after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+// Not an after() hook: with top-level awaits in this module the runner could fire it
+// while a benchmark test was still running, deleting its saved results mid-test.
+process.once('exit', () => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 const page = (id: string) => GOLD_PAGES.find((item) => item.id === id)!;
 
@@ -184,7 +186,9 @@ test('visible CLI rows join both benchmarks; hidden rows do not', async () => {
 	assert.ok(!translationBenchmarkRows(hidden).some((row) => row.id === 'grok-4.6'));
 });
 
-const blankJpeg = await sharp({ create: { width: 1414, height: 2000, channels: 3, background: '#fff' } }).jpeg().toBuffer();
+// Built on first use: a top-level await between tests lets the runner start before the module settles.
+let blank: Promise<Buffer> | undefined;
+const blankJpeg = () => (blank ??= sharp({ create: { width: 1414, height: 2000, channels: 3, background: '#fff' } }).jpeg().toBuffer());
 
 test('OCR run: every detector setup is scored per page, and crop models read gold and detector crops', async () => {
 	const { startOcrBenchmark, waitBenchmark, listDetectorSetups } = await import('../src/lib/server/modelBenchmark');
@@ -200,7 +204,7 @@ test('OCR run: every detector setup is scored per page, and crop models read gol
 		sources: ['gold', 'rtdetr'],
 		rows: [row],
 		pages,
-		image: async () => blankJpeg,
+		image: async () => blankJpeg(),
 		// RT-DETR finds every dialogue box; COO finds the SFX; Koharu finds nothing.
 		detectPart: async (part, p) => {
 			calls.push(`${part}:${p.id}`);
@@ -250,7 +254,7 @@ test('OCR run: one failed crop does not fail the page, and English misreads are 
 		sources: ['rtdetr'],
 		rows: [row],
 		pages: [p],
-		image: async () => blankJpeg,
+		image: async () => blankJpeg(),
 		detectPart: async (part) => ({
 			regions: part === 'rtdetr'
 				? [...p.lines.filter((line) => line.kind === 'speech').flatMap((line) => line.boxes), art].map((box) => ({ cls: 'text', score: 0.9, box }))
@@ -380,20 +384,20 @@ test('a new run keeps the last result for every model and detector it does not r
 		sources: ['gold'],
 		rows: [paddle],
 		pages,
-		image: async () => blankJpeg,
+		image: async () => blankJpeg(),
 		detectPart: async () => ({ regions: [], width: 1414, height: 2000 }),
 		mask: async () => undefined,
-		crop: async () => blankJpeg,
+		crop: async () => blankJpeg(),
 		readCrop: async () => 'x',
 	});
 	await waitBenchmark();
 	startOcrBenchmark({
 		detectors: ['heuristic'],
 		pages,
-		image: async () => blankJpeg,
+		image: async () => blankJpeg(),
 		detectPart: async () => ({ regions: [], width: 1414, height: 2000 }),
 		mask: async () => undefined,
-		crop: async () => blankJpeg,
+		crop: async () => blankJpeg(),
 	});
 	const { ocr } = await waitBenchmark();
 	assert.equal(ocr!.detectors.filter((item) => item.id === 'rtdetr').length, 1);
