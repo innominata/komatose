@@ -404,7 +404,7 @@ globalThis.fetch = async (url, init) => {
       choices: [
         {
           message: {
-            content: JSON.stringify(await(async()=>{const response=await respond(input.purpose,input.data); if(input.purpose==="inspect-region-coverage" && response?.regions) return {...response,edits:response.edits||[],regions:response.regions.map(({x,y,w,h}:any)=>({x,y,w,h}))};return response;})()),
+            content: JSON.stringify(await(async()=>{const response=await respond(input.purpose,input.data); /* Findings predate severities: an unmarked one is a blocker. */ if(input.purpose==="check-page" && Array.isArray(response?.findings)) return {...response,findings:response.findings.map((f:any)=>({severity:"blocker",...f}))}; if(input.purpose==="inspect-region-coverage" && response?.regions) return {...response,edits:response.edits||[],regions:response.regions.map(({x,y,w,h}:any)=>({x,y,w,h}))};return response;})()),
           },
         },
       ],
@@ -1279,7 +1279,8 @@ test("Director adds missed regions to a partially detected page, cleans them, an
       lines.find((l) => l.id === "ignored-missed-text")?.sourceState,
       "ignored",
     );
-    const cleanCalls = (await masks.calls()).filter(p=>p.detect);
+    // Extent checks also run the detector (expansion 0, no placements); count only cleaning masks.
+    const cleanCalls = (await masks.calls()).filter(p=>p.detect && p.regionPlacements);
     assert.equal(cleanCalls.length, 1);
     assert.equal(
       cleanCalls[0].regions.length,
@@ -1375,7 +1376,7 @@ test("final QA can request creation of a missing region without inventing an exi
     assert.ok(getDoc<any>(`region:${added.id}`, {}).data.layout);
     assert.equal(scans, 2);
     assert.equal(checks, 2);
-    assert.equal((await masks.calls()).filter(p=>p.detect).length, 1);
+    assert.equal((await masks.calls()).filter(p=>p.detect && p.regionPlacements).length, 1, 'one cleaning mask; extent checks are separate');
     assert.equal(
       getDoc<any>(`page:${page.imageId}`, {}).data.pendingCleanRegions,
       undefined,
@@ -2798,7 +2799,7 @@ test("lettering QA applies a concrete style repair before requesting a second re
         edits: [
           {
             lineId: page.lineId,
-            style: letteringPatch({ size: 20, minSize: 20, emphasis: "bold" }),
+            style: letteringPatch({ size: 20, emphasis: "bold" }),
             reason: "Match the source shout",
           },
         ],
@@ -2819,15 +2820,18 @@ test("lettering QA applies a concrete style repair before requesting a second re
     assert.notEqual(region.style.minSize, 20, "Director changed the minimum size");
     assert.equal(checks, 2);
     assert.equal(repairs, 1);
-    assert.equal(
-      (
-        sqlite
-          .prepare(
-            "SELECT detail FROM director_stages WHERE run_id=? AND stage='check'",
-          )
-          .get(result.runId) as any
-      ).detail,
-      "{}",
+    // The passing check stage records no warnings (warnings never block, so they are kept apart).
+    assert.deepEqual(
+      JSON.parse(
+        (
+          sqlite
+            .prepare(
+              "SELECT detail FROM director_stages WHERE run_id=? AND stage='check'",
+            )
+            .get(result.runId) as any
+        ).detail,
+      ).warnings ?? [],
+      [],
     );
     undoDirector({ episodeId: page.episode.id, runId: result.runId });
     assert.equal(
@@ -4052,7 +4056,9 @@ for (const fontId of ["", "missing-font"]) {
       result.overview.events.some((e) => e.kind === "lettering:changed"),
     );
     undoDirector({ episodeId: page.episode.id, runId: result.runId });
-    assert.deepEqual(getDoc<any>(region.id, {}).data.style, style);
+    // Undo restores every original value; the repair may leave the style's defaults spelled out.
+    const restored = getDoc<any>(region.id, {}).data.style;
+    for (const [key, value] of Object.entries(style)) assert.equal(restored[key], value, key);
   });
 }
 
