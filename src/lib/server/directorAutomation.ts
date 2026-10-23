@@ -2290,12 +2290,82 @@ async function readPage(
 }
 
 /** Disable only a visually verified duplicate; preserve every saved text field and layout. */
+/**
+ * A "duplicate" that sits exactly on another region with the same text, but was
+ * first detected somewhere else, is a misplaced second copy, not a duplicate: the
+ * same sound effect drawn twice (page 16's two 유큭) once had one stacked on the
+ * other by a geometry repair. Put it back where it was found instead of hiding it.
+ */
+export async function restoreStackedCopies(ctx: AutomationContext, imageId: string, ids: string[]): Promise<Set<string>> {
+  const restored = new Set<string>();
+  // Hidden regions count: the review may already have hidden one of the pair.
+  const lines = (await listLines(ctx.episode.id)).filter((line) => line.imageId === imageId && line.sourceState !== "ignored");
+  const same = (a: number | null, b: number | null) => a != null && b != null && Math.abs(a - b) < 0.005;
+  for (const id of ids) {
+    const line = lines.find((item) => item.id === id);
+    if (!line || regionData(line).data.locked) continue;
+    const partner = lines.find((other) => other.id !== id && same(other.x, line.x) && same(other.y, line.y) &&
+      same(other.w, line.w) && same(other.h, line.h) && proofreaderText(other.source || "") === proofreaderText(line.source || ""));
+    if (!partner) continue;
+    const origin = (lineId: string) => {
+      const created = sqlite.prepare("SELECT detail FROM director_events WHERE image_id=? AND kind='region:created' AND json_extract(detail,'$.lineId')=? ORDER BY id LIMIT 1")
+        .get(imageId, lineId) as { detail: string } | undefined;
+      const box = created ? (JSON.parse(created.detail).box as number[] | undefined) : undefined;
+      return box?.length === 4 && overlap({ ...line, x: box[0], y: box[1], w: box[2], h: box[3] }, line) < 0.2 ? box : undefined;
+    };
+    // Whichever of the pair was first detected elsewhere is the one that moved.
+    const moved = origin(id) ? line : origin(partner.id) ? partner : undefined;
+    if (!moved || restored.has(moved.id) || regionData(moved).data.locked) continue;
+    const keeper = moved === line ? partner : line;
+    const box = origin(moved.id)!;
+    const [x, y, w, h] = box;
+    const before = pageFingerprint(ctx.episode.id, imageId);
+    await guarded(ctx, imageId, "Restore a stacked copy to where it was detected", () =>
+      sqlite.transaction(() => {
+        assertUnchanged(ctx.episode.id, imageId, before);
+        sqlite.prepare("UPDATE lines SET x=?,y=?,w=?,h=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=?")
+          .run(x, y, w, h, Date.now(), ctx.user.id, moved.id);
+        const doc = regionData(moved);
+        putDoc(ctx.episode.id, doc.id, {
+          ...doc.data,
+          polygon: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }],
+          layout: undefined,
+          renderEnabled: true,
+          directorRenderingReview: undefined,
+        }, doc.revision);
+        // Both are real lettering: the one hidden as a "duplicate" renders again.
+        const kept = regionData(keeper);
+        if (kept.data.renderEnabled === false)
+          putDoc(ctx.episode.id, kept.id, { ...kept.data, renderEnabled: true, directorRenderingReview: undefined }, kept.revision);
+        // Its lettering at the restored place was never cleaned: queue it.
+        const page = pageData(imageId);
+        putDoc(ctx.episode.id, page.id, {
+          ...page.data,
+          pendingCleanRegions: [...new Set([...(page.data.pendingCleanRegions || []), moved.id])],
+          cleanApproved: false,
+        }, page.revision);
+        emit(ctx, imageId, "region:relocated", { lineId: moved.id, from: [moved.x, moved.y, moved.w, moved.h], to: box, duplicateOf: keeper.id,
+          reason: "Stacked on a region with the same text; restored to where it was first detected" });
+      })(),
+    );
+    restored.add(id);
+    restored.add(partner.id);
+  }
+  return restored;
+}
+
 async function repairRendering(
   ctx: AutomationContext,
   imageId: string,
   call: DirectorModelCall,
   findings: any[],
 ) {
+  const stacked = await restoreStackedCopies(ctx, imageId, [...new Set(findings.map((f) => f.lineId).filter(Boolean))] as string[]);
+  if (stacked.size) {
+    await fit(ctx, imageId);
+    findings = findings.filter((f) => !stacked.has(f.lineId));
+    if (!findings.length) return;
+  }
   const targetIds = [
     ...new Set(findings.map((f) => f.lineId).filter(Boolean)),
   ] as string[];
@@ -2551,6 +2621,13 @@ async function checkPage(
   /** The critique whose text corrections the previous attempt applied: reused, not asked again. */
   applied?: string,
 ) {
+  // A copy stacked on its twin (a bad earlier geometry repair) goes back first and
+  // its lettering is cleaned, before the critique or duplicate review judge the page.
+  const stacked = await restoreStackedCopies(ctx, imageId, (await listLines(ctx.episode.id)).filter((line) => line.imageId === imageId).map((line) => line.id));
+  if (stacked.size) {
+    await clean(ctx, imageId, call, attempt + 1);
+    await fit(ctx, imageId);
+  }
   const before = pageFingerprint(ctx.episode.id, imageId);
   const active = await ownLines(ctx.episode.id, imageId);
   if (

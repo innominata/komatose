@@ -2470,6 +2470,34 @@ test("punctuation-only lettering the series keeps is set aside as drawn: never c
   }finally{respond=normal;}
 });
 
+test("a copy stacked on an identical sound effect is moved back to where it was detected, not hidden",async()=>{
+  const {restoreStackedCopies}=await import('../src/lib/server/directorAutomation');
+  const page=await seedChapter('stacked-sfx',35);
+  const copy=`${page.lineId}-copy`;
+  sqlite.prepare("UPDATE lines SET source='유큭',body='Click',line_type='::' WHERE id=?").run(page.lineId);
+  sqlite.prepare(`INSERT INTO lines(id,episode_id,image_id,body,line_type,status,placed,x,y,w,h,sort_order,updated_at,updated_by,source,source_state)
+    SELECT ?,episode_id,image_id,body,line_type,status,placed,x,y,w,h,1,updated_at,updated_by,source,source_state FROM lines WHERE id=?`).run(copy,page.lineId);
+  const runId=createJob(page.episode.id,'director',{});
+  sqlite.prepare("INSERT INTO director_runs(id,episode_id,user_id,scope,model,proofreader,state,page_ids,created_at,updated_at,version,policy) VALUES(?,?,?,'page',?,?,'running',?,1,1,10,?)")
+    .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(directorPolicy({})));
+  // Detection first found the copy to the right; a later repair stacked it on the original.
+  sqlite.prepare("INSERT INTO director_events(run_id,episode_id,image_id,kind,detail,created_at) VALUES(?,?,?,'region:created',?,1)")
+    .run(runId,page.episode.id,page.imageId,JSON.stringify({lineId:copy,box:[.75,.2,.2,.3],source:''}));
+  // The duplicate review flagged and hid the original; the copy is the one that moved.
+  const original=getDoc<any>(`region:${page.lineId}`,{});
+  putDoc(page.episode.id,original.id,{...original.data,renderEnabled:false},original.revision);
+  const ctx:any={run:{id:runId,policy:JSON.stringify(directorPolicy({}))},series:page.series,episode:page.episode,user,signal:new AbortController().signal,authorize:async()=>{}};
+  const restored=await withDirector({runId,episodeId:page.episode.id,imageId:page.imageId},()=>restoreStackedCopies(ctx,page.imageId,[page.lineId]));
+  assert.deepEqual([...restored].sort(),[copy,page.lineId].sort());
+  assert.notEqual(getDoc<any>(`region:${page.lineId}`,{}).data.renderEnabled,false,'the original renders again');
+  const line=sqlite.prepare('SELECT x,y,w,h FROM lines WHERE id=?').get(copy) as any;
+  assert.deepEqual([line.x,line.y,line.w,line.h],[.75,.2,.2,.3]);
+  assert.notEqual(getDoc<any>(`region:${copy}`,{}).data.renderEnabled,false,'the copy keeps rendering');
+  assert.ok(getDoc<any>(`page:${page.imageId}`,{}).data.pendingCleanRegions.includes(copy),'its lettering at the restored place is queued for cleaning');
+  // Once apart, neither is a stacked copy any more.
+  assert.equal((await withDirector({runId,episodeId:page.episode.id,imageId:page.imageId},()=>restoreStackedCopies(ctx,page.imageId,[page.lineId,copy]))).size,0);
+});
+
 test("artwork boxed as text is excluded only when a neutral lettering check agrees, and undo restores it",async()=>{
   const {excludeIfNotLettering}=await import('../src/lib/server/directorLettering');
   const page=await seedChapter('shoelace-artwork',32);
