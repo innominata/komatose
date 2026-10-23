@@ -237,8 +237,11 @@ try {
   await expect(
     panel.getByRole("button", { name: /Run (page|chapter) Director/ }),
   ).toBeEnabled();
+  // Setup and settings live in the toolbar's More menu.
+  await panel.locator('summary[aria-label="More Director actions"]').click();
   await panel.getByRole("button", { name: "Check setup", exact: true }).click();
   await expect(panel.getByText("clean: Choose a mask model")).toBeVisible();
+  await panel.locator('summary[aria-label="More Director actions"]').click();
   await panel
     .getByRole("button", { name: "Director settings", exact: true })
     .click();
@@ -292,16 +295,16 @@ try {
   await expect(items.getByText(/plain → thought/)).toBeVisible();
   await expect(
     items.getByText(
-      /fallback from qwen3.8-27b-q4 to deepseek-flash: Qwen timed out/,
+      /Correct text: qwen3\.8-27b-q4 failed, trying deepseek-flash/,
     ),
   ).toBeVisible();
   await expect(
-    items.getByText(/correct-text: requested deepseek-flash \(fallback\)/),
+    items.getByText(/Correct text: asked deepseek-flash \(fallback\)/),
   ).toBeVisible();
   await expect.poll(() => calls.some((call) => call.after === 5)).toBe(true);
-  await expect(items.getByRole("button")).toHaveCount(3);
-  await expect(items.getByText(/Director finished|second-page-only/)).toHaveCount(0);
-  await items.getByRole("button",{name:/correct-text: requested deepseek-flash/}).click();
+  await expect(items.locator(".director-event")).toHaveCount(3);
+  await expect(items.getByText(/Director finished|second.page.only/i)).toHaveCount(0);
+  await items.getByRole("button",{name:/Correct text: asked deepseek-flash/}).click();
   const thumbnail=content.getByRole('button',{name:'Expand Exact model input'});
   await expect(thumbnail).toBeVisible();
   await thumbnail.click();
@@ -319,6 +322,8 @@ try {
   await page.getByRole('button',{name:'Close image preview',exact:true}).click();
   await expect(imagePreview).toHaveCount(0);
   await items.getByRole("button",{name:/plain → thought/}).click();
+  // Structured fields such as the prompt are collapsed until opened.
+  await content.locator("details.director-log-field",{hasText:"Prompt"}).locator("summary").click();
   await expect(content.getByText(/Detailed instruction 149/)).toBeVisible();
   const listBox=await items.boundingBox(),contentBox=await content.boundingBox();
   assert.ok(contentBox.x>=listBox.x+listBox.width-1,"Content should be to the right of log items");
@@ -331,12 +336,12 @@ try {
   assert.equal(await items.evaluate(el=>el.scrollTop),0);
   await panel.getByRole("button",{name:"Page 2",exact:true}).click();
   await expect(panel).toBeVisible();
-  await expect(items.getByRole("button")).toHaveCount(1);
-  await expect(items.getByText(/second-page-only/)).toBeVisible();
+  await expect(items.locator(".director-event")).toHaveCount(1);
+  await expect(items.getByText(/Second page only started/)).toBeVisible();
   await expect(content.getByText(/Detailed instruction/)).toHaveCount(0);
   await expect(items.getByText(/plain → thought|Director finished/)).toHaveCount(0);
   await panel.getByRole("button",{name:"Page 1",exact:true}).click();
-  await expect(items.getByRole("button")).toHaveCount(3);
+  await expect(items.locator(".director-event")).toHaveCount(3);
   await panel.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(
     panel.getByRole("button", { name: "Resume", exact: true }),
@@ -346,12 +351,19 @@ try {
     panel.getByRole("button", { name: "Pause", exact: true }),
   ).toBeVisible();
   await page.setViewportSize({width:390,height:844});
+  // Phone: the log list fills the width; an item opens its detail, and Back returns.
+  await panel.getByRole("button",{name:"Log",exact:true}).click().catch(()=>{});
   await expect(items).toBeVisible();
+  await expect(content).toBeHidden();
+  await items.locator(".director-event").first().click();
   await expect(content).toBeVisible();
+  await expect(items).toBeHidden();
   const mobilePanel=await panel.boundingBox(),mobileContent=await content.boundingBox();
   assert.ok(mobileContent.x+mobileContent.width<=mobilePanel.x+mobilePanel.width+1);
+  await content.getByRole("button",{name:"Log",exact:true}).click();
+  await expect(items).toBeVisible();
   await panel.getByRole("button",{name:"Page 2",exact:true}).click();
-  await expect(items.getByRole("button")).toHaveCount(1);
+  await expect(items.locator(".director-event")).toHaveCount(1);
   await page.screenshot({path:"/tmp/komatose-director-modal-mobile.png"});
   await panel.getByRole("button",{name:"Page 1",exact:true}).click();
   await page.setViewportSize({width:1500,height:1000});

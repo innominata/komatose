@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import DirectorImageViewer from './DirectorImageViewer.svelte';
   import { ALL_DIRECTOR_TASKS, DIRECTOR_TASKS, directorStatusLabel, type DirectorFinding, type DirectorTask } from '$lib/director';
   let { apiBase, scope, pageId, canEdit, busy, onnavigate, onsettings, models = $bindable([]), locked = $bindable(false), open = $bindable(false) }:
@@ -12,6 +12,12 @@
   let pages=$state<Page[]>([]),runs=$state<Run[]>([]);
   let events=$state<Event[]>([]),changes=$state<Change[]>([]),selectedRun=$state(''),selectedModel=$state('');
   let recheckAll=$state(false),working=$state(false),error=$state('');
+  // Page or chapter, switchable in the panel. Opening follows where the editor is.
+  let mode=$state<'page'|'chapter'>('page');
+  let wasOpen=false;
+  $effect(()=>{ if(open && !wasOpen) mode=untrack(()=>scope); wasOpen=open; });
+  // Narrow screens show either the log list or one item's detail.
+  let showDetail=$state(false);
   const TASKS_KEY='komatose.director.tasks';
   function savedTasks():DirectorTask[] {
     try {
@@ -49,7 +55,7 @@
   let expandedImage=$state<{hash:string;label:string}|null>(null);
   $effect(()=>{if(!open) expandedImage=null;});
   let preflight=$state<{stage:string;message:string}[]>([]),loading=false,loadedRun='';
-  const eligible=$derived(scope==='page' ? !!logPage : pages.length>0);
+  const eligible=$derived(mode==='page' ? !!logPage : pages.length>0);
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
@@ -287,7 +293,7 @@
   async function start(retryBlocked=false) {
     const model=models.find(item=>item.id===selectedModel);
     if (!model) return;
-    void act({action:retryBlocked?'retry-blocked':'start',scope,imageId:scope==='page'?logPage?.id:undefined,
+    void act({action:retryBlocked?'retry-blocked':'start',scope:mode,imageId:mode==='page'?logPage?.id:undefined,
       model:{engine:model.id,model:model.model||''},recheckAll,tasks});
   }
   async function checkSetup() {
@@ -301,6 +307,17 @@
     } catch(e) {error=e instanceof Error?e.message:String(e);} finally {working=false;}
   }
   function inspect(item:Page,finding?:DirectorFinding) {open=false;onnavigate?.(item.id,finding?.lineId,finding?.stage||item.stage||'check');}
+  /** Menus are <details>; close the others when one opens, and all of them on an outside click. */
+  let panelEl=$state<HTMLElement>();
+  function closeMenus(except?:Element) {
+    for (const menu of panelEl?.querySelectorAll('details.director-menu[open]')??[]) if (menu!==except) menu.removeAttribute('open');
+  }
+  function menuToggled(event:{currentTarget:HTMLDetailsElement}) {
+    const menu=event.currentTarget;
+    if (menu.open) closeMenus(menu);
+  }
+  const runLabel=(item:Run)=>`${new Date(item.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · ${item.scope} · ${directorStatusLabel(item.state)}`;
+  const pageFindings=$derived(logPage?.findings??[]);
   onMount(()=>{ 
     let shownPageId=pageId;
     void refresh();
@@ -317,96 +334,128 @@
   <button type="button" class="director-image-button" aria-haspopup="dialog" aria-label={`Expand ${label}`} title="Click to expand saved image" onclick={()=>expandedImage={hash,label}}><img src={`${apiBase}/workflow/assets/${hash}`} alt={label}></button>
 {/snippet}
 
-<button type="button" class="ed-btn" data-find="director" onclick={()=>{selectedPageId=pageId;open=true;void refresh();}}>
+<button type="button" class="ed-btn" data-find="director" onclick={()=>{selectedPageId=pageId;showDetail=false;open=true;void refresh();}}>
   <i class="bi bi-stars" aria-hidden="true"></i> Director
   {#if page?.state==='passed' && scope==='page'}<span class="director-check" title="Automated checks passed; human approval remains" aria-label="Automated checks passed; human approval remains"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>{/if}
 </button>
 {#if open}
   <div class="director-backdrop" role="presentation" onclick={()=>open=false}></div>
-  <div class="director-panel" role="dialog" aria-modal="true" aria-label="Director mode">
-    <header><div><h2>Director</h2><p>Unattended work · human completion stays under your control</p></div>
-      <button type="button" aria-label="Close Director" onclick={()=>open=false}>✕</button></header>
-    {#if error}<p class="director-error" role="alert">{error}</p>{/if}
-    <div class="director-controls">
-      <section class="director-tasks" aria-label="Director tasks">
-        <div class="director-tasks-head"><h3>Tasks <small>{tasks.length} of {ALL_DIRECTOR_TASKS.length}</small></h3>
+  <div class="director-panel" role="dialog" aria-modal="true" aria-label="Director mode" tabindex="-1" bind:this={panelEl}
+    onclick={(e)=>{ if(!(e.target as Element).closest('details.director-menu')) closeMenus(); }}
+    onkeydown={(e)=>{ if(e.key==='Escape'){ if(panelEl?.querySelector('details.director-menu[open]')) closeMenus(); else open=false; } }}>
+    <header class="director-bar">
+      <h2><i class="bi bi-stars" aria-hidden="true"></i> Director</h2>
+      <div class="director-mode" role="group" aria-label="Director scope">
+        <button type="button" class:active={mode==='page'} aria-pressed={mode==='page'} disabled={working} onclick={()=>mode='page'}>Page {logPage?.pageNumber??''}</button>
+        <button type="button" class:active={mode==='chapter'} aria-pressed={mode==='chapter'} disabled={working} onclick={()=>mode='chapter'}>Chapter</button>
+      </div>
+      <label class="director-model"><span class="sr-only">Chat and vision model</span>
+        <select bind:value={selectedModel} disabled={working||locked} title="Chat and vision model">
+          {#each models as model}<option value={model.id}>{model.name}</option>{/each}
+        </select>
+      </label>
+      <details class="director-menu" ontoggle={menuToggled}>
+        <summary class:warn={!tasks.length} title="Choose which Director tasks run">Tasks {tasks.length}/{ALL_DIRECTOR_TASKS.length} <i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
+        <div class="director-pop director-tasks" aria-label="Director tasks">
           <div class="director-presets" role="group" aria-label="Task presets">
             {#each presets as preset}<button type="button" class:active={samePreset(preset.tasks)} aria-pressed={samePreset(preset.tasks)} disabled={working||locked} onclick={()=>tasks=[...preset.tasks]}>{preset.label}</button>{/each}
-          </div></div>
-        <ol>
-          {#each DIRECTOR_TASKS as task, index}
-            <li><label class="director-task" class:on={tasks.includes(task.id)} title={task.description}>
-              <input type="checkbox" checked={tasks.includes(task.id)} disabled={working||locked} onchange={(e)=>toggleTask(task.id,e.currentTarget.checked)}>
-              <span class="step">{index+1}</span>{task.label}
-            </label></li>
-          {/each}
-        </ol>
-        {#if !tasks.length}<p class="director-hint warn">Choose at least one task.</p>
-        {:else if tasks.length<ALL_DIRECTOR_TASKS.length}<p class="director-hint">Unselected tasks are skipped; a page is only marked “Checks passed” when every task runs.</p>{/if}
-      </section>
-      <section class="director-launch">
-        <label>Chat and vision model
-          <select bind:value={selectedModel} disabled={working||locked}>
-            {#each models as model}<option value={model.id}>{model.name}</option>{/each}
-          </select>
-        </label>
-        <p class="director-scope">{scope==='page' ? `Page ${logPage?.pageNumber??'—'} · ${directorStatusLabel(logPage?.state??'pending')}` :
-          `Whole chapter · ${pages.filter(p=>p.state==='passed'||p.state==='stale').length} of ${pages.length} passed`}</p>
-        {#if !eligible}<p class="director-error">Choose a story page first.</p>{/if}
-        {#if scope==='chapter'}<label class="inline"><input type="checkbox" bind:checked={recheckAll}> Recheck all pages, including passed and stale</label>{/if}
-        <div class="director-buttons">
-          <button type="button" class="primary" disabled={!canStart} onclick={()=>start()}><i class="bi bi-play-fill" aria-hidden="true"></i> Run {tasks.length===ALL_DIRECTOR_TASKS.length?'':`${tasks.length} task${tasks.length===1?'':'s'} on `}{scope==='page'?'page':'chapter'}</button>
-          {#if scope==='chapter'}<button type="button" disabled={!canStart||!pages.some(p=>p.state==='unresolved')} onclick={()=>start(true)}>Retry blocked</button>
-          {:else if logPage}<button type="button" title="Forget saved stage results so the next run redoes every task on this page. Edits stay undoable." disabled={!canEdit||working||locked}
-            onclick={()=>{if(confirm(`Reset Director for page ${logPage.pageNumber??'?'}? The next run redoes every task instead of reusing saved results.`)) void act({action:'reset-page',imageId:logPage.id});}}>Reset page</button>{/if}
-          {#if run?.state==='running'}<button type="button" disabled={working} onclick={()=>void act({action:'pause',runId:run.id})}>Pause</button>
-            <button type="button" class="danger" disabled={working} onclick={()=>void act({action:'stop',runId:run.id})}>Stop</button>{/if}
-          {#if run && ['paused','interrupted','failed'].includes(run.state)}<button type="button" disabled={working||locked||!eligible} onclick={()=>void act({action:'resume',runId:run.id})}>Resume</button>{/if}
+          </div>
+          <ol>
+            {#each DIRECTOR_TASKS as task, index}
+              <li><label class="director-task" class:on={tasks.includes(task.id)} title={task.description}>
+                <input type="checkbox" checked={tasks.includes(task.id)} disabled={working||locked} onchange={(e)=>toggleTask(task.id,e.currentTarget.checked)}>
+                <span class="step">{index+1}</span>{task.label}
+              </label></li>
+            {/each}
+          </ol>
+          {#if !tasks.length}<p class="director-hint warn">Choose at least one task.</p>
+          {:else if tasks.length<ALL_DIRECTOR_TASKS.length}<p class="director-hint">Unselected tasks are skipped; a page is only marked “Checks passed” when every task runs.</p>{/if}
         </div>
-        <div class="director-buttons secondary">
-          <button type="button" disabled={working||locked} onclick={checkSetup}>Check setup</button>
-          <button type="button" onclick={()=>{open=false;onsettings?.();}}>Director settings</button>
-        </div>
-      </section>
-    </div>
-    {#if preflight.length}<div class="director-preflight">{#each preflight as issue}<p>{issue.stage}: {issue.message}</p>{/each}</div>{/if}
-    <div class="director-body">
-      <aside><h3>Pages</h3>{#each pages as item}<div class="director-page" class:current={item.id===logPage?.id}>
-        <button type="button" class="page-link" aria-pressed={item.id===logPage?.id} onclick={()=>selectedPageId=item.id}>Page {item.pageNumber??'?'}</button><strong class:passed={item.state==='passed'}>{directorStatusLabel(item.state)}</strong>
-        {#if item.stage}<small>{stageName(item.stage)}</small>{/if}
-        {#if item.detail}<small title={tidy(item.detail)}>{tidy(item.detail)}</small>{/if}
-      </div>{/each}</aside>
-      <main><div class="director-overview">
-      <section class="director-blockers" aria-label="Page blockers"><h3>Page status, blockers and warnings</h3><p>Checks passed does not mark a page Done. Warnings do not block; dismiss them in Review.</p>
-        {#each pages.filter(p=>p.id===logPage?.id&&p.findings?.length) as item}<div><h4>Page {item.pageNumber??'?'}</h4>{#each item.findings as finding}<button type="button" class:warning={finding.severity==='warning'} onclick={()=>inspect(item,finding)}>{finding.severity==='warning'?'Warning · ':''}{stageName(finding.stage)}{finding.lineId?` · ${region(finding.lineId)}`:''}: {tidy(finding.message)}</button>{/each}</div>{/each}
-      </section><div class="director-run"><label>Run <select bind:value={selectedRun} onchange={()=>void refresh()}>
-        {#each runs as item}<option value={item.id}>{new Date(item.created_at).toLocaleString()} · {item.scope} · {item.state}</option>{/each}
-      </select></label>{#if run}<p>{run.message}</p>
-        <div class="director-run-tasks" aria-label="Tasks in this run">{#each DIRECTOR_TASKS as task}<span class:on={runTasks(run).includes(task.id)}>{task.label}</span>{/each}</div>{/if}</div>
-      {#if run}
-        <details><summary>Undo Director edits</summary>
-        <div class="director-buttons"><button type="button" disabled={working||locked||!changes.some(c=>!c.undone)} onclick={()=>void act({action:'undo',runId:run.id})}>Undo run</button>
-          {#if logPage}<button type="button" disabled={working||locked||!changes.some(c=>!c.undone&&c.image_id===logPage.id)} onclick={()=>void act({action:'undo',runId:run.id,imageId:logPage.id})}>Undo selected page</button>{/if}</div>
-        <details><summary>Individual changes ({pageChanges.length})</summary>
-          {#each pageChanges as change}<div class="director-change"><span>#{change.id} {change.label}{change.undone?' · undone':''}</span>
-            <button type="button" disabled={working||locked||!!change.undone} onclick={()=>void act({action:'undo',runId:run.id,changeId:change.id})}>Undo</button></div>{/each}
+      </details>
+      <div class="director-actions">
+        {#if run?.state==='running'}
+          <button type="button" disabled={working} onclick={()=>void act({action:'pause',runId:run.id})}><i class="bi bi-pause-fill" aria-hidden="true"></i> Pause</button>
+          <button type="button" class="danger" disabled={working} onclick={()=>void act({action:'stop',runId:run.id})}><i class="bi bi-stop-fill" aria-hidden="true"></i> Stop</button>
+        {:else if run && ['paused','interrupted','failed'].includes(run.state)}
+          <button type="button" disabled={working||locked||!eligible} onclick={()=>void act({action:'resume',runId:run.id})}><i class="bi bi-play-fill" aria-hidden="true"></i> Resume</button>
+        {/if}
+        <button type="button" class="primary" disabled={!canStart} aria-label={`Run ${mode} Director`} onclick={()=>start()}><i class="bi bi-play-fill" aria-hidden="true"></i> Run {tasks.length===ALL_DIRECTOR_TASKS.length?'':`${tasks.length} task${tasks.length===1?'':'s'} on `}{mode==='page'?'page':'chapter'}</button>
+        <details class="director-menu" ontoggle={menuToggled}>
+          <summary aria-label="More Director actions" title="More"><i class="bi bi-three-dots" aria-hidden="true"></i></summary>
+          <div class="director-pop director-more">
+            {#if mode==='chapter'}
+              <label class="inline"><input type="checkbox" bind:checked={recheckAll}> Recheck passed and stale pages</label>
+              <button type="button" disabled={!canStart||!pages.some(p=>p.state==='unresolved')} onclick={()=>{closeMenus();start(true);}}>Retry blocked pages</button>
+            {:else if logPage}
+              <button type="button" title="Forget saved stage results so the next run redoes every task on this page. Edits stay undoable." disabled={!canEdit||working||locked}
+                onclick={()=>{closeMenus();if(confirm(`Reset Director for page ${logPage.pageNumber??'?'}? The next run redoes every task instead of reusing saved results.`)) void act({action:'reset-page',imageId:logPage.id});}}>Reset page</button>
+            {/if}
+            <button type="button" disabled={working||locked} onclick={()=>{closeMenus();void checkSetup();}}>Check setup</button>
+            <button type="button" onclick={()=>{open=false;onsettings?.();}}>Director settings</button>
+          </div>
         </details>
+      </div>
+      <button type="button" class="director-close" aria-label="Close Director" onclick={()=>open=false}><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </header>
+    <div class="director-status">
+      {#if runs.length>1}
+        <label><span class="sr-only">Run</span><select bind:value={selectedRun} onchange={()=>void refresh()} title="Choose a run">
+          {#each runs as item}<option value={item.id}>{runLabel(item)}</option>{/each}
+        </select></label>
+      {:else if run}<span class="director-run-name">{runLabel(run)}</span>
+      {:else}<span class="director-run-name">No runs yet</span>{/if}
+      {#if run}<span class="director-run-message state-{run.state}" title={run.message}>{run.message}</span>
+        {#if runTasks(run).length<ALL_DIRECTOR_TASKS.length}<span class="director-run-tasks" aria-label="Tasks in this run">{#each DIRECTOR_TASKS as task}<span class:on={runTasks(run).includes(task.id)}>{task.label}</span>{/each}</span>{/if}
+      {:else}<span class="director-run-message">{mode==='page' ? `Page ${logPage?.pageNumber??'—'} · ${directorStatusLabel(logPage?.state??'pending')}` : `Whole chapter · ${pages.filter(p=>p.state==='passed'||p.state==='stale').length} of ${pages.length} passed`}</span>{/if}
+      {#if run}
+        <details class="director-menu director-undo" ontoggle={menuToggled}>
+          <summary><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Undo</summary>
+          <div class="director-pop">
+            <button type="button" disabled={working||locked||!changes.some(c=>!c.undone)} onclick={()=>{closeMenus();void act({action:'undo',runId:run.id});}}>Undo run</button>
+            {#if logPage}<button type="button" disabled={working||locked||!changes.some(c=>!c.undone&&c.image_id===logPage.id)} onclick={()=>{closeMenus();void act({action:'undo',runId:run.id,imageId:logPage.id});}}>Undo page {logPage.pageNumber??'?'}</button>{/if}
+            {#if pageChanges.length}<h4>Page {logPage?.pageNumber??'?'} changes</h4>
+              <div class="director-changes">{#each pageChanges as change}<div class="director-change"><span>#{change.id} {change.label}{change.undone?' · undone':''}</span>
+                <button type="button" disabled={working||locked||!!change.undone} onclick={()=>void act({action:'undo',runId:run.id,changeId:change.id})}>Undo</button></div>{/each}</div>{/if}
+          </div>
         </details>
       {/if}
-      {#if logPage}<button type="button" class="page-link" onclick={()=>inspect(logPage)}>Open page {logPage.pageNumber??'?'} in editor ↗</button>{/if}
-      </div>
-      <div class="director-log">
+    </div>
+    {#if error}<p class="director-error" role="alert">{error}</p>{/if}
+    {#if !eligible}<p class="director-error">Choose a story page first.</p>{/if}
+    {#if preflight.length}<div class="director-preflight"><div>{#each preflight as issue}<p>{issue.stage}: {issue.message}</p>{/each}</div>
+      <button type="button" aria-label="Dismiss setup check" onclick={()=>preflight=[]}><i class="bi bi-x" aria-hidden="true"></i></button></div>{/if}
+    <div class="director-body">
+      <aside aria-label="Pages">
+        <div class="director-pages">{#each pages as item}
+          <button type="button" class="director-page state-{item.state}" class:current={item.id===logPage?.id} aria-pressed={item.id===logPage?.id} aria-label={`Page ${item.pageNumber??'?'}`}
+            title={[directorStatusLabel(item.state),item.stage?stageName(item.stage):'',tidy(item.detail||'')].filter(Boolean).join(' · ')}
+            onclick={()=>{selectedPageId=item.id;showDetail=false;}}>
+            <span class="dot" aria-hidden="true"></span><span class="num">Page {item.pageNumber??'?'}</span>
+            <small>{directorStatusLabel(item.state)}{item.stage?` · ${stageName(item.stage)}`:''}</small>
+          </button>{/each}</div>
+        <p class="director-footnote">Checks passed does not mark a page Done. Warnings do not block; dismiss them in Review.</p>
+      </aside>
+      <div class="director-log" class:show-detail={showDetail}>
         <section class="director-log-list" aria-label="Director log items">
-          <div class="director-log-head"><h3>Page {logPage?.pageNumber??'—'} log</h3>
+          <div class="director-log-head"><h3>Page {logPage?.pageNumber??'—'}</h3>
             <span class="director-tally">{#if toneCounts.good}<span class="tone-good"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> {toneCounts.good}</span>{/if}{#if toneCounts.warn}<span class="tone-warn"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> {toneCounts.warn}</span>{/if}{#if toneCounts.bad}<span class="tone-bad"><i class="bi bi-x-circle-fill" aria-hidden="true"></i> {toneCounts.bad}</span>{/if}</span>
             <div class="director-presets" role="group" aria-label="Log filter">
               <button type="button" class:active={toneFilter==='all'} aria-pressed={toneFilter==='all'} onclick={()=>toneFilter='all'}>All</button>
               <button type="button" class:active={toneFilter==='problems'} aria-pressed={toneFilter==='problems'} onclick={()=>toneFilter='problems'}>Problems</button>
-            </div></div>
+            </div>
+            {#if logPage}<button type="button" class="director-open" title="Open this page in the editor" onclick={()=>inspect(logPage)}>Open <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button>{/if}
+          </div>
+          {#if pageFindings.length && logPage}
+            <div class="director-findings" aria-label="Page blockers">
+              {#each pageFindings as finding}<button type="button" class:warning={finding.severity==='warning'} onclick={()=>inspect(logPage,finding)}>
+                <i class="bi {finding.severity==='warning'?'bi-exclamation-triangle':'bi-x-octagon'}" aria-hidden="true"></i>
+                <span>{stageName(finding.stage)}{finding.lineId?` · ${region(finding.lineId)}`:''}: {tidy(finding.message)}</span></button>{/each}
+            </div>
+          {/if}
           <div class="director-events">
             {#each logRows.filter(row=>toneFilter==='all'||row.tone==='bad'||row.tone==='warn') as row (row.event.id)}
               {#if row.heading && toneFilter==='all'}<h4 class="director-stage-heading">{row.heading}</h4>{/if}
-              <button type="button" class="director-event tone-{row.tone}" class:selected={row.event.id===selectedEvent?.id} aria-pressed={row.event.id===selectedEvent?.id} onclick={()=>selectedEventId=row.event.id}>
+              <button type="button" class="director-event tone-{row.tone}" class:selected={row.event.id===selectedEvent?.id} aria-pressed={row.event.id===selectedEvent?.id} onclick={()=>{selectedEventId=row.event.id;showDetail=true;}}>
                 <i class="bi {TONE_ICONS[row.tone]}" aria-hidden="true"></i>
                 <span>{eventSummary(row.event)}</span>
                 <small>{new Date(row.event.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</small>
@@ -418,6 +467,7 @@
         <section class="director-log-content" aria-label="Director log content">
           {#if selectedEvent}
             {@const event=selectedEvent}
+            <button type="button" class="director-back" onclick={()=>showDetail=false}><i class="bi bi-arrow-left" aria-hidden="true"></i> Log</button>
             <h3 class="director-detail-title tone-{eventTone(event)}"><i class="bi {TONE_ICONS[eventTone(event)]}" aria-hidden="true"></i> {eventSummary(event)}</h3>
             <p class="director-detail-meta">{new Date(event.created_at).toLocaleString()} · <code>{event.kind}</code></p>
               {#if event.detail?.images && Array.isArray(event.detail.images)}<div class="director-images">{#each event.detail.images as hash}{@render logImage(hash,"Sent to model or proofreader")}{/each}</div>{/if}
@@ -439,7 +489,6 @@
         </section>
         {/key}
       </div>
-      </main>
     </div>
   </div>
 {/if}
@@ -447,33 +496,120 @@
 {#if open && expandedImage}<DirectorImageViewer src={`${apiBase}/workflow/assets/${expandedImage.hash}`} label={expandedImage.label} onclose={()=>expandedImage=null}/>{/if}
 
 <style>
-  .director-panel{--d-good:#1f8a52;--d-bad:#c0364a;--d-bad-text:#8f1f30;--d-warn:#a8700a;--d-info:#2f6fae}
+  .director-panel{--d-good:#1f8a52;--d-bad:#c0364a;--d-bad-text:#8f1f30;--d-warn:#a8700a;--d-info:#2f6fae;--d-line:color-mix(in srgb,var(--hud-text,#eee) 14%,transparent);--d-soft:color-mix(in srgb,var(--hud-text,#eee) 6%,transparent);--d-accent:var(--hud-teal-ink,#2f7a5f)}
   :global(:root[data-theme='dark']) .director-panel{--d-good:#6fd39b;--d-bad:#f07e78;--d-bad-text:#ffd6d3;--d-warn:#e8bd5c;--d-info:#7fb3e6}
-  .director-controls{align-items:flex-start;gap:20px}.director-tasks{flex:2 1 420px;min-width:0}.director-launch{flex:1 1 260px;display:flex;flex-direction:column;gap:8px}
-  .director-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px}.director-tasks h3{margin:0}
-  .director-presets{display:flex;gap:4px;flex-wrap:wrap}.director-presets button{background:transparent;color:inherit;border:1px solid #6668;border-radius:999px;padding:2px 10px;font-size:.75rem;cursor:pointer}.director-presets button.active{border-color:var(--hud-teal-ink,#7bd1ad);color:var(--hud-teal-ink,#7bd1ad)}
-  .director-tasks ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:5px}.director-tasks h3 small{color:var(--hud-muted,#aaa);font-weight:400;margin-left:4px}
-  .director-task{display:flex!important;align-items:center;gap:6px!important;padding:3px 10px 3px 4px;border:1px solid #6665;border-radius:999px;font-size:.78rem!important;white-space:nowrap;cursor:pointer;opacity:.6;transition:opacity .12s,border-color .12s}.director-task.on{opacity:1;border-color:var(--hud-teal-ink,#7bd1ad);background:#6688a622}
-  .director-task input{position:absolute;opacity:0;pointer-events:none}.director-task:focus-within{outline:2px solid var(--hud-teal-ink,#7bd1ad);outline-offset:1px}.director-task .step{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#6666;font-size:.68rem;font-weight:600}.director-task.on .step{background:var(--hud-teal-ink,#7bd1ad);color:#102}
-  
-  .director-hint{font-size:.75rem;color:var(--hud-muted,#aaa);margin-top:6px!important}.director-hint.warn{color:#ffb7a7}.director-scope{font-size:.8rem;color:var(--hud-muted,#aaa)}
-  .director-buttons button.primary{background:#2f7a5f;border-color:#7bd1ad;font-weight:600}.director-buttons button.danger{background:#6b3a34;border-color:#c98478}.director-buttons.secondary button{background:transparent;color:inherit}
-  .director-run-tasks{display:flex;gap:4px;flex-wrap:wrap}.director-run-tasks span{font-size:.68rem;padding:1px 7px;border-radius:999px;border:1px solid #6665;opacity:.4;text-decoration:line-through}.director-run-tasks span.on{opacity:1;text-decoration:none;border-color:var(--hud-teal-ink,#7bd1ad)}
-  .director-preflight{padding:8px 20px;font-size:.8rem;border-bottom:1px solid #6665;max-height:140px;overflow:auto}.page-link{background:none;border:0;color:inherit;text-align:left;cursor:pointer;padding:0}.director-blockers{margin-bottom:16px}.director-blockers p{font-size:.8rem;color:var(--hud-muted,#aaa)}.director-blockers h4{margin:10px 0 5px}.director-blockers button{display:block;text-align:left;border:1px solid #886655;background:#43372c;color:#ffe2c9;padding:8px;border-radius:5px;width:100%;margin:4px 0;}.director-blockers button.warning{border-color:#c9a24a88;background:#3d3722;color:#f3e2b0}
-  .director-check{color:#7bd1ad;font-size:1em;line-height:1}.director-backdrop{position:fixed;inset:0;background:#0009;z-index:1000}
-  .director-panel{position:fixed;inset:5vh 5vw;background:var(--hud-bg,#1b2029);color:var(--hud-text,#eee);z-index:1001;border:1px solid var(--hud-line,#555);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 80px #000a}
-  header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid #6665}h2,h3,p{margin:0}h2{font-size:1.2rem}header p{color:var(--hud-muted,#aaa);font-size:.8rem}header button{background:none;border:0;color:inherit;cursor:pointer;font-size:1.3rem}
-  .director-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid #6665}.director-controls label{display:grid;gap:3px;font-size:.8rem}.director-controls .inline{display:flex;align-items:center}.director-buttons{display:flex;gap:8px;flex-wrap:wrap}.director-buttons button,.director-change button{background:#334b5e;color:white;border:1px solid #8093a2;border-radius:5px;padding:5px 10px;cursor:pointer}button:disabled{opacity:.45;cursor:default}
-  .director-error{color:#ffb7a7;padding:4px 20px}.director-body{display:grid;grid-template-columns:minmax(150px,220px) 1fr;min-height:0;flex:1}.director-body aside{overflow:auto;padding:12px;border-right:1px solid #6665}.director-body main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}.director-overview{padding:10px 18px;max-height:28%;overflow:auto;flex-shrink:0;border-bottom:1px solid #6665}h3{font-size:.9rem;margin:12px 0 8px}.director-page{display:grid;grid-template-columns:1fr auto;gap:4px;padding:5px;border-bottom:1px solid #6663}.director-page.current{background:#6688a633}.director-page strong{font-size:.75rem}.director-page strong.passed{color:#7bd1ad}.director-page small{grid-column:1/3;color:var(--hud-muted,#aaa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .director-run{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.director-run select{max-width:350px}.director-change{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px;border-bottom:1px solid #6663}.director-events{display:grid;gap:3px}.director-event{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:8px;width:100%;text-align:left;cursor:pointer;color:inherit;background:transparent;border:1px solid transparent;border-left:3px solid #6666;border-radius:4px;padding:5px 8px;font-size:.82rem;line-height:1.35}.director-event:hover{background:#ffffff0a}.director-event small{color:var(--hud-muted,#aaa);font-size:.68rem;font-variant-numeric:tabular-nums;padding-top:2px}.director-event i{padding-top:1px}
-  .director-event.tone-good{border-left-color:var(--d-good)}.director-event.tone-bad{border-left-color:var(--d-bad);background:color-mix(in srgb,var(--d-bad) 9%,transparent)}.director-event.tone-warn{border-left-color:var(--d-warn)}.director-event.tone-info{border-left-color:var(--d-info)}.director-event.tone-muted{border-left-color:#6664;color:var(--hud-muted,#aaa)}
+  .director-check{color:#7bd1ad;font-size:1em;line-height:1}
+  .director-backdrop{position:fixed;inset:0;background:#0009;z-index:1000}
+  .director-panel{position:fixed;inset:3vh 3vw;background:var(--hud-bg,#1b2029);color:var(--hud-text,#eee);z-index:1001;border:1px solid var(--hud-line,#555);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 80px #000a;font-size:.85rem}
+  h2,h3,h4,p{margin:0}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  button,select,summary{font:inherit}
+  button:disabled{opacity:.45;cursor:default}
+  select{background:var(--hud-bg,#222);color:inherit;border:1px solid var(--d-line);border-radius:6px;padding:5px 8px;min-width:0}
+
+  /* One-row toolbar */
+  .director-bar{display:flex;align-items:center;gap:8px;padding:8px 10px 8px 16px;border-bottom:1px solid var(--d-line);flex-wrap:wrap}
+  .director-bar h2{font-size:1rem;display:flex;align-items:center;gap:6px;margin-right:4px}
+  .director-mode{display:inline-flex;border:1px solid var(--d-line);border-radius:8px;overflow:hidden}
+  .director-mode button{background:transparent;color:inherit;border:0;padding:5px 12px;cursor:pointer;white-space:nowrap}
+  .director-mode button+button{border-left:1px solid var(--d-line)}
+  .director-mode button.active{background:var(--d-accent);color:#fff;font-weight:600}
+  .director-model{flex:0 1 240px;min-width:120px;display:flex}.director-model select{width:100%}
+  .director-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+  .director-actions>button,.director-pop button,.director-change button{background:var(--d-soft);color:inherit;border:1px solid var(--d-line);border-radius:6px;padding:5px 11px;cursor:pointer;white-space:nowrap}
+  .director-actions>button.primary{background:var(--d-accent);border-color:var(--d-accent);color:#fff;font-weight:600}
+  .director-actions>button.danger{background:color-mix(in srgb,var(--d-bad) 80%,#000);border-color:var(--d-bad);color:#fff}
+  .director-close{background:none;border:0;color:inherit;cursor:pointer;font-size:1.05rem;padding:4px 6px;border-radius:6px}.director-close:hover{background:var(--d-soft)}
+
+  /* Menus: <details> with a floating panel */
+  .director-menu{position:relative}
+  .director-menu>summary{list-style:none;cursor:pointer;border:1px solid var(--d-line);border-radius:6px;padding:5px 10px;white-space:nowrap;user-select:none}
+  .director-menu>summary::-webkit-details-marker{display:none}
+  .director-menu>summary.warn{border-color:var(--d-warn);color:var(--d-warn)}
+  .director-menu[open]>summary{background:var(--d-soft)}
+  .director-pop{position:absolute;top:calc(100% + 6px);left:0;z-index:5;min-width:220px;max-width:min(520px,90vw);background:var(--hud-bg,#1b2029);border:1px solid var(--d-line);border-radius:10px;box-shadow:0 12px 40px #0006;padding:10px;display:grid;gap:8px}
+  .director-actions .director-pop{left:auto;right:0}
+  .director-pop button{text-align:left}
+  .director-pop h4{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--hud-muted,#aaa);margin-top:4px}
+  .director-more .inline,.director-tasks .inline{display:flex;align-items:center;gap:6px}
+  .director-tasks{min-width:min(460px,90vw)}
+  .director-tasks ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:5px}
+  .director-presets{display:flex;gap:4px;flex-wrap:wrap}.director-presets button{background:transparent;color:inherit;border:1px solid var(--d-line);border-radius:999px;padding:2px 10px;font-size:.75rem;cursor:pointer}.director-presets button.active{border-color:var(--d-accent);color:var(--d-accent);font-weight:600}
+  .director-task{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 4px;border:1px solid var(--d-line);border-radius:999px;font-size:.78rem;white-space:nowrap;cursor:pointer;opacity:.55;transition:opacity .12s,border-color .12s}.director-task.on{opacity:1;border-color:var(--d-accent);background:var(--d-soft)}
+  .director-task input{position:absolute;opacity:0;pointer-events:none}.director-task:focus-within{outline:2px solid var(--d-accent);outline-offset:1px}.director-task .step{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--d-line);font-size:.68rem;font-weight:600}.director-task.on .step{background:var(--d-accent);color:#fff}
+  .director-hint{font-size:.75rem;color:var(--hud-muted,#aaa)}.director-hint.warn{color:var(--d-warn)}
+  .director-changes{display:grid;max-height:40vh;overflow:auto}
+  .director-change{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid var(--d-line)}
+
+  /* One-line status strip */
+  .director-status{display:flex;align-items:center;gap:10px;padding:6px 16px;border-bottom:1px solid var(--d-line);min-height:38px;flex-wrap:wrap;color:var(--hud-muted,#aaa)}
+  .director-status select{max-width:300px;font-size:.8rem;padding:3px 6px}
+  .director-run-name{font-size:.8rem}
+  .director-run-message{color:var(--hud-text,#eee);flex:1 1 200px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .director-run-message.state-running::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--d-info);margin-right:6px;animation:director-pulse 1.2s ease-in-out infinite}
+  @keyframes director-pulse{50%{opacity:.3}}
+  .director-run-tasks{display:inline-flex;gap:4px;flex-wrap:wrap}.director-run-tasks span{font-size:.68rem;padding:1px 7px;border-radius:999px;border:1px solid var(--d-line);opacity:.4;text-decoration:line-through}.director-run-tasks span.on{opacity:1;text-decoration:none;border-color:var(--d-accent)}
+  .director-undo{margin-left:auto}.director-undo>summary{padding:3px 9px;font-size:.8rem;color:var(--hud-text,#eee)}.director-undo .director-pop{left:auto;right:0;min-width:280px}
+  .director-error{color:var(--d-bad);padding:6px 16px;border-bottom:1px solid var(--d-line)}
+  .director-preflight{display:flex;gap:8px;align-items:flex-start;padding:6px 16px;font-size:.8rem;border-bottom:1px solid var(--d-line);max-height:120px;overflow:auto;background:var(--d-soft)}.director-preflight>div{flex:1}.director-preflight button{background:none;border:0;color:inherit;cursor:pointer}
+
+  /* Body: pages | log list | detail */
+  .director-body{display:grid;grid-template-columns:150px minmax(0,1fr);min-height:0;flex:1}
+  .director-body aside{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--d-line)}
+  .director-pages{overflow:auto;padding:8px;display:grid;gap:2px;align-content:start;flex:1}
+  .director-page{display:grid;grid-template-columns:auto 1fr;column-gap:7px;align-items:center;text-align:left;background:transparent;color:inherit;border:1px solid transparent;border-radius:6px;padding:5px 7px;cursor:pointer}
+  .director-page:hover{background:var(--d-soft)}.director-page.current{background:var(--d-soft);border-color:var(--d-line)}
+  .director-page .num{font-weight:600}.director-page small{grid-column:2;color:var(--hud-muted,#aaa);font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .director-page .dot{width:8px;height:8px;border-radius:50%;background:var(--d-line)}
+  .director-page.state-passed .dot{background:var(--d-good)}.director-page.state-unresolved .dot{background:var(--d-bad)}.director-page.state-working .dot,.director-page.state-running .dot{background:var(--d-info)}.director-page.state-stale .dot{background:var(--d-warn)}
+  .director-footnote{font-size:.68rem;color:var(--hud-muted,#aaa);padding:8px 10px;border-top:1px solid var(--d-line);line-height:1.35}
+  .director-log{display:grid;grid-template-columns:minmax(300px,42%) minmax(0,1fr);min-height:0}
+  .director-log-list,.director-log-content{overflow:auto;min-width:0;padding:10px 14px;overscroll-behavior:contain}
+  .director-log-list{border-right:1px solid var(--d-line)}
+  .director-log-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;position:sticky;top:-10px;background:var(--hud-bg,#1b2029);padding:4px 0;z-index:1}
+  .director-log-head h3{font-size:.95rem}.director-tally{display:flex;gap:8px;font-size:.75rem;margin-right:auto}
+  .director-open{background:none;border:1px solid var(--d-line);color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:.75rem}
+  .director-findings{display:grid;gap:4px;margin-bottom:10px}
+  .director-findings button{display:flex;gap:8px;align-items:flex-start;text-align:left;border:1px solid color-mix(in srgb,var(--d-bad) 50%,transparent);background:color-mix(in srgb,var(--d-bad) 10%,transparent);color:inherit;padding:6px 9px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1.35}
+  .director-findings button i{color:var(--d-bad);padding-top:1px}
+  .director-findings button.warning{border-color:color-mix(in srgb,var(--d-warn) 50%,transparent);background:color-mix(in srgb,var(--d-warn) 10%,transparent)}.director-findings button.warning i{color:var(--d-warn)}
+  .director-events{display:grid;gap:3px}
+  .director-event{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:8px;width:100%;text-align:left;cursor:pointer;color:inherit;background:transparent;border:1px solid transparent;border-left:3px solid var(--d-line);border-radius:4px;padding:5px 8px;font-size:.82rem;line-height:1.35}
+  .director-event:hover{background:var(--d-soft)}.director-event small{color:var(--hud-muted,#aaa);font-size:.68rem;font-variant-numeric:tabular-nums;padding-top:2px}.director-event i{padding-top:1px}
+  .director-event span{overflow-wrap:anywhere}.director-event.selected{border-color:var(--d-accent);background:var(--d-soft)}
+  .director-event.tone-good{border-left-color:var(--d-good)}.director-event.tone-bad{border-left-color:var(--d-bad);background:color-mix(in srgb,var(--d-bad) 9%,transparent)}.director-event.tone-warn{border-left-color:var(--d-warn)}.director-event.tone-info{border-left-color:var(--d-info)}.director-event.tone-muted{border-left-color:var(--d-line);color:var(--hud-muted,#aaa)}
   .tone-good>i,.tone-good.director-detail-title,span.tone-good{color:var(--d-good)}.tone-bad>i,.tone-bad.director-detail-title,span.tone-bad{color:var(--d-bad)}.tone-warn>i,.tone-warn.director-detail-title,span.tone-warn{color:var(--d-warn)}.tone-info>i{color:var(--d-info)}.tone-muted>i{color:#888}
   .director-event.tone-muted span{color:var(--hud-muted,#aaa)}.director-event.tone-bad span{color:var(--d-bad-text)}
   .director-stage-heading{margin:10px 0 2px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--hud-muted,#aaa)}
-  .director-log-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}.director-log-head h3{margin:0!important}.director-tally{display:flex;gap:8px;font-size:.75rem;margin-right:auto}
-  .director-detail-title{font-size:1rem!important;line-height:1.35;overflow-wrap:anywhere}.director-detail-meta{font-size:.72rem;color:var(--hud-muted,#aaa);margin:4px 0 0!important}
-  details.director-log-field summary{padding:5px 9px;cursor:pointer;color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600}details.director-log-field[open] summary{border-bottom:1px solid #6664}.director-event span{overflow-wrap:anywhere}.director-event.selected{border-color:var(--hud-teal-ink,#7bd1ad);background:#6688a633}.director-log-fields{display:grid;gap:8px;margin-top:10px}.director-log-field{min-width:0;border:1px solid #6664;border-radius:5px;background:#0002;overflow:hidden}.director-log-field h4{margin:0;padding:5px 9px;border-bottom:1px solid #6664;color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600;letter-spacing:.03em}.director-log-text,.director-log-json{margin:0;padding:8px 10px;overflow-wrap:anywhere;white-space:pre-wrap;font-size:.82rem;line-height:1.5}.director-log-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.76rem}.director-images{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.director-image-button{padding:0;border:1px solid #777;background:transparent;cursor:zoom-in;max-width:100%;border-radius:3px}.director-image-button:focus-visible{outline:2px solid var(--hud-teal-ink,#7bd1ad);outline-offset:3px}.director-images img{max-width:min(260px,100%);max-height:340px;object-fit:contain;background:white}select{background:var(--hud-bg,#222);color:inherit;border:1px solid #777;border-radius:4px;padding:5px}
-  .director-log{display:grid;grid-template-columns:minmax(280px,42%) minmax(0,1fr);min-height:0;flex:1}.director-log-list,.director-log-content{overflow:auto;min-width:0;padding:12px 16px;overscroll-behavior:contain}.director-log-list{border-right:1px solid #6665}.director-log-list h3,.director-log-content h3{margin-top:0}.director-log-content>p,.director-events>p{color:var(--hud-muted,#aaa);font-size:.85rem}
-  @media(max-width:1000px){.director-body{grid-template-columns:145px minmax(0,1fr)}.director-log{grid-template-columns:minmax(180px,40%) minmax(0,1fr)}}
-  @media(max-width:700px){.director-controls{max-height:45vh!important}.director-panel{inset:0;border-radius:0}.director-body{grid-template-columns:1fr;grid-template-rows:100px minmax(0,1fr)}.director-log{grid-template-columns:minmax(130px,40%) minmax(0,1fr)}.director-log-list,.director-log-content{padding:8px}.director-controls{max-height:25vh;overflow:auto;flex-shrink:0}.director-overview{max-height:25%}.director-body aside{max-height:120px;border-right:0;border-bottom:1px solid #6665}}
+  .director-back{display:none;background:none;border:1px solid var(--d-line);color:inherit;border-radius:6px;padding:3px 10px;cursor:pointer;margin-bottom:8px}
+  .director-detail-title{font-size:1rem;line-height:1.35;overflow-wrap:anywhere}.director-detail-meta{font-size:.72rem;color:var(--hud-muted,#aaa);margin:4px 0 0}
+  .director-log-content>p,.director-events>p{color:var(--hud-muted,#aaa);font-size:.85rem}
+  details.director-log-field summary{padding:5px 9px;cursor:pointer;color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600}details.director-log-field[open] summary{border-bottom:1px solid var(--d-line)}
+  .director-log-fields{display:grid;gap:8px;margin-top:10px}.director-log-field{min-width:0;border:1px solid var(--d-line);border-radius:5px;background:var(--d-soft);overflow:hidden}.director-log-field h4{margin:0;padding:5px 9px;border-bottom:1px solid var(--d-line);color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600;letter-spacing:.03em}
+  .director-log-text,.director-log-json{margin:0;padding:8px 10px;overflow-wrap:anywhere;white-space:pre-wrap;font-size:.82rem;line-height:1.5}.director-log-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.76rem}
+  .director-images{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.director-image-button{padding:0;border:1px solid var(--d-line);background:transparent;cursor:zoom-in;max-width:100%;border-radius:3px}.director-image-button:focus-visible{outline:2px solid var(--d-accent);outline-offset:3px}.director-images img{max-width:min(260px,100%);max-height:300px;object-fit:contain;background:white;display:block}
+
+  @media(max-width:1100px){.director-log{grid-template-columns:minmax(240px,45%) minmax(0,1fr)}.director-model{flex-basis:180px}}
+  /* Narrow: pages become a scrolling row, and the log shows the list or one item's detail. */
+  @media(max-width:760px){
+    .director-panel{inset:0;border-radius:0}
+    .director-bar{padding:8px 10px;row-gap:6px}
+    .director-bar h2{flex:1}
+    .director-mode{order:2}.director-close{order:3}
+    .director-model{order:4;flex:1 1 140px}
+    .director-bar>.director-menu{order:5}
+    .director-actions{order:6;margin-left:0;width:100%}.director-actions>button.primary{flex:1}
+    .director-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+    .director-body aside{border-right:0;border-bottom:1px solid var(--d-line)}
+    .director-pages{display:flex;overflow-x:auto;padding:6px 10px;gap:6px}
+    .director-page{flex:0 0 auto;border-color:var(--d-line)}.director-page small{display:none}
+    .director-footnote{display:none}
+    .director-log{grid-template-columns:1fr}
+    .director-log-list{border-right:0}
+    .director-log .director-log-content{display:none}
+    .director-log.show-detail .director-log-list{display:none}
+    .director-log.show-detail .director-log-content{display:block}
+    .director-back{display:inline-flex;gap:6px;align-items:center}
+    .director-pop{position:fixed;left:8px!important;right:8px!important;top:auto;min-width:0;max-width:none}
+  }
 </style>
