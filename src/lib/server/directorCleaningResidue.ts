@@ -502,6 +502,48 @@ export async function cleaningDetailCrop(
     .toBuffer();
 }
 
+/** Repainted areas with this much more structure than the art around them are blotches. */
+export const BLOTCH_RATIO = 3;
+
+/**
+ * How much more edge structure the repainted area has than the art around it.
+ *
+ * Takes the enlarged raw and cleaned crops (aligned, from cleaningDetailCrop). The
+ * repainted area is where they differ. Grain is smoothed away first, so what is
+ * measured is blotch outlines and smears, not screentone. A clean that continues
+ * the background scores about 1; page 15's LaMa smudges scored 4.2, while good
+ * cleans with line art running through them stayed under 2.
+ */
+export async function repaintStructure(rawCrop: Buffer, cleanedCrop: Buffer): Promise<{ ratio: number; pixels: number }> {
+  const a = await sharp(rawCrop).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const b = await sharp(cleanedCrop).removeAlpha().raw().toBuffer();
+  const { width, height, channels } = a.info;
+  if (b.length !== a.data.length) return { ratio: 0, pixels: 0 };
+  const changed = Buffer.alloc(width * height);
+  for (let i = 0; i < width * height; i++) {
+    let diff = 0;
+    for (let c = 0; c < channels; c++) diff = Math.max(diff, Math.abs(a.data[i * channels + c] - b[i * channels + c]));
+    if (diff > 24) changed[i] = 255;
+  }
+  const grow = (sigma: number) => sharp(changed, { raw: { width, height, channels: 1 } })
+    .blur(sigma).threshold(16).extractChannel(0).raw().toBuffer();
+  const [inside, outer] = await Promise.all([grow(2), grow(8)]);
+  const grey = await sharp(cleanedCrop).removeAlpha().greyscale().blur(2).extractChannel(0).raw().toBuffer();
+  const inner: number[] = [], ring: number[] = [];
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      if (!outer[i]) continue;
+      const gx = grey[i - width + 1] + 2 * grey[i + 1] + grey[i + width + 1] - grey[i - width - 1] - 2 * grey[i - 1] - grey[i + width - 1];
+      const gy = grey[i + width - 1] + 2 * grey[i + width] + grey[i + width + 1] - grey[i - width - 1] - 2 * grey[i - width] - grey[i - width + 1];
+      (inside[i] ? inner : ring).push(Math.hypot(gx, gy));
+    }
+  }
+  if (inner.length < 64 || ring.length < 64) return { ratio: 0, pixels: inner.length };
+  const p90 = (values: number[]) => values.sort((m, n) => m - n)[Math.floor(values.length * 0.9)];
+  return { ratio: p90(inner) / Math.max(1, p90(ring)), pixels: inner.length };
+}
+
 export async function cleaningComparison(raw:Buffer,cleaned:Buffer) {
   const size=await sharp(raw).metadata(),other=await sharp(cleaned).metadata();
   if(size.width!==other.width||size.height!==other.height)throw new Error("Cleaning comparison crops must align");

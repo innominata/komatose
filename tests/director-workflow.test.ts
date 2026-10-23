@@ -2171,7 +2171,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     const batch=f.operations.find(p=>p.cmd==='mask'&&p.detect);
     assert.equal(batch.regions.length,2);
     const qwen=f.operations.find(p=>p.method===editor);
-    assert.equal(qwen.task,'cleaning');assert.match(qwen.prompt,/lettering plus a small margin/);
+    assert.equal(qwen.task,'cleaning');assert.match(qwen.prompt,/Erase all lettering and sound effects/);
     assert.equal(f.saved().pendingCleanRegions,undefined);
     for(let i=0;i<3;i++) assert.deepEqual(await f.pixel(f.saved().cleaned,i),[255,255,255]);
     const rawPixel=await f.pixel(f.raw,2);assert.deepEqual(rawPixel,[0,0,0]);
@@ -2504,7 +2504,7 @@ test("outside-lettering close-ups revoke cached halos and invented lines before 
       if(data.scope==='whole-page')return {safe:true,problem:'none',reason:'Tall-page preview appears clear'};
       assert.equal(data.regions[0].source,undefined);assert.equal(data.repairFinding,undefined);assert.equal(data.findings,undefined);
       if(data.check==='residue'){assert.equal(images.length,2);assert.match(system,/No raw source/);assert.ok(!schema.properties.artworkDefects.items.enum.includes('invented-stroke'));}
-      else {assert.equal(data.check,'artwork-preservation');assert.equal(images.length,3);assert.match(system,/NEW dark streaks/);assert.ok((await sharp(images[2]).metadata()).width!>700);assert.deepEqual(schema.properties.problem.enum,['none','artwork-damage']);assert.ok(!schema.properties.artworkDefects.items.enum.includes('remaining-lettering'));}
+      else {assert.equal(data.check,'artwork-preservation');assert.equal(images.length,3);assert.match(system,/Fail only a stroke that continues nothing visible outside the covered area/);assert.ok((await sharp(images[2]).metadata()).width!>700);assert.deepEqual(schema.properties.problem.enum,['none','artwork-damage']);assert.ok(!schema.properties.artworkDefects.items.enum.includes('remaining-lettering'));}
       const bad=data.check==='artwork-preservation'?mode==='preservation':mode==='preservation'?false:data.method==='existing-artwork-detail'||mode==='reject';
       return {safe:true,problem:'none',artworkDefects:bad?[data.check==='residue'?'lettering-outline':'invented-stroke']:[],reason:bad?'Pale lettering halo or new diagonal black streak':'Background continuous; original short speaker leader preserved'};
     })as any;
@@ -2519,14 +2519,17 @@ test("outside-lettering close-ups revoke cached halos and invented lines before 
       }
       assert.equal(payload.cmd,'clean');
       assert.deepEqual(await readFile(payload.path),await readAsset(raw),'Repair starts from original lettering rather than its invented streak');
-      if(payload.task)assert.match(payload.prompt,/white outlines, shadows and halos/);
+      if(payload.task)assert.match(payload.prompt,/Erase all lettering and sound effects/);
       return {artifact:['reject','preservation'].includes(mode)?partial:clean,result:{}};
     };
     const ctx:any={run:{id:runId,episode_id:page.episode.id,policy:JSON.stringify(policy)},series:page.series,episode:page.episode,user,signal:new AbortController().signal,authorize:async()=>{},imageOperation};
     const execute=()=>withDirector({runId,episodeId:page.episode.id,imageId:page.imageId},()=>cleanDirectorPage(ctx,page.imageId,call,0));
     if(['repair','unstamped','border'].includes(mode))await execute();else await assert.rejects(execute(),/still needs attention/);
     const saved=getDoc<any>(`page:${page.imageId}`,{}).data;
-    assert.equal(reviews[0].method,mode==='border'?editor:'existing-artwork-detail','Full-page green cannot skip pixel and close-up verification');
+    // The halo-and-streak artwork may be caught by the measured blotch check before any model review.
+    const measured=sqlite.prepare("SELECT detail FROM director_events WHERE run_id=? AND kind='clean:damage' AND detail LIKE '%structure%' ORDER BY id LIMIT 1").get(runId) as {detail:string}|undefined;
+    if(mode!=='border'&&measured)assert.match(measured.detail,/"method":"existing-artwork-detail"/,'Full-page green cannot skip pixel and close-up verification');
+    else assert.equal(reviews[0].method,mode==='border'?editor:'existing-artwork-detail','Full-page green cannot skip pixel and close-up verification');
     if(mode==='border')assert.ok(sqlite.prepare("SELECT 1 FROM director_events WHERE run_id=? AND kind='clean:damage'").get(runId),'Erased borders veto a passing visual verdict');
     if(['repair','unstamped','border'].includes(mode)){
       assert.equal(saved.pendingCleanRegions,undefined);assert.equal(saved.directorCleaning.regions[page.lineId].method,editor);

@@ -53,7 +53,7 @@
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
-      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction','region:detect','region:detected','region:lettering-check','region:non-text','region:move-refused','region:punctuation','edit:held'].includes(event.kind)
+      'transcription:attempt','transcription:fallback','text:correlate','translation:review','stage','stage:error','stage:reused','stage:skipped','clean:fallback','clean:retry','clean:request','clean:result','clean:damage','clean:second-opinion','clean:residue','clean:waiting','repair:stalled','finding:unconfirmed','lettering:changed','region:created','region:rendering','region:excluded','region:removed','region:extended','region:relocated','region:read','type:changed','type:created','findings','retry','automation:error','automation:request','automation:response','automation:fallback','clean:over-artwork','clean:outside-regions','region:rejected','director:stalled','ocr:error','memory:warning','director:response','edit','typeset:result','page:empty','undo','model:error','director:correction','region:detect','region:detected','region:lettering-check','region:non-text','region:move-refused','region:punctuation','edit:held'].includes(event.kind)
     && (event.kind!=='run' || event.detail?.state!=='running' || event.detail?.message==='Starting Director')));
 
   const selectedEvent=$derived(auditEvents.find(event=>event.id===selectedEventId)??auditEvents.at(-1));
@@ -91,14 +91,14 @@
   type Tone='good'|'bad'|'warn'|'info'|'muted';
   function eventTone(event:Event):Tone {
     const d=event.detail||{}, k=event.kind;
-    if (['stage:error','model:error','automation:error','clean:residue','repair:stalled','director:stalled','director:correction','ocr:error','clean:over-artwork','clean:outside-regions','region:rejected'].includes(k)) return 'bad';
+    if (['stage:error','model:error','automation:error','clean:residue','clean:damage','repair:stalled','director:stalled','director:correction','ocr:error','clean:over-artwork','clean:outside-regions','region:rejected'].includes(k)) return 'bad';
     if (k==='run') return d.state==='completed'?(/need attention/.test(d.message||'')?'warn':'good'):d.state==='running'?'info':'bad';
     if (k==='stage:skipped' && /not selected/i.test(d.reason||'')) return 'muted';
     if (k==='page') return d.state==='passed'||d.state==='partial'?'good':d.state==='working'?'info':d.state==='unresolved'?'bad':'warn';
     if (k==='automation:response') return d.output?.safe===false?'bad':d.output?.safe===true?'good':'muted';
     if (k==='typeset:result') return d.errors?.length?'bad':'good';
     if (k==='director:response') return d.textComplete===false?'warn':'good';
-    if (['clean:result','stage:reused','critique:reused','region:created','region:extended','region:non-text'].includes(k)) return 'good';
+    if (['clean:result','clean:second-opinion','stage:reused','critique:reused','region:created','region:extended','region:non-text'].includes(k)) return 'good';
     if (k==='region:detect'||k==='region:detected') return 'muted';
     if (k==='region:move-refused'||(k==='region:lettering-check'&&!d.hasLettering)) return 'warn';
     if (['edit:held','clean:fallback','clean:retry','automation:fallback','memory:warning','finding:unconfirmed','retry','findings','transcription:fallback','translation:review','region:excluded','region:removed','stage:skipped'].includes(k)) return 'warn';
@@ -120,6 +120,8 @@
     if(event.kind==='clean:request') return detail.scope==='touch-up' ? `${tidy(detail.reason)} in ${regions(detail.regionIds)} with LaMa` : `Cleaning ${regions(detail.regionIds)} with ${detail.method}`;
     if(event.kind==='clean:result') return detail.regionIds?.length ? `Cleaned ${regions(detail.regionIds)} (${detail.method})${detail.remainingRegionIds?.length?`, ${detail.remainingRegionIds.length} still to do`:''}` : `Cleaned artwork verified (${detail.method})`;
     if(event.kind==='clean:residue') return `Clean rejected: leftover lettering or smudges in ${detail.findings?.length??0} regions`;
+    if(event.kind==='clean:damage') return `Clean rejected: ${tidy(detail.reason || 'artwork damage measured')}`;
+    if(event.kind==='clean:second-opinion') return `Clean kept: ${regions(detail.regionIds)} passed two of three artwork checks`;
     if(event.kind==='clean:waiting') return tidy(detail.reason);
     if(event.kind==='clean:fallback') return `Switching cleaner to ${detail.method}: ${tidy(detail.reason)}`;
     if(event.kind==='clean:retry') return detail.expansion == null ? `Cleaning ${regions(detail.regionIds)} again: ${tidy(detail.reason)}` : `Cleaning again with mask grown ${detail.expansion}px: ${tidy(detail.reason)}`;
@@ -228,9 +230,11 @@
     return value;
   }
   const HIDDEN_FIELDS=new Set(['fingerprint']);
-  function logFields(detail:unknown):{label:string;value:unknown}[] {
+  // Shown as pictures above the fields instead of as asset hashes.
+  const CLEAN_IMAGE_FIELDS=new Set(['image','mask','maskOverlay']);
+  function logFields(detail:unknown,kind=''):{label:string;value:unknown}[] {
     if (detail && typeof detail==='object' && !Array.isArray(detail))
-      return Object.entries(detail).filter(([label])=>!HIDDEN_FIELDS.has(label))
+      return Object.entries(detail).filter(([label])=>!HIDDEN_FIELDS.has(label) && !(kind==='clean:request' && CLEAN_IMAGE_FIELDS.has(label)))
         .map(([label,value])=>({label:label.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/^./,c=>c.toUpperCase()),value}));
     return [{label:'Detail',value:detail}];
   }
@@ -422,9 +426,10 @@
               {#if event.detail?.raw && !Array.isArray(event.detail?.sent)}<div class="director-images">{@render logImage(event.detail.raw,"Saved raw page")}
                 {#if event.detail?.typeset}{@render logImage(event.detail.typeset,"Saved typeset page")}{/if}</div>{/if}
               {#if event.detail?.crop}<div class="director-images">{@render logImage(event.detail.crop,"Crop sent for transcription")}</div>{/if}
+              {#if event.kind==='clean:request' && (event.detail?.maskOverlay || event.detail?.mask)}<div class="director-images">{#if event.detail.maskOverlay}{@render logImage(event.detail.maskOverlay,"Mask sent to the cleaner, over its input")}{/if}{#if event.detail.image}{@render logImage(event.detail.image,"Exact cleaner input")}{/if}{#if event.detail.mask}{@render logImage(event.detail.mask,"Exact mask")}{/if}</div>{/if}
               {#if event.kind==='clean:residue' && event.detail?.candidate}<div class="director-images">{@render logImage(event.detail.candidate,"Rejected clean: leftover strokes")}</div>{/if}
               <div class="director-log-fields">
-                {#each logFields(event.detail) as field}
+                {#each logFields(event.detail,event.kind) as field}
                   {@const view=logView(field.value)}
                   {#if view.json}<details class="director-log-field"><summary>{field.label}</summary><pre class="director-log-json">{view.text}</pre></details>
                   {:else}<section class="director-log-field"><h4>{field.label}</h4><div class="director-log-text">{tidy(view.text)}</div></section>{/if}
