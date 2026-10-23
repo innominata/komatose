@@ -1845,6 +1845,27 @@ function regionDataById(id: string) {
 }
 
 const ENGLISH_ONLY_REASON = "Already English or numbers; no translation needed";
+
+/** Delete regions among `ids` whose reading is English or numbers only: nothing to translate. */
+async function removeEnglishOnly(ctx: AutomationContext, imageId: string, ids: string[]) {
+  const lines = (await listLines(ctx.episode.id)).filter((line) => ids.includes(line.id) && !regionData(line).data.locked && latinOrNumbersOnly(line.source || ""));
+  if (!lines.length) return;
+  const before = pageFingerprint(ctx.episode.id, imageId);
+  await guarded(ctx, imageId, "Remove regions that are already English", () =>
+    sqlite.transaction(() => {
+      assertUnchanged(ctx.episode.id, imageId, before);
+      for (const line of lines) {
+        sqlite.prepare("DELETE FROM lines WHERE id=? AND episode_id=?").run(line.id, ctx.episode.id);
+        const page = pageData(imageId);
+        const pending = page.data.pendingCleanRegions?.filter((id) => id !== line.id);
+        if (page.data.pendingCleanRegions?.includes(line.id))
+          putDoc(ctx.episode.id, page.id, { ...page.data, pendingCleanRegions: pending?.length ? pending : undefined }, page.revision);
+        broadcast(ctx.episode.id, { type: "line:delete", id: line.id });
+        emit(ctx, imageId, "region:removed", { lineId: line.id, source: line.source, reason: ENGLISH_ONLY_REASON });
+      }
+    })(),
+  );
+}
 /** Ignore reason for punctuation-only lettering the series keeps as drawn. */
 export const PUNCTUATION_KEPT_REASON = "Punctuation kept as drawn; not cleaned or lettered";
 
@@ -2154,6 +2175,7 @@ async function readPage(
       result.regions = verified;
       before = pageFingerprint(ctx.episode.id, imageId);
     }
+    let createdIds: string[] = [];
     if (result.regions.length)
       await guarded(ctx, imageId, "Create visually detected regions", () =>
         sqlite.transaction(() => {
@@ -2251,6 +2273,7 @@ async function readPage(
               source: "",
             });
           }
+          createdIds = created;
           if (created.length) {
             const doc = pageData(imageId);
             putDoc(
@@ -2272,6 +2295,23 @@ async function readPage(
           }
         })(),
       );
+    // A coverage proposal can be lettering transcription already read as English
+    // (a title logo, credits): read new regions now and drop those before they
+    // are box-checked, classified, read again and corrected only to be removed.
+    if (createdIds.length && ctx.transcribeRegion) {
+      for (const id of createdIds) {
+        const line = (await listLines(ctx.episode.id)).find((item) => item.id === id);
+        try {
+          if (line) await ctx.transcribeRegion(line);
+        } catch (error) {
+          // Unread here, the region is read again with the rest of the page later.
+          ctx.signal.throwIfAborted();
+          if (error instanceof WorkflowError && [403, 404].includes(error.status)) throw error;
+        }
+      }
+      await removeEnglishOnly(ctx, imageId, createdIds);
+      before = pageFingerprint(ctx.episode.id, imageId);
+    }
     if (process.env.SCAN_DIRECTOR_REGION_EXTENT !== "0")
       try {
         await checkRegionOverlay(ctx, imageId, call);
