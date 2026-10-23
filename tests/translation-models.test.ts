@@ -45,6 +45,8 @@ test('publisher IDs resolve to stable saved IDs without losing namespace charact
   assert.equal(sanitizeModelId('fumetoday/Hy-MT2-1.8B-JP-Manga-Finetune-v5'), hy.id);
   assert.equal(sanitizeModelId('Imsbee/ko-en-translator'), koen.id);
   const { validateModel } = await import('../src/lib/server/regionAi');
+  // A legacy "qwen" model name is a slug on a chat row that passed its tests; none is built in.
+  await fixturePasses(QWEN_38_27B_ID, ['translate', 'describe']);
   assert.deepEqual(validateModel({ engine: 'qwen', model: koen.repository }), {
     engine: koen.id,
     model: '',
@@ -319,7 +321,7 @@ test('OCR English uses the selected specialist instead of Qwen3-VL-8B', async ()
 
 test('OCR English for a general translation model uses that model, not Qwen3-VL-8B', async () => {
   process.env.LLAMASWAP_API_KEY ??= 'fixture';
-  await fixturePasses(QWEN_38_27B_ID, ['translate']);
+  await fixturePasses(QWEN_38_27B_ID, ['translate', 'describe']);
   const oldFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async (_url, init) => {

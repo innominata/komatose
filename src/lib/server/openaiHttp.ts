@@ -44,6 +44,27 @@ export function compatResponseFormat(schema: unknown, profile: HttpProfile): unk
 	return schema;
 }
 
+/**
+ * JSON mode without a schema (DeepSeek and most OpenAI clones) only promises some JSON
+ * object: the model has to guess the field names. DeepSeek Flash invented "boxes" and
+ * "bbox" and echoed "type": "json_object" back, so Director rejected every reply.
+ * When the schema cannot be sent as a response format, it goes in the prompt instead.
+ */
+export function withSchemaInstructions(messages: ChatMessage[], schema: unknown): ChatMessage[] {
+	const inner = schema && typeof schema === 'object'
+		? ((schema as { json_schema?: { schema?: unknown } }).json_schema?.schema ?? schema)
+		: undefined;
+	if (!inner) return messages;
+	const note = `Respond with only one JSON object that validates against this JSON Schema. Use exactly these property names and nesting; add no other fields and no prose:\n${JSON.stringify(inner)}`;
+	const index = messages.map((m) => m.role).lastIndexOf('user');
+	if (index < 0) return [...messages, { role: 'user', content: note }];
+	return messages.map((message, i) => {
+		if (i !== index) return message;
+		if (typeof message.content === 'string') return { ...message, content: `${message.content}\n\n${note}` };
+		return { ...message, content: [...message.content, { type: 'text' as const, text: note }] };
+	});
+}
+
 export function responseFormatRejected(status: number, body: string): boolean {
 	if (status !== 400) return false;
 	return /response_format/i.test(body) || /unavailable now/i.test(body);
@@ -184,10 +205,12 @@ export async function openaiChatCompletions(
 	const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
 	const thinking = opts.thinking !== false;
 	const imageRequest = messagesHaveImages(messages);
-	const outgoing =
+	let outgoing =
 		isDeepSeekHost(cfg.baseUrl) && imageRequest ? deepSeekVisionMessages(messages) : messages;
 	let format = compatResponseFormat(opts.schema, cfg.profile);
 	let droppedFormat = false;
+	// The schema did not survive as a response format: state it in the prompt.
+	if (opts.schema && format !== opts.schema) outgoing = withSchemaInstructions(outgoing, opts.schema);
 
 	const request = sanitizeLlmMessages(outgoing);
 	const started = Date.now();
@@ -239,6 +262,8 @@ export async function openaiChatCompletions(
 			) {
 				format = undefined;
 				droppedFormat = true;
+				if (opts.schema && !outgoing.some((m) => JSON.stringify(m.content).includes('validates against this JSON Schema')))
+					outgoing = withSchemaInstructions(outgoing, opts.schema);
 				continue;
 			}
 			if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 400)}`);

@@ -92,8 +92,10 @@ test('hydrate maps every legacy host/model pair onto named rows', () => {
 		engine: QWEN_38_27B_ID,
 		model: '',
 	});
+	// No built-in model: an unchosen legacy host stays unchosen until the server
+	// resolves it to the operator's default.
 	assert.deepEqual(hydrateTaskEngine({ engine: 'qwen', model: '' }, chatSeeds), {
-		engine: QWEN_38_27B_ID,
+		engine: 'qwen',
 		model: '',
 	});
 	assert.deepEqual(hydrateTaskEngine({ engine: 'qwen', model: 'hy-mt2-manga-v5' }, chatSeeds), {
@@ -101,7 +103,7 @@ test('hydrate maps every legacy host/model pair onto named rows', () => {
 		model: '',
 	});
 	assert.deepEqual(hydrateTaskEngine({ engine: 'qwen', model: 'saved-local-model' }, chatSeeds), {
-		engine: QWEN_38_27B_ID,
+		engine: 'qwen',
 		model: 'saved-local-model',
 	});
 	// CLI models are discovered, not seeded: an unadded slug stays a host+model pair.
@@ -131,8 +133,10 @@ test('hydrate maps every legacy host/model pair onto named rows', () => {
 	assert.equal(leftover.model, 'x');
 });
 
-test('unknown engines throw instead of falling through to Qwen', () => {
-	assert.throws(() => resolveAssistant(''), /Unsupported translation engine/);
+test('unknown engines throw; an unchosen engine needs a passed chat row', () => {
+	// Empty means "not chosen": it only resolves to a chat row that passed its tests.
+	assert.throws(() => resolveAssistant(''), /No chat model has passed/);
+	assert.throws(() => resolveAssistant('', '', undefined, false), /No model is chosen/);
 	assert.throws(() => resolveAssistant('claude'), /Unsupported translation engine: claude/);
 });
 
@@ -794,7 +798,10 @@ test('legacy host aliases cannot be used as new row ids and still resolve to the
 		chatTestRow(),
 	];
 	assert.ok(!shadowed.some((row) => row.id === 'qwen' && row.access === 'remote_http'));
-	const qwen = resolveAssistant('qwen', '', shadowed);
+	// The alias never reaches the shadow row. Unchosen, it needs a passed chat row;
+	// with a slug it names the local row serving that slug.
+	assert.throws(() => resolveAssistant('qwen', '', shadowed), /No chat model has passed/);
+	const qwen = resolveAssistant('qwen', QWEN_38_27B_ID, shadowed);
 	assert.equal(qwen.host, 'http');
 	assert.equal(qwen.row.id, QWEN_38_27B_ID);
 	const grok = resolveAssistant('grok', '', shadowed);
