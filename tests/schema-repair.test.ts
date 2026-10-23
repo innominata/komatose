@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { repairToSchema } from '../src/lib/server/schemaRepair';
-import { cachedMaskOperation } from '../src/lib/server/directorMaskCache';
+import { cachedMaskOperation, rejectedClean, rememberRejectedClean } from '../src/lib/server/directorMaskCache';
 
 const object = (properties: Record<string, unknown>) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
 const ids = ['4751d120-aaaa-4bbb-8ccc-000000000001', '9f00aa11-aaaa-4bbb-8ccc-000000000002'];
@@ -53,4 +53,13 @@ test('a run reuses identical mask requests and forgets failed ones', async () =>
   await assert.rejects(cached({ cmd: 'mask', path: 'b.png', fail: true }));
   await assert.rejects(cached({ cmd: 'mask', path: 'b.png', fail: true }));
   assert.equal(calls, 6, 'a failed mask is asked again');
+});
+
+test('a rejected deterministic clean is remembered per run', () => {
+  const run = `run-rejected-${Date.now()}`;
+  assert.equal(rejectedClean(run, 'lama|a|m'), false);
+  rememberRejectedClean(run, 'lama|a|m');
+  assert.equal(rejectedClean(run, 'lama|a|m'), true);
+  assert.equal(rejectedClean(run, 'lama|a|wider'), false, 'a different mask is a new request');
+  assert.equal(rejectedClean(`${run}-other`, 'lama|a|m'), false, 'other runs start clean');
 });

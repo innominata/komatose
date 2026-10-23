@@ -34,3 +34,22 @@ export function cachedMaskOperation(runId: string, operation: Operation): Operat
     return pending;
   };
 }
+
+/**
+ * Deterministic cleans (LaMa) a run already rejected, by method, input and mask.
+ * The same request returns the same pixels, so repeating it only repeats the
+ * rejection and its checks (page 15 reran an identical, smudged LaMa clean).
+ */
+const rejected = new Map<string, Set<string>>();
+export function rejectedClean(runId: string, key: string) {
+  return rejected.get(runId)?.has(key) ?? false;
+}
+export function rememberRejectedClean(runId: string, key: string) {
+  let keys = rejected.get(runId);
+  if (!keys) {
+    keys = new Set();
+    rejected.set(runId, keys);
+    while (rejected.size > KEEP_RUNS) rejected.delete(rejected.keys().next().value!);
+  }
+  keys.add(key);
+}

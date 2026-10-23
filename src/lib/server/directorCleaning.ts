@@ -27,7 +27,7 @@ import { excludeIfNotLettering } from "./directorLettering";
 import { ghostMask } from "./cleaningTouchUp";
 import { auditedDirectorOperation, pageFingerprint } from "./directorState";
 import { maskedCleaning, runWorkflowPng } from "./workflowImages";
-import { cachedMaskOperation } from "./directorMaskCache";
+import { cachedMaskOperation, rejectedClean, rememberRejectedClean } from "./directorMaskCache";
 import { preferences } from "./workflowService";
 import { cleaningFallbackModel } from "./modelImageWorkflow";
 import {
@@ -1349,6 +1349,12 @@ export async function cleanDirectorPage(
               maskMode: ghost ? "ghost-grown-text" : editor ? "grown-text" : "detected-text",
               ...await cleanInputs(ctx.run.id, input, selected),
             });
+            const repeatKey = `${method.id}|${input}|${selected}`;
+            if (!method.editor && rejectedClean(ctx.run.id, repeatKey)) {
+              // Leftovers earned this retry; let the wider mask run instead of the identical one.
+              residue = true;
+              throw new Error(`${method.id} already returned a rejected result for this exact input and mask`);
+            }
             const candidate = await operation(
               {
                 cmd: "clean",
@@ -1382,6 +1388,7 @@ export async function cleanDirectorPage(
             );
             const review = await inspect(base, limited, method.id, line);
             if (!review.safe) {
+              if (!method.editor) rememberRejectedClean(ctx.run.id, repeatKey);
               residue = review.problem === "remaining-text";
               if (review.problem === "artwork-damage") damaged.set(line.id, review.reason);
               if (residue && artwork) {
