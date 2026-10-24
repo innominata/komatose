@@ -213,7 +213,10 @@ export function directorOverview(episodeId: string, runId?: string, after = 0) {
     const state = row?.state === 'passed' && (row.version < DIRECTOR_VERSION || row.fingerprint !== pageFingerprint(episodeId,image.id)) ? 'stale' : row?.state || 'pending';
     return { id:image.id, pageNumber:image.page_number, clean:cleanComplete(episodeId,image.id), state,
       detail:row?.detail || '', runId:row?.run_id || null, stage:row?.stage||null, findings:activeFindings(episodeId,image.id,row?.findings), version:row?.version||0,
-      fingerprint:row?.fingerprint as string|null ?? null };
+      fingerprint:row?.fingerprint as string|null ?? null,
+      // The raw page and its size, for drawing region previews in the log.
+      raw:(getDoc<{prepared?:string}>(`page:${image.id}`,{}).data.prepared ?? null) as string|null,
+      width:image.width as number, height:image.height as number };
   });
   const runs = sqlite.prepare('SELECT * FROM director_runs WHERE episode_id=? ORDER BY created_at DESC LIMIT 30').all(episodeId) as Run[];
   const selected = runId ? runRow(runId,episodeId) : runs[0];

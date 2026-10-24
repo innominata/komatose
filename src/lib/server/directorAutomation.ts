@@ -3875,8 +3875,15 @@ export async function relocateEmptyRegions(
   for (const region of empty) {
     const cx = region.box.x + region.box.w / 2, cy = region.box.y + region.box.h / 2;
     const distance = (c: Found) => Math.hypot((c.x0 + c.x1) / 2 - cx, (c.y0 + c.y1) / 2 - cy);
+    // A box overlapping the owner is the same text boxed twice (a paragraph and one of
+    // its lines), not a false region beside it; splitting it scatters the paragraph.
+    const overlaps = (other: Box) => {
+      const w = Math.min(region.box.x + region.box.w, other.x + other.w) - Math.max(region.box.x, other.x);
+      const h = Math.min(region.box.y + region.box.h, other.y + other.h) - Math.max(region.box.y, other.y);
+      return w > 0 && h > 0 && (w * h) / Math.min(region.box.w * region.box.h, other.w * other.h) >= 0.5;
+    };
     const choice = spares
-      .filter((spare) => !taken.get(spare.owner.line.id)?.has(spare.cluster) && distance(spare.cluster) <= 0.25)
+      .filter((spare) => !taken.get(spare.owner.line.id)?.has(spare.cluster) && distance(spare.cluster) <= 0.25 && !overlaps(spare.owner.box))
       .sort((a, b) => distance(a.cluster) - distance(b.cluster))[0];
     if (!choice) continue;
     const owned = taken.get(choice.owner.line.id) ?? new Set<Found>();

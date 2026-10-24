@@ -6,7 +6,25 @@
     {apiBase:string;scope:'page'|'chapter';pageId:string|null;canEdit:boolean;busy:boolean;onnavigate?:(pageId:string,lineId:string|undefined,stage:string)=>void;onsettings?:()=>void;models?:{id:string;name:string;model:string}[];locked?:boolean;open?:boolean}=$props();
   type Run = {id:string;scope:string;state:string;message:string;current_index:number;pageIds:string[];
     model:{engine:string;model:string};policy?:string;created_at:number};
-  type Page = {id:string;pageNumber:number|null;clean:boolean;state:string;stage:string|null;findings:DirectorFinding[];detail:string;runId:string|null};
+  type Page = {id:string;pageNumber:number|null;clean:boolean;state:string;stage:string|null;findings:DirectorFinding[];detail:string;runId:string|null;
+    raw?:string|null;width?:number;height?:number};
+  type Shape = {box:number[];tone:'added'|'before'|'rejected'};
+  /** Region boxes an event records, for drawing over the raw page. */
+  function previewShapes(event:Event):Shape[] {
+    const d=event.detail??{};
+    const ok=(box:unknown):box is number[]=>Array.isArray(box)&&box.length===4&&box.every(v=>typeof v==='number');
+    if(event.kind==='region:relocated'&&ok(d.from)&&ok(d.to)) return [{box:d.from,tone:'before'},{box:d.to,tone:'added'}];
+    if(['region:created','region:extended','region:relocated'].includes(event.kind)&&ok(d.box)) return [{box:d.box,tone:'added'}];
+    if(event.kind==='region:rejected'&&ok(d.box)) return [{box:d.box,tone:'rejected'}];
+    return [];
+  }
+  /** The shapes' area with a margin, in page pixels, for the close-up. */
+  function closeUp(shapes:Shape[],width:number,height:number) {
+    const pad=.04;
+    const x0=Math.max(0,Math.min(...shapes.map(s=>s.box[0]))-pad),y0=Math.max(0,Math.min(...shapes.map(s=>s.box[1]))-pad);
+    const x1=Math.min(1,Math.max(...shapes.map(s=>s.box[0]+s.box[2]))+pad),y1=Math.min(1,Math.max(...shapes.map(s=>s.box[1]+s.box[3]))+pad);
+    return `${x0*width} ${y0*height} ${(x1-x0)*width} ${(y1-y0)*height}`;
+  }
   type Event = {id:number;run_id:string;image_id:string|null;kind:string;detail:any;created_at:number};
   type Change = {id:number;image_id:string|null;label:string;undone:number;created_at:number};
   let pages=$state<Page[]>([]),runs=$state<Run[]>([]);
@@ -333,6 +351,27 @@
   });
 </script>
 
+{#snippet regionPreview(event:Event)}
+  {@const page=pages.find(p=>p.id===event.image_id)}
+  {@const shapes=previewShapes(event)}
+  {#if page?.raw && page.width && page.height && shapes.length}
+    {@const W=page.width}{@const H=page.height}
+    <div class="director-region-preview">
+      {#each [`0 0 ${W} ${H}`, closeUp(shapes,W,H)] as view, index}
+        <figure class:closeup={index===1}>
+          <svg viewBox={view} role="img" aria-label={index ? 'Close-up of the region on the raw page' : 'Region on the raw page'}>
+            <image href={`${apiBase}/workflow/assets/${page.raw}`} width={W} height={H} />
+            {#each shapes as shape}
+              <rect class="tone-{shape.tone}" x={shape.box[0]*W} y={shape.box[1]*H} width={shape.box[2]*W} height={shape.box[3]*H} vector-effect="non-scaling-stroke" />
+            {/each}
+          </svg>
+          <figcaption>{index ? 'Close-up' : 'Raw page'}{shapes.some(s=>s.tone==='before') && index ? ' · grey dashes: before' : ''}</figcaption>
+        </figure>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet logImage(hash:string,label:string)}
   <button type="button" class="director-image-button" aria-haspopup="dialog" aria-label={`Expand ${label}`} title="Click to expand saved image" onclick={()=>expandedImage={hash,label}}><img src={`${apiBase}/workflow/assets/${hash}`} alt={label}></button>
 {/snippet}
@@ -473,6 +512,7 @@
             <button type="button" class="director-back" onclick={()=>showDetail=false}><i class="bi bi-arrow-left" aria-hidden="true"></i> Log</button>
             <h3 class="director-detail-title tone-{eventTone(event)}"><i class="bi {TONE_ICONS[eventTone(event)]}" aria-hidden="true"></i> {eventSummary(event)}</h3>
             <p class="director-detail-meta">{new Date(event.created_at).toLocaleString()} · <code>{event.kind}</code></p>
+              {@render regionPreview(event)}
               {#if event.detail?.images && Array.isArray(event.detail.images)}<div class="director-images">{#each event.detail.images as hash}{@render logImage(hash,"Sent to model or proofreader")}{/each}</div>{/if}
               {#if event.detail?.sent && Array.isArray(event.detail.sent)}<div class="director-images">{#each event.detail.sent as hash}{@render logImage(hash,"Exact proofreader input")}{/each}</div>{/if}
               {#if event.detail?.input?.images && Array.isArray(event.detail.input.images)}<div class="director-images">{#each event.detail.input.images as item}{#if item.imageAsset}{@render logImage(item.imageAsset,"Exact model input")}{/if}{/each}</div>{/if}
@@ -590,6 +630,15 @@
   details.director-log-field summary{padding:5px 9px;cursor:pointer;color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600}details.director-log-field[open] summary{border-bottom:1px solid var(--d-line)}
   .director-log-fields{display:grid;gap:8px;margin-top:10px}.director-log-field{min-width:0;border:1px solid var(--d-line);border-radius:5px;background:var(--d-soft);overflow:hidden}.director-log-field h4{margin:0;padding:5px 9px;border-bottom:1px solid var(--d-line);color:var(--hud-muted,#bbb);font-size:.72rem;font-weight:600;letter-spacing:.03em}
   .director-log-text,.director-log-json{margin:0;padding:8px 10px;overflow-wrap:anywhere;white-space:pre-wrap;font-size:.82rem;line-height:1.5}.director-log-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.76rem}
+  .director-region-preview{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:flex-start}
+  .director-region-preview figure{margin:0;display:grid;gap:4px}
+  .director-region-preview svg{display:block;height:300px;max-width:100%;width:auto;background:white;border:1px solid var(--d-line);border-radius:4px}
+  .director-region-preview figure.closeup svg{height:auto;width:min(320px,100%);max-height:300px}
+  .director-region-preview figcaption{font-size:.7rem;color:var(--hud-muted,#aaa)}
+  .director-region-preview rect{fill:none;stroke-width:3px}
+  .director-region-preview rect.tone-added{stroke:#ff00d4;fill:rgba(255,0,212,.12)}
+  .director-region-preview rect.tone-before{stroke:#8a8f99;stroke-dasharray:6 4}
+  .director-region-preview rect.tone-rejected{stroke:#e0473f;stroke-dasharray:6 4}
   .director-images{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.director-image-button{padding:0;border:1px solid var(--d-line);background:transparent;cursor:zoom-in;max-width:100%;border-radius:3px}.director-image-button:focus-visible{outline:2px solid var(--d-accent);outline-offset:3px}.director-images img{max-width:min(260px,100%);max-height:300px;object-fit:contain;background:white;display:block}
 
   @media(max-width:1100px){.director-log{grid-template-columns:minmax(240px,45%) minmax(0,1fr)}.director-model{flex-basis:180px}}

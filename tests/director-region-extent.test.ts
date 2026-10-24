@@ -86,6 +86,8 @@ test("an empty region moves onto a column another region's box swallowed, and th
     { ...line("merged", 0.28, 0.29, 0.4, 0.42), source: "タイトル" },
     { ...line("false", 0.05, 0.6, 0.15, 0.15), source: "作者" },
     { ...line("english", 0.05, 0.1, 0.05, 0.01), source: "BLACK JACK" },
+    // An empty box inside the merged one is the same text boxed twice, not a false region.
+    { ...line("inner", 0.38, 0.3, 0.1, 0.4), source: "タイトル" },
   ];
   const edits = await relocateEmptyRegions(ctx, "page", lines);
   const moved = edits.find((edit) => edit.lineId === "false")!;
@@ -95,6 +97,7 @@ test("an empty region moves onto a column another region's box swallowed, and th
   const shrunk = edits.find((edit) => edit.lineId === "merged")!;
   assert.ok(Math.abs(shrunk.x - 0.49) < 0.005, `title keeps only its columns, x ${shrunk.x}`);
   assert.equal(edits.some((edit) => edit.lineId === "english"), false, "English-only regions are never moved");
+  assert.equal(edits.some((edit) => edit.lineId === "inner"), false, "a box overlapping the owner is never split off it");
 });
 
 
