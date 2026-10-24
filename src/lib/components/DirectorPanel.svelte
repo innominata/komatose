@@ -428,9 +428,10 @@
             {#if mode==='chapter'}
               <label class="inline"><input type="checkbox" bind:checked={recheckAll}> Recheck passed and stale pages</label>
               <button type="button" disabled={!canStart||!pages.some(p=>p.state==='unresolved')} onclick={()=>{closeMenus();start(true);}}>Retry blocked pages</button>
-            {:else if logPage}
+            {/if}
+            {#if logPage}
               <button type="button" title="Forget saved stage results so the next run redoes every task on this page. Edits stay undoable." disabled={!canEdit||working||locked}
-                onclick={()=>{closeMenus();if(confirm(`Reset Director for page ${logPage.pageNumber??'?'}? The next run redoes every task instead of reusing saved results.`)) void act({action:'reset-page',imageId:logPage.id});}}>Reset page</button>
+                onclick={()=>{closeMenus();if(confirm(`Reset Director for page ${logPage.pageNumber??'?'}? The next run redoes every task instead of reusing saved results.`)) void act({action:'reset-page',imageId:logPage.id});}}>Reset page {logPage.pageNumber??''}</button>
             {/if}
             <button type="button" disabled={working||locked} onclick={()=>{closeMenus();void checkSetup();}}>Check setup</button>
             <button type="button" onclick={()=>{open=false;onsettings?.();}}>Director settings</button>

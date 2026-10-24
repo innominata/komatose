@@ -8,7 +8,7 @@ import sharp from "sharp";
 process.env.SCAN_ROOT = await mkdtemp(join(tmpdir(), "scan-region-extent-"));
 process.env.DATABASE_URL = join(process.env.SCAN_ROOT, "data/test.db");
 
-const { extendClippedRegions, relocateEmptyRegions, letteringInBox } = await import("../src/lib/server/directorAutomation");
+const { extendClippedRegions, relocateEmptyRegions, letteringInBox, textBlocks } = await import("../src/lib/server/directorAutomation");
 const { getDoc, putDoc, storeAsset } = await import("../src/lib/server/workflowStore");
 const save = (id: string, data: unknown) => putDoc(null, id, data, getDoc(id, {}).revision);
 
@@ -142,4 +142,19 @@ test("refitting a region box keeps a fitted geometry polygon, and moves one that
   save("region:boxed", { polygon: copy });
   const [boxed] = await extendClippedRegions(ctx, "page", [line("boxed", box.x, box.y, box.w, box.h)]);
   assert.ok(Math.abs(Math.max(...boxed.polygon.map((p) => p.x)) - (boxed.x + boxed.w)) < 1e-9, "a copied box follows the refit");
+});
+
+test("lines of one handwritten paragraph group into one block; a separate caption and vertical columns stay apart", () => {
+  // Page 83's note: four centred lines, then a credit far below.
+  const note = [
+    { x: 0.226, y: 0.367, w: 0.53, h: 0.052 },
+    { x: 0.399, y: 0.429, w: 0.178, h: 0.048 },
+    { x: 0.215, y: 0.475, w: 0.54, h: 0.056 },
+    { x: 0.265, y: 0.533, w: 0.448, h: 0.051 },
+  ];
+  const credit = { x: 0.72, y: 0.84, w: 0.24, h: 0.065 };
+  const columns = [{ x: 0.5, y: 0.1, w: 0.04, h: 0.3 }, { x: 0.45, y: 0.12, w: 0.04, h: 0.25 }];
+  const far = { x: 0.1, y: 0.1, w: 0.04, h: 0.3 };
+  const groups = textBlocks([...note, credit, ...columns, far]).map((group) => group.sort((a, b) => a - b));
+  assert.deepEqual(groups, [[0, 1, 2, 3], [4], [5, 6], [7]]);
 });

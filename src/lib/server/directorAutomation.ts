@@ -1188,6 +1188,10 @@ async function classify(
         )
           return `Return exactly one classification for each of these IDs, without duplicates: ${batch.map((line) => line.id).join(", ")}`;
         for (const decision of result.classifications) {
+          // An existing type with no new label needs no parent; models often echo the
+          // type there, which is harmless.
+          if (decision.typeId && !decision.newLabel && memory.types.some((type) => type.id === decision.typeId))
+            decision.parentType = "";
           if (!decision.certain) continue;
           if (decision.typeId) {
             if (
@@ -2223,8 +2227,65 @@ async function readPage(
             boxes.push(item);
             return true;
           });
+          // Proposals that stack as lines of one text block (a handwritten note's
+          // paragraph, a caption's lines) become one region, and join the existing
+          // region they continue, which is then read again as a whole.
+          const joinable = existing.filter(
+            (line) =>
+              line.x != null && line.y != null && !!line.w && !!line.h &&
+              !regionData(line).data.locked &&
+              regionData(line).data.renderEnabled !== false &&
+              line.sourceState !== "ignored",
+          );
+          const blocks = textBlocks([
+            ...joinable.map((line) => ({ x: line.x!, y: line.y!, w: line.w!, h: line.h! })),
+            ...proposals,
+          ]);
+          const merged: any[] = [];
+          for (const block of blocks) {
+            const olds = block.filter((index) => index < joinable.length).map((index) => joinable[index]);
+            const news = block.filter((index) => index >= joinable.length).map((index) => proposals[index - joinable.length]);
+            if (!news.length) continue;
+            // Two existing regions are left as they are; only the proposals join up.
+            const parts = olds.length === 1 ? [...news, { x: olds[0].x!, y: olds[0].y!, w: olds[0].w!, h: olds[0].h! }] : news;
+            const x = Math.min(...parts.map((b) => b.x)), y = Math.min(...parts.map((b) => b.y));
+            const box = {
+              x, y,
+              w: Math.max(...parts.map((b) => b.x + b.w)) - x,
+              h: Math.max(...parts.map((b) => b.y + b.h)) - y,
+            };
+            if (olds.length !== 1) {
+              merged.push(box);
+              continue;
+            }
+            const line = olds[0];
+            sqlite
+              .prepare("UPDATE lines SET x=?,y=?,w=?,h=?,source='',body='',source_state='unreadable',updated_at=?,updated_by=? WHERE id=?")
+              .run(box.x, box.y, box.w, box.h, Date.now(), ctx.user.id, line.id);
+            const region = regionDataById(line.id);
+            putDoc(
+              ctx.episode.id,
+              region.id,
+              {
+                ...region.data,
+                polygon: [
+                  { x: box.x, y: box.y },
+                  { x: box.x + box.w, y: box.y },
+                  { x: box.x + box.w, y: box.y + box.h },
+                  { x: box.x, y: box.y + box.h },
+                ],
+              },
+              region.revision,
+            );
+            created.push(line.id);
+            emit(ctx, imageId, "region:extended", {
+              lineId: line.id,
+              box: [box.x, box.y, box.w, box.h],
+              reason: "Joined the following lines of the same text block into this region",
+            });
+          }
           const detected = orderRegions<any>(
-            proposals,
+            merged,
             (item) => item,
             direction,
           );
@@ -3804,6 +3865,33 @@ function letteringClusters(on: Uint8Array, width: number, height: number, link: 
     }
   }
   return clusters.filter((cluster) => cluster.pixels > 0);
+}
+
+/**
+ * Groups of boxes that stack as lines of one text block: horizontal lines one under
+ * the next, or vertical columns side by side, each within about half a line (and 2% of the page) of the
+ * next and lined up along the reading direction. Returns index groups.
+ */
+export function textBlocks(boxes: Box[]): number[][] {
+  const parent = boxes.map((_, index) => index);
+  const root = (index: number): number => (parent[index] === index ? index : (parent[index] = root(parent[index])));
+  const share = (a0: number, a1: number, b0: number, b1: number) =>
+    Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)) / Math.min(a1 - a0, b1 - b0);
+  for (let i = 0; i < boxes.length; i++)
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      const wide = a.w >= a.h && b.w >= b.h, tall = a.h > a.w && b.h > b.w;
+      const stacked = wide
+        ? Math.max(a.y - (b.y + b.h), b.y - (a.y + a.h)) <= Math.min(0.02, 0.6 * Math.min(a.h, b.h)) &&
+          share(a.x, a.x + a.w, b.x, b.x + b.w) >= 0.3
+        : tall &&
+          Math.max(a.x - (b.x + b.w), b.x - (a.x + a.w)) <= Math.min(0.02, 0.6 * Math.min(a.w, b.w)) &&
+          share(a.y, a.y + a.h, b.y, b.y + b.h) >= 0.3;
+      if (stacked) parent[root(j)] = root(i);
+    }
+  const groups = new Map<number, number[]>();
+  boxes.forEach((_, index) => groups.set(root(index), [...(groups.get(root(index)) ?? []), index]));
+  return [...groups.values()];
 }
 
 /**
