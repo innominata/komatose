@@ -8,7 +8,7 @@ import sharp from "sharp";
 process.env.SCAN_ROOT = await mkdtemp(join(tmpdir(), "scan-region-extent-"));
 process.env.DATABASE_URL = join(process.env.SCAN_ROOT, "data/test.db");
 
-const { extendClippedRegions, relocateEmptyRegions, letteringInBox, textBlocks } = await import("../src/lib/server/directorAutomation");
+const { extendClippedRegions, relocateEmptyRegions, letteringInBox, textBlocks, containedFragments } = await import("../src/lib/server/directorAutomation");
 const { getDoc, putDoc, storeAsset } = await import("../src/lib/server/workflowStore");
 const save = (id: string, data: unknown) => putDoc(null, id, data, getDoc(id, {}).revision);
 
@@ -157,4 +157,26 @@ test("lines of one handwritten paragraph group into one block; a separate captio
   const far = { x: 0.1, y: 0.1, w: 0.04, h: 0.3 };
   const groups = textBlocks([...note, credit, ...columns, far]).map((group) => group.sort((a, b) => a - b));
   assert.deepEqual(groups, [[0, 1, 2, 3], [4], [5, 6], [7]]);
+});
+
+test("a smaller box inside another region holding none or part of its text is a fragment", () => {
+  // Page 530ce2d8: the note boxed whole, and again around pieces of its first word.
+  const whole = { ...line("whole", 0.171, 0.3, 0.542, 0.32), source: "그렇게\n살지 마" };
+  const empty = { ...line("empty", 0.226, 0.322, 0.125, 0.118), source: "" };
+  const part = { ...line("part", 0.39, 0.309, 0.125, 0.11), source: "그렇게" };
+  const other = { ...line("other", 0.4, 0.4, 0.1, 0.1), source: "뭐야" };
+  const apart = { ...line("apart", 0.757, 0.601, 0.122, 0.052), source: "…" };
+  const same = { ...line("same", 0.3, 0.45, 0.2, 0.1), source: "그렇게 살지 마" };
+  const found = containedFragments([whole, empty, part, other, apart, same] as any).map((item) => item.line.id);
+  assert.deepEqual(found, ["empty", "part"], "its own different text, or all of the text (a duplicate), keeps a box inside another");
+});
+
+test("a proofreader quote shortened with an ellipsis still counts as quoted, in order", async () => {
+  const { quotedIn } = await import("../src/lib/server/directorAutomation");
+  const critique = "The target area (middle 34% of the width) is not text — it is blank gradient background. Nothing is drawn.";
+  assert.ok(quotedIn(critique, "The target area ... is not text — it is blank gradient background."));
+  assert.ok(quotedIn(critique, "is not text — it is blank gradient background"));
+  assert.equal(quotedIn(critique, "it is blank gradient background ... The target area"), false, "pieces must be in order");
+  assert.equal(quotedIn(critique, "The target area ... is lettering"), false, "every piece must appear");
+  assert.equal(quotedIn(critique, "... not ..."), false, "a few words do not make a quote");
 });

@@ -127,6 +127,23 @@ textSchema.properties.exclusions = arrayOf(
 // Exclusions are optional; they need explicit quoted proofreader evidence.
 const proofreaderText = (value: string) =>
   value.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+/**
+ * Whether a quote appears in the proofreader's text. Models shorten quotes with "..."
+ * ("The target area ... is not text"); each piece must then appear, in order, and
+ * together the pieces must still say something (20 characters or more).
+ */
+export function quotedIn(text: string, quote: string) {
+  const haystack = proofreaderText(text);
+  const pieces = proofreaderText(quote).split(/\.{3,}/).filter(Boolean);
+  if (!pieces.length || pieces.join("").length < Math.min(20, proofreaderText(quote).length)) return false;
+  let from = 0;
+  for (const piece of pieces) {
+    const at = haystack.indexOf(piece, from);
+    if (at < 0) return false;
+    from = at + piece.length;
+  }
+  return true;
+}
 
 const findingSchema = objectSchema({
   lineId: stringField,
@@ -584,9 +601,7 @@ async function applyText(
       }
       const unsupported = (result.exclusions || []).filter(
         (e: any) =>
-          !proofreaderText(priorProofread).includes(
-            proofreaderText(e.evidence),
-          ) ||
+          !quotedIn(priorProofread, e.evidence) ||
           (e.verdict === "non-text"
             ? !/non[- ]text|not (?:actual )?(?:text|lettering)|no (?:\w+ ){0,2}(?:text|lettering|sfx)|only (?:artwork|motion lines)|purely visual/i.test(
                 e.evidence,
@@ -1870,6 +1885,63 @@ async function removeEnglishOnly(ctx: AutomationContext, imageId: string, ids: s
     })(),
   );
 }
+/**
+ * Regions that are a piece of another region's text: a smaller box lying inside a
+ * larger active one, holding no text of its own or only part of the larger one's
+ * (not all of it: that is a duplicate).
+ * Detection boxes a handwritten note whole and again around single words in it.
+ */
+export function containedFragments(lines: LineRow[]): { line: LineRow; within: LineRow }[] {
+  const squash = (text: string | null | undefined) => (text ?? "").normalize("NFKC").replace(/\s+/g, "");
+  const active = lines.filter(
+    (line) =>
+      line.x != null && line.y != null && !!line.w && !!line.h &&
+      regionData(line).data.renderEnabled !== false &&
+      line.sourceState !== "ignored",
+  );
+  const found: { line: LineRow; within: LineRow }[] = [];
+  for (const line of active) {
+    if (regionData(line).data.locked) continue;
+    const area = line.w! * line.h!;
+    const within = active.find((other) => {
+      if (other === line || other.w! * other.h! * 0.8 < area) return false;
+      const w = Math.min(line.x! + line.w!, other.x! + other.w!) - Math.max(line.x!, other.x!);
+      const h = Math.min(line.y! + line.h!, other.y! + other.h!) - Math.max(line.y!, other.y!);
+      if (w <= 0 || h <= 0 || (w * h) / area < 0.9) return false;
+      // The same complete text is a duplicate, which the duplicate review hides undoably.
+      const own = squash(line.source), whole = squash(other.source);
+      return !own || (whole !== own && whole.includes(own));
+    });
+    if (within && !found.some((item) => item.line === within)) found.push({ line, within });
+  }
+  return found;
+}
+
+async function removeContainedFragments(ctx: AutomationContext, imageId: string) {
+  const fragments = containedFragments((await listLines(ctx.episode.id)).filter((line) => line.imageId === imageId));
+  if (!fragments.length) return;
+  const before = pageFingerprint(ctx.episode.id, imageId);
+  await guarded(ctx, imageId, "Remove pieces of another region", () =>
+    sqlite.transaction(() => {
+      assertUnchanged(ctx.episode.id, imageId, before);
+      for (const { line, within } of fragments) {
+        sqlite.prepare("DELETE FROM lines WHERE id=? AND episode_id=?").run(line.id, ctx.episode.id);
+        const page = pageData(imageId);
+        const pending = page.data.pendingCleanRegions?.filter((id) => id !== line.id);
+        if (page.data.pendingCleanRegions?.includes(line.id))
+          putDoc(ctx.episode.id, page.id, { ...page.data, pendingCleanRegions: pending?.length ? pending : undefined }, page.revision);
+        broadcast(ctx.episode.id, { type: "line:delete", id: line.id });
+        emit(ctx, imageId, "region:removed", {
+          lineId: line.id,
+          source: line.source,
+          box: [line.x, line.y, line.w, line.h],
+          reason: `Lies inside region ${within.id} and holds only part of its text`,
+        });
+      }
+    })(),
+  );
+}
+
 /** Ignore reason for punctuation-only lettering the series keeps as drawn. */
 export const PUNCTUATION_KEPT_REASON = "Punctuation kept as drawn; not cleaned or lettered";
 
@@ -2148,6 +2220,9 @@ async function readPage(
         );
       }
     }
+    await removeContainedFragments(ctx, imageId);
+    existing = (await listLines(ctx.episode.id)).filter((line) => line.imageId === imageId);
+    before = pageFingerprint(ctx.episode.id, imageId);
     if (!existing.length && result.regions.length) {
       try {
         await guarded(ctx, imageId, "Detect and transcribe", ctx.transcribe);

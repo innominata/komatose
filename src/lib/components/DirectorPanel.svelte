@@ -15,7 +15,7 @@
     const ok=(box:unknown):box is number[]=>Array.isArray(box)&&box.length===4&&box.every(v=>typeof v==='number');
     if(event.kind==='region:relocated'&&ok(d.from)&&ok(d.to)) return [{box:d.from,tone:'before'},{box:d.to,tone:'added'}];
     if(['region:created','region:extended','region:relocated'].includes(event.kind)&&ok(d.box)) return [{box:d.box,tone:'added'}];
-    if(event.kind==='region:rejected'&&ok(d.box)) return [{box:d.box,tone:'rejected'}];
+    if(['region:rejected','region:removed'].includes(event.kind)&&ok(d.box)) return [{box:d.box,tone:'rejected'}];
     return [];
   }
   /** The shapes' area with a margin, in page pixels, for the close-up. */
