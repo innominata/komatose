@@ -291,7 +291,7 @@
         <button role="menuitem" onclick={() => ops.regionDetails(target, true)}
           >Comments / correction</button
         >
-        <button role="menuitem" disabled={!canEdit} onclick={() => ops.deleteRegion(target)}
+        <button role="menuitem" data-find="delete-region" disabled={!canEdit} onclick={() => ops.deleteRegion(target)}
           >Delete region…</button
         >
       {/if}

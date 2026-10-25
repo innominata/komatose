@@ -29,11 +29,13 @@ test('a reopened page is eligible even when it has an older completion mark', ()
 });
 
 test('every destructive page operation describes its scope and asks confirmation', () => {
-  for (const op of ['crop', 'resize', 'nudge', 'revert', 'split', 'auto-crop', 'auto-align', 'combine', 'reslice', 'reorder', 'delete']) {
+  for (const op of ['crop', 'resize', 'nudge', 'revert', 'split', 'auto-crop', 'auto-align', 'combine', 'reslice', 'delete']) {
     const message = prepareActionConfirmation({ op, imageId: 'b', width: 300, height: 600, dx: -5, dy: 10 }, images);
     assert.ok(message?.includes('?'), op);
-    if (op !== 'reorder') assert.ok(message?.includes('page 2 (second.png)'), op);
+    assert.ok(message?.includes('page 2 (second.png)'), op);
   }
+  // Reordering is undoable and happens on every drag, so it does not ask.
+  assert.equal(prepareActionConfirmation({ op: 'reorder', order: [] }, images), null);
   assert.match(prepareActionConfirmation({ op: 'delete', imageIds: ['b', 'c'] }, images)!, /page 2.*page 3.*cannot be undone/);
   assert.match(prepareActionConfirmation({ op: 'resize', imageId: 'b', width: 300, height: 600 }, images)!, /300 × 600/);
 });

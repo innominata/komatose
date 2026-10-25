@@ -51,6 +51,18 @@
   } = $props();
 
   let dragId = $state("");
+  let overId = $state("");
+  let fileDrag = $state(false);
+
+  const hasFiles = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+
+  function dropFiles(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    fileDrag = false;
+    const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (canUpload && files.length) onaddfiles(files);
+  }
 
   function thumb(img: ImageRow) {
     const doc = pages[img.id]?.data;
@@ -68,6 +80,7 @@
     order.splice(from, 1);
     order.splice(to, 0, dragId);
     dragId = "";
+    overId = "";
     onreorder(order);
   }
 
@@ -107,7 +120,9 @@
   {/if}
 {/snippet}
 
-<div class="organize" class:strip={pageMode === "strip"} data-find="organize">
+<div class="organize" class:strip={pageMode === "strip"} data-find="organize" role="region" aria-label="Pages"
+  ondragover={(e) => { if (canUpload && hasFiles(e)) e.preventDefault(); }}
+  ondrop={(e) => { if (hasFiles(e)) dropFiles(e); }}>
   <div class="grid-hint">
     <span><i class="bi bi-arrows-move" aria-hidden="true"></i> {pageMode === "strip" ? "Strip · top to bottom" : "Pages · reading order"} · Drag to reorder · Shift-click to select a range · Paste images anywhere</span>
     <span class:warning={numberingStale}>
@@ -139,10 +154,30 @@
       <div
         class="gcard"
         class:picked={selectedIds.includes(img.id)}
+        class:dragging={dragId === img.id}
+        class:drop-before={overId === img.id && dragId !== img.id && images.findIndex((i) => i.id === dragId) > index}
+        class:drop-after={overId === img.id && dragId !== img.id && images.findIndex((i) => i.id === dragId) < index}
+        role="listitem"
         draggable={canUpload && !selectionDisabled}
-        ondragstart={() => (dragId = img.id)}
-        ondragover={(e) => e.preventDefault()}
-        ondrop={() => dropOn(img.id)}
+        ondragstart={(e) => {
+          dragId = img.id;
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", img.id);
+          }
+        }}
+        ondragend={() => { dragId = ""; overId = ""; }}
+        ondragover={(e) => {
+          if (!dragId) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          overId = img.id;
+        }}
+        ondrop={(e) => {
+          if (!dragId) return;
+          e.preventDefault();
+          dropOn(img.id);
+        }}
       >
         {#if canUpload}
           <label class="gcheck" title="Select (Shift-click for a range)">
@@ -155,12 +190,15 @@
             />
           </label>
         {/if}
-        <button type="button" class="gimg" aria-label={`Open page ${index + 1}`} title={`Open page ${index + 1} for editing`} onclick={(e) => {
-          if (canUpload && (e.shiftKey || e.ctrlKey || e.metaKey)) onselect(img.id, e.shiftKey);
-          else onopen(img.id);
-        }}>
-          <img src={thumb(img)} alt="" />
-        </button>
+        <!-- Not a <button>: Firefox will not start a drag from inside one. -->
+        <div role="button" tabindex="0" class="gimg" aria-label={`Open page ${index + 1}`} title={`Open page ${index + 1} for editing · drag to reorder`}
+          onclick={(e) => {
+            if (canUpload && (e.shiftKey || e.ctrlKey || e.metaKey)) onselect(img.id, e.shiftKey);
+            else onopen(img.id);
+          }}
+          onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onopen(img.id); } }}>
+          <img src={thumb(img)} alt="" draggable="false" />
+        </div>
         <div class="gmeta">
           <strong>{index + 1}</strong>
           <span>{img.role === "pre-credits" ? "Pre-credits" : img.role === "post-credits" ? "Post-credits" : img.filename ?? ""}</span>
@@ -175,7 +213,10 @@
     {/each}
     {@render creditSlot(slots[1])}
     {#if canUpload}
-      <label class="gcard drop" data-find="upload">
+      <label class="gcard drop" class:over={fileDrag} data-find="upload"
+        ondragover={(e) => { if (!hasFiles(e)) return; e.preventDefault(); fileDrag = true; }}
+        ondragleave={() => (fileDrag = false)}
+        ondrop={(e) => { if (hasFiles(e)) dropFiles(e); }}>
         <div class="gslot">
           <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
           <strong>Add images</strong>
@@ -246,6 +287,13 @@
   .gslot strong { color: var(--hud-text); }
   .gslot small { font-size: 11px; }
   .credit-img { width: 70%; max-height: 110px; object-fit: contain; }
+  .gcard[draggable="true"] .gimg { cursor: grab; }
+  .gcard.dragging { opacity: 0.4; }
+  .gcard.drop-before { box-shadow: -4px 0 0 var(--hud-teal); }
+  .gcard.drop-after { box-shadow: 4px 0 0 var(--hud-teal); }
+  .strip .gcard.drop-before { box-shadow: 0 -4px 0 var(--hud-teal); }
+  .strip .gcard.drop-after { box-shadow: 0 4px 0 var(--hud-teal); }
+  .drop.over { border-style: solid; border-color: var(--hud-teal); }
   .drop { cursor: pointer; border-color: rgba(45, 226, 197, 0.5); background: var(--hud-teal-dim); display: block; color: var(--hud-text); margin: 0; }
   .drop input { display: none; }
   .drop .bi { color: var(--hud-teal-ink); }

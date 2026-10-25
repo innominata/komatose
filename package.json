@@ -77,6 +77,7 @@
 		"test:browser-series-backups": "node scripts/test-browser.mjs scripts/check-browser-series-backups.mjs",
 		"test:browser-reslice": "node scripts/test-browser.mjs scripts/check-browser-reslice.mjs",
 		"test:browser-prepare-safety": "node scripts/test-browser.mjs scripts/check-browser-prepare-safety.mjs",
+		"test:browser-onboarding": "node scripts/test-browser.mjs scripts/check-browser-onboarding.mjs",
 		"test:browser-models": "node scripts/test-browser.mjs scripts/check-browser-models.mjs",
 		"test:browser-setup": "node scripts/test-browser.mjs scripts/check-browser-setup.mjs",
 		"test:browser-model-profiles": "node scripts/test-browser.mjs scripts/check-browser-model-profiles.mjs",

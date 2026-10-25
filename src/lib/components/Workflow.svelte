@@ -43,6 +43,8 @@
   import PageFooter from "./workflow/PageFooter.svelte";
   import ActionFinder from "./workflow/ActionFinder.svelte";
   import PrepareOrganize from "./workflow/PrepareOrganize.svelte";
+  import UploadPreviewDialog from "./workflow/UploadPreviewDialog.svelte";
+  import TutorialGuide, { type TutorialStep } from "./workflow/TutorialGuide.svelte";
   import StudioSettingsDrawer from "./workflow/StudioSettingsDrawer.svelte";
   import RegionContextMenu from "./workflow/RegionContextMenu.svelte";
   import PagesSidebar from "./workflow/PagesSidebar.svelte";
@@ -193,6 +195,55 @@
   let detailTab = $state("suggestions");
   let stripFilter = $state<"all" | "todo" | "done">("all");
   let keysOpen = $state(false);
+  let tutorialOpen = $state(false);
+  let tutorialIndex = $state(0);
+  const TUTORIAL_SEEN_KEY = "komatose.tutorialSeen";
+  function openTutorial() {
+    tutorialOpen = true;
+    try { localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch { /* ignore */ }
+  }
+  $effect(() => {
+    // A new letterer opening an empty chapter gets the tour once.
+    if (!studioState || studioState.images.length) return;
+    untrack(() => {
+      try { if (!localStorage.getItem(TUTORIAL_SEEN_KEY)) openTutorial(); } catch { /* ignore */ }
+    });
+  });
+  // The first action of each step pulses until the letterer has used it once.
+  const FIRST_ACTIONS: Record<string, string> = {
+    Prepare: "upload",
+    Translate: "transcribe",
+    Review: "proofread-raw",
+    Clean: "detect-lettering",
+    Typeset: "autofit-all",
+  };
+  const FIRST_ACTIONS_KEY = "komatose.firstActionsUsed";
+  let firstActionsUsed = $state<string[]>([]);
+  onMount(() => {
+    try { firstActionsUsed = JSON.parse(localStorage.getItem(FIRST_ACTIONS_KEY) || "[]"); } catch { /* ignore */ }
+    const used = (e: Event) => {
+      const find = (e.target as HTMLElement | null)?.closest?.("[data-find]")?.getAttribute("data-find");
+      if (!find || !Object.values(FIRST_ACTIONS).includes(find) || firstActionsUsed.includes(find)) return;
+      firstActionsUsed = [...firstActionsUsed, find];
+      try { localStorage.setItem(FIRST_ACTIONS_KEY, JSON.stringify(firstActionsUsed)); } catch { /* ignore */ }
+    };
+    document.addEventListener("click", used, true);
+    document.addEventListener("change", used, true);
+    return () => {
+      document.removeEventListener("click", used, true);
+      document.removeEventListener("change", used, true);
+      delete document.body.dataset.firstAction;
+    };
+  });
+  $effect(() => {
+    const find = FIRST_ACTIONS[step];
+    if (find && !firstActionsUsed.includes(find)) document.body.dataset.firstAction = find;
+    else delete document.body.dataset.firstAction;
+  });
+  function showTutorialStep(item: TutorialStep) {
+    menu = null;
+    void goStudioAction({ id: "tutorial", label: item.title, where: "", was: "", go: item.go ?? {}, find: item.find ?? "", keywords: "" });
+  }
   let moreOpen = $state(false);
   let issuesOpen = $state(false);
   let pageId = $state("");
@@ -2871,15 +2922,19 @@
       )
       .map((f) => `Possible duplicate: ${f.name}`)
       .join(" · ");
-    if (files.length) {
-      step = "Prepare";
-      inspectorTab = "upload";
-      if (!inspectorOpen) {
-        inspectorOpen = true;
-        persistLayout();
-      }
-    }
+    if (files.length) step = "Prepare";
   }
+  function cancelUpload() {
+    pendingFiles = [];
+    insertPosition = {};
+    duplicateWarning = "";
+  }
+  const insertLabel = $derived.by(() => {
+    const id = insertPosition.beforeId ?? insertPosition.afterId;
+    const index = id ? (studioState?.images.findIndex((image) => image.id === id) ?? -1) : -1;
+    if (index < 0) return studioState?.images.length ? "after the existing pages" : "";
+    return `${insertPosition.beforeId ? "before" : "after"} page ${index + 1}`;
+  });
   async function reorder(delta: number) {
     if (!page || !studioState) return;
     const next = [...studioState.images];
@@ -3838,6 +3893,7 @@
     }
     if (go.jobs) jobsPanel = "shown";
     if (go.menu === "keys") keysOpen = true;
+    if (go.menu === "tutorial") openTutorial();
     if (go.menu === "view") openMenu = "view";
     if (go.menu === "issues") issuesOpen = true;
     if (go.menu === "more") moreOpen = true;
@@ -4124,6 +4180,7 @@
     onzoom={nudgeZoom}
     onresetzoom={() => (zoom = 100)}
     onshortcuts={() => (keysOpen = true)}
+    ontutorial={openTutorial}
   >
     <DirectorPanel {apiBase} {scope} pageId={page?.id??null} canEdit={canUpload} {busy} bind:open={directorOpen} bind:models={directorModels} bind:locked={directorLocked} onsettings={()=>settingsSection="director"}
       onnavigate={(id,region,stage)=>{choosePage(id);void switchStep(stage==='clean'?'Clean':stage==='classify'||stage==='typeset'?'Typeset':stage==='prepare'?'Prepare':'Review');if(region)selectLine(region);}} />
@@ -5053,6 +5110,18 @@
   {/if}
 {/snippet}
 <ActionFinder bind:open={finderOpen} bind:query={finderQuery} onpick={(action) => void goStudioAction(action)} />
+<TutorialGuide bind:open={tutorialOpen} bind:index={tutorialIndex} onshow={showTutorialStep} />
+<UploadPreviewDialog
+  bind:files={pendingFiles}
+  {busy}
+  pageMode={studioState?.preferences.pageMode ?? "pages"}
+  {insertLabel}
+  {duplicateWarning}
+  {error}
+  onupload={upload}
+  oncancel={cancelUpload}
+  onaddfiles={addFiles}
+/>
 {#if keysOpen}
   <div class="keys-backdrop" role="presentation" onclick={() => (keysOpen = false)}></div>
   <div class="keys-dialog" role="dialog" aria-label="Keyboard shortcuts" data-find="keys">
@@ -5771,6 +5840,18 @@
     0%, 35% { box-shadow: 0 0 0 3px var(--hud-teal); }
     100% { box-shadow: 0 0 0 0 transparent; }
   }
+  @keyframes first-action-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hud-teal) 70%, transparent); }
+    50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--hud-teal) 0%, transparent); }
+  }
+  :global(body[data-first-action="upload"] label[data-find="upload"]),
+  :global(body[data-first-action="transcribe"] button[data-find="transcribe"]),
+  :global(body[data-first-action="proofread-raw"] button[data-find="proofread-raw"]),
+  :global(body[data-first-action="detect-lettering"] button[data-find="detect-lettering"]),
+  :global(body[data-first-action="autofit-all"] button[data-find="autofit-all"]) {
+    animation: first-action-pulse 1.6s ease-in-out infinite;
+  }
+  :global(body[data-first-action] button[data-find]:disabled) { animation: none; }
   .keys-backdrop {
     position: fixed;
     inset: 0;

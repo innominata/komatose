@@ -31,6 +31,7 @@
     onzoom,
     onresetzoom,
     onshortcuts,
+    ontutorial,
     children,
   }: {
     series: Series;
@@ -57,6 +58,7 @@
     onzoom: (dir: 1 | -1) => void;
     onresetzoom: () => void;
     onshortcuts: () => void;
+    ontutorial: () => void;
     children?: Snippet;
   } = $props();
 
@@ -137,6 +139,7 @@ function meterWidth(count: string | undefined) {
         <button type="button" role="menuitem" onclick={() => { onzoom(-1); openMenu = null; }}>Zoom out</button>
         <button type="button" role="menuitem" onclick={() => { onresetzoom(); openMenu = null; }}>Reset zoom ({zoom}%)</button>
         <button type="button" role="menuitem" onclick={() => { onshortcuts(); openMenu = null; }}>Keyboard shortcuts</button>
+        <button type="button" role="menuitem" onclick={() => { ontutorial(); openMenu = null; }}>Tutorial</button>
       </div>
     {/if}
   </div>

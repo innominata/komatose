@@ -14,7 +14,7 @@ export type StudioGo = {
   jobs?: boolean;
   /** Export step: the chapter export, or the script and metadata viewer. */
   exportView?: "export" | "script";
-  menu?: "more" | "page" | "region" | "view" | "issues" | "keys";
+  menu?: "more" | "page" | "region" | "view" | "issues" | "keys" | "tutorial";
   menuFind?: string;
   kana?: boolean;
 };
@@ -127,7 +127,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Ignore region with a reason / reopen", "Region menu › Ignore · Order & bounds tab", "Order & ignore expander · context menu", tr({ subtab: "details" }), "subtab-details"),
   A("Read this area again with AI", "Region menu › Text", "Region context menu", regionMenu("translate", "Read this area again")),
   A("Copy source / copy English", "Region menu", "Region context menu", regionMenu("translate", "Copy source")),
-  A("Delete region", "Region menu · Order & bounds tab · Delete key", "Region context menu", regionMenu("translate", "Delete region")),
+  A("Delete region", "Region menu · Order & bounds tab · Delete key", "Region context menu", regionMenu("translate", "Delete region"), "delete-region"),
 
   A("Review translations (go to review)", "Review step", "Translate panel button · palette", { stage: "review", tab: "queue" }, "tab-review-queue", "approve queue"),
   A("Proofread edited English", "Review › Stage bar (this page) · Translate › More", "Chapter/Page menus · palette · Optional tools", { stage: "review", scope: "page" }, "proofread-english"),
@@ -212,6 +212,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Filter pages (to do / done)", "Pages panel", "(new)", { stage: "translate" }, "strip-filter"),
   A("Save status & draft conflicts", "Top bar · conflict banner", "Docbar · conflict boxes", {}, "stepper"),
   A("Keyboard shortcuts", "View menu › Keyboard shortcuts", "(tool titles)", { menu: "keys" }, "keys"),
+  A("Tutorial: basic tasks", "View menu › Tutorial", "(new)", { menu: "tutorial" }, "tutorial", "help guide tour onboarding getting started"),
 ];
 
 /** Each word must appear somewhere in the label, the new home, the old home, or the keywords. */
