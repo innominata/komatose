@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdropClose } from '$lib/backdropClose';
   import "./studio-controls.css";
   import { tick } from "svelte";
 
@@ -99,9 +100,7 @@
   class="hud-modal hud-dialog-controls region-compare"
   bind:this={dialog}
   aria-labelledby="region-compare-title"
-  onclick={(e) => {
-    if (e.target === dialog) close();
-  }}
+  use:backdropClose={close}
   oncancel={(e) => {
     e.preventDefault();
     close();

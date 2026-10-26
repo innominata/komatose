@@ -13,7 +13,8 @@
     "id": "translation-worker"
   },
   "setup": {
-    "executable": "python3",
+    "executable": "{root}/.venv-review/bin/python",
+    "executableEnv": "SCAN_REVIEW_PYTHON",
     "args": [
       "{root}/scripts/install-translation-models.py",
       "--model",

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdropClose } from '$lib/backdropClose';
   import { onMount } from "svelte";
   import { activeRegionKinds, regionKindLabel } from "$lib/regionCatalog";
   import { groupFontsByCategory } from "$lib/fontCategories";
@@ -195,8 +196,8 @@
     if (node.open) loadDraft();
     else if (!embedded) onclose?.();
   }}
-  onclick={(e: MouseEvent) => {
-    if (!embedded && e.target === dialogEl) cancel();
+  use:backdropClose={() => {
+    if (!embedded) cancel();
   }}
   oncancel={(e: Event) => {
     e.preventDefault();

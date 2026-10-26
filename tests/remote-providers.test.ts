@@ -80,6 +80,8 @@ test('searchProviders matches name, id, group, base URL, key env and model ids',
 test('providerById resolves catalog entries and misses unknown ids', () => {
 	assert.equal(providerById('deepseek')?.baseUrl, 'https://api.deepseek.com/v1');
 	assert.equal(providerById('ollama')?.apiKeyEnv, '');
+	assert.equal(providerById('llama-swap')?.baseUrl, 'http://127.0.0.1:8081/v1');
+	assert.equal(providerById('llama-swap')?.apiKeyEnv, 'LLAMASWAP_API_KEY');
 	assert.equal(providerById('does-not-exist'), undefined);
 	assert.equal(providerById(''), undefined);
 	for (const provider of REMOTE_PROVIDERS) assert.equal(providerById(provider.id), provider);

@@ -4,6 +4,7 @@ import type { TaskEngine } from "../aiTasks";
 import type { DirectorPolicy } from "../director";
 import { ModelTaskError } from "../modelTasks";
 import { executeModelTask } from "./modelTaskRunner";
+import { directorOutputBudget } from "./modelAdapters";
 import { resolveLiveAssistant } from "./assistantRoute";
 import {
   directorContext,
@@ -90,6 +91,7 @@ export function directorModel(
         });
       let correction = "";
       let maxTokens: number | undefined;
+      let budget = 0;
       let timedOut = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         signal.throwIfAborted();
@@ -103,6 +105,7 @@ export function directorModel(
               )
               .run(ctx.episodeId, ctx.imageId);
           const row = resolveLiveAssistant(model.engine, model.model).row;
+          budget = directorOutputBudget(row);
           const input = {
             system,
             prompt: JSON.stringify({
@@ -159,7 +162,7 @@ export function directorModel(
             !correction
           ) {
             if (truncated.test(message)) {
-              maxTokens = 12000;
+              maxTokens = 2 * budget;
               correction = "Your last response was cut off before the JSON closed. Keep every text field to one or two short sentences, and return exactly the requested JSON schema.";
             } else
               correction = `Your last response was invalid: ${message}. Return exactly the requested JSON schema.`;

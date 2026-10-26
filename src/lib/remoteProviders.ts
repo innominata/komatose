@@ -386,12 +386,20 @@ export const REMOTE_PROVIDERS: RemoteProvider[] = [
 		notes: 'Serve any loaded model from the Developer tab; no key by default.',
 	},
 	{
+		id: 'llama-swap',
+		name: 'llama-swap',
+		group: 'local',
+		baseUrl: 'http://127.0.0.1:8081/v1',
+		apiKeyEnv: 'LLAMASWAP_API_KEY',
+		notes: 'Model ids are the llama-swap config keys; leave the key variable blank if apiKeys is unset.',
+	},
+	{
 		id: 'llamacpp',
-		name: 'llama.cpp / llama-swap',
+		name: 'llama.cpp server',
 		group: 'local',
 		baseUrl: 'http://127.0.0.1:8080/v1',
 		apiKeyEnv: '',
-		notes: 'Komatose managed chat models use their own ports; this is for an external server.',
+		notes: 'Komatose managed chat models use their own ports; this is for an external server. Set a key variable if it runs with --api-key.',
 	},
 	{
 		id: 'vllm',

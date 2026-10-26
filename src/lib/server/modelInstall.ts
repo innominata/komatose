@@ -5,7 +5,7 @@ import { maintainPythonRuntime } from './pythonRuntimeMaintenance';
 import { modelPackage } from './modelPackages';
 import { operatePackage } from './modelSupervisor';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { INSTALL_TARGETS, installTarget, type InstallTarget } from '../installCatalog';
@@ -43,6 +43,8 @@ export type InstallJob = {
 	endedAt?: number;
 	exitCode?: number | null;
 	error?: string;
+	/** Full output of this run, kept on disk for troubleshooting (data/logs/install-<id>.log). */
+	logPath?: string;
 };
 
 export type InstallStatus = {
@@ -456,9 +458,33 @@ function jobs() {
 	return store.jobs;
 }
 
+/** Start this run's log file; the previous run's log is kept as `.prev.log`. */
+function openInstallLog(job: InstallJob) {
+	try {
+		const dir = join(DATA_DIR, 'logs');
+		mkdirSync(dir, { recursive: true });
+		const path = join(dir, `install-${job.targetId.replace(/[^\w.-]+/g, '_')}.log`);
+		if (existsSync(path)) renameSync(path, path.replace(/\.log$/, '.prev.log'));
+		writeFileSync(path, `# ${new Date(job.startedAt).toISOString()} install ${job.targetId}\n# ${job.command}\n`);
+		job.logPath = path;
+	} catch { /* Logging must never block an install. */ }
+}
+
+function logInstall(job: InstallJob, text: string) {
+	if (!job.logPath) return;
+	try { appendFileSync(job.logPath, text + '\n'); } catch { /* Disk trouble is not an install failure. */ }
+}
+
+function closeInstallLog(job: InstallJob) {
+	const seconds = Math.round(((job.endedAt ?? Date.now()) - job.startedAt) / 1000);
+	logInstall(job, `# ${new Date().toISOString()} ${job.state} after ${seconds}s` +
+		(job.exitCode != null ? ` · exit ${job.exitCode}` : '') + (job.error ? ` · ${job.error}` : ''));
+}
+
 function pushLine(job: InstallJob, raw: string) {
 	const line = raw.replace(/\s+$/, '').slice(0, MAX_LINE_CHARS);
 	if (!line) return;
+	logInstall(job, line);
 	job.lines.push(line);
 	if (job.lines.length > MAX_LINES) job.lines.splice(0, job.lines.length - MAX_LINES);
 }
@@ -479,11 +505,13 @@ export function startInstall(targetId: string, upgradeRuntime = false): InstallJ
     const controller = new AbortController();
     const job: InstallJob = { targetId, command: `Install ${pkg.manifest.name}`, state: 'running', lines: [], startedAt: Date.now() };
     jobs().set(targetId, job);
+    openInstallLog(job);
     packageInstalls.set(targetId, controller);
     void operatePackage(targetId, 'install', controller.signal, message => pushLine(job, message)).then(() => {
       job.state = 'done'; job.exitCode = 0;
     }, error => { job.state = 'failed'; job.error = error instanceof Error ? error.message : String(error); }).finally(() => {
       job.endedAt = Date.now(); packageInstalls.delete(targetId);
+      closeInstallLog(job);
     });
     return job;
   }
@@ -501,6 +529,7 @@ export function startInstall(targetId: string, upgradeRuntime = false): InstallJ
 	const command = [bin, ...args].map(sh).join(' ');
 	const job: InstallJob = { targetId, command, state: 'running', lines: [], startedAt: Date.now() };
 	jobs().set(targetId, job);
+	openInstallLog(job);
 
   const controller = new AbortController();
   runtimeControllers.set(targetId, controller);
@@ -538,6 +567,7 @@ export function startInstall(targetId: string, upgradeRuntime = false): InstallJ
 		job.exitCode = exitCode ?? null;
 		job.error = error;
 		job.endedAt = Date.now();
+		closeInstallLog(job);
 	};
 	const killTimer = setTimeout(() => {
 		killInstallChild(child, 'SIGKILL');
@@ -580,6 +610,7 @@ export function startInstall(targetId: string, upgradeRuntime = false): InstallJ
       release?.(); runtimeControllers.delete(targetId);
       job.state = 'failed'; job.endedAt = Date.now();
       job.error = error instanceof Error ? error.message : String(error);
+      closeInstallLog(job);
     }
   })();
 

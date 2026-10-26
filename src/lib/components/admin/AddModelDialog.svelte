@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { backdropClose } from '$lib/backdropClose';
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import {
@@ -25,13 +26,20 @@
 		{ id: 'gemma4-12b', label: GEMMA4_12B_LABEL, slug: GEMMA4_12B_ID, note: 'Bring your own GGUF.' },
 		{ id: 'gemma4-e2b', label: GEMMA4_E2B_LABEL, slug: GEMMA4_E2B_ID, note: 'Tiny; CPU-friendly.' },
 		{ id: 'generic', label: 'Other llama.cpp model', slug: '', note: 'Any GGUF with the generic launch preset.' },
+		{ id: 'llamaswap', label: 'llama-swap', slug: '', note: 'Use a model from the llama-swap proxy on this machine.' },
 		{ id: 'external', label: 'Already-running server', slug: '', note: 'Point at an OpenAI-compatible /v1 you start yourself.' },
 	];
+	/** Presets that point at a server someone else runs, so Komatose sends no launch recipe. */
+	const EXTERNAL_ENDPOINTS: Record<string, { url: string; keyVar: string }> = {
+		llamaswap: { url: 'http://127.0.0.1:8081/v1', keyVar: 'LLAMASWAP_API_KEY' },
+		external: { url: 'http://127.0.0.1:8080/v1', keyVar: '' },
+	};
 	let localPreset = $state('qwen38');
 	let localName = $state('');
 	let localSlug = $state('');
 	let localWeights = $state('');
 	let localUrl = $state('http://127.0.0.1:8081/v1');
+	let localKeyVar = $state('LLAMASWAP_API_KEY');
 	let localDevice = $state('auto');
 	let localPort = $state(18090);
 	let localCatalog = $state<Record<string, ManagedLaunch>>({});
@@ -98,7 +106,7 @@
 	// the server, so the local step waits for one instead of failing on submit.
 	const localNeedsWeights = $derived(
 		step === 'local' &&
-			localPreset !== 'external' &&
+			!EXTERNAL_ENDPOINTS[localPreset] &&
 			!localWeights.trim() &&
 			!localCatalog[launchPresetKey(localPreset)]?.modelPath,
 	);
@@ -108,6 +116,11 @@
 		const preset = LOCAL_PRESETS.find((item) => item.id === id);
 		localSlug = preset?.slug || '';
 		localName = preset?.label || '';
+		const endpoint = EXTERNAL_ENDPOINTS[id];
+		if (endpoint) {
+			localUrl = endpoint.url;
+			localKeyVar = endpoint.keyVar;
+		}
 		probe = null;
 	}
 	function chooseProvider(item: Provider) {
@@ -209,8 +222,8 @@
 
 	async function addLocal() {
 		await run(async () => {
-			if (localPreset === 'external') {
-				await apiPost('/api/admin/models', { action: 'add-local', name: localName, slug: localSlug, baseUrl: localUrl, apiKeyEnv: 'LLAMASWAP_API_KEY' });
+			if (EXTERNAL_ENDPOINTS[localPreset]) {
+				await apiPost('/api/admin/models', { action: 'add-local', name: localName, slug: localSlug, baseUrl: localUrl, apiKeyEnv: localKeyVar.trim() });
 			} else {
 				await apiPost('/api/admin/models', {
 					action: 'add-local',
@@ -258,8 +271,10 @@
 		if (!slugs.length) return;
 		await run(async () => {
 			for (const slug of slugs) {
+				// Local servers often run without a key; a local row may leave the variable blank
+				// where a remote row would fall back to OPENAI_API_KEY.
 				await apiPost('/api/admin/models', {
-					action: 'add-remote',
+					action: provider?.group === 'local' ? 'add-local' : 'add-remote',
 					name: slug.split('/').pop() || slug,
 					slug,
 					baseUrl: remoteBase,
@@ -304,7 +319,7 @@
 {#if open}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="dlg-wrap" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) $ui.addOpen = false; }}>
+	<div class="dlg-wrap" role="presentation" use:backdropClose={() => { $ui.addOpen = false; }}>
 		<div class="dlg wide" role="dialog" tabindex="-1" aria-label="Add model" onclick={(e) => e.stopPropagation()}>
 			<div class="kicker">Add model</div>
 			<div class="seg" style="margin:.4rem 0 1rem">
@@ -341,8 +356,9 @@
 				<div class="fields" style="margin-top:.8rem">
 					<label class="field"><span>Name</span><input type="text" bind:value={localName} /></label>
 					<label class="field"><span>Model id</span><input type="text" bind:value={localSlug} /></label>
-					{#if localPreset === 'external'}
+					{#if EXTERNAL_ENDPOINTS[localPreset]}
 						<label class="field"><span>Base URL</span><input type="text" bind:value={localUrl} /></label>
+						<label class="field"><span>API key variable</span><input type="text" bind:value={localKeyVar} placeholder="blank if the server has no key" /></label>
 					{:else}
 						<label class="field"><span>Weights (.gguf)</span><input type="text" bind:value={localWeights} placeholder="~/models/model.gguf" /></label>
 						<label class="field"><span>Device</span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdropClose } from '$lib/backdropClose';
   import { normalizeHex, normalizeRegionKinds, type RegionKind } from "$lib/regionCatalog";
 
   let {
@@ -127,8 +128,8 @@
   role={embedded ? "dialog" : undefined}
   aria-label={embedded ? "Region colors" : undefined}
   aria-labelledby="region-color-title"
-  onclick={(e: MouseEvent) => {
-    if (!embedded && e.target === dialog) close();
+  use:backdropClose={() => {
+    if (!embedded) close();
   }}
 >
   <h3 id="region-color-title">Region colors</h3>

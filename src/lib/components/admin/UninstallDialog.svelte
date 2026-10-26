@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { backdropClose } from '$lib/backdropClose';
 	import { get } from 'svelte/store';
 	import {
 		hub,
@@ -63,7 +64,7 @@
 {#if id && target}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="dlg-wrap" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) openUninstall(null); }}>
+	<div class="dlg-wrap" role="presentation" use:backdropClose={() => openUninstall(null)}>
 		<div class="dlg" role="dialog" tabindex="-1" aria-label="Uninstall {target.label}" onclick={(e) => e.stopPropagation()}>
 			<div class="kicker">Uninstall</div>
 			<h3>{target.label}</h3>

@@ -6,6 +6,13 @@ import { withAssistantHttp } from './openaiHttp';
 import { modelHttpConfig } from './modelConnection';
 
 export type TaskInput = Record<string, any>;
+
+/** Default output budget for a Director reply. Local llama.cpp models write long
+ * coverage replies (full-precision boxes and polygons) and have room to spare;
+ * remote APIs keep the smaller budget their limits accept. */
+export function directorOutputBudget(row: Pick<ModelRow, 'runtime'>): number {
+  return row.runtime === 'llamacpp' ? 16384 : 6000;
+}
 const unsupported = (task: string) => { throw new ModelTaskError('unsupported', `This adapter does not implement ${task}`); };
 
 export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow, task: ModelTaskId, input: TaskInput, abort?: AbortSignal, retain?: (release: () => void) => void): Promise<any> {
@@ -88,7 +95,7 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
             // Director sends PNGs: label each image by its bytes, not as JPEG.
             ...images.map(bytes => ({ type: 'image_url', image_url: { url: `data:image/${bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : 'jpeg'};base64,${bytes.toString('base64')}` } }))] },
         ];
-        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: input.maxTokens ?? 6000, thinking: input.thinking,
+        const output = await llm.chatCompletions(messages, { model: opts.model, abort, maxTokens: input.maxTokens ?? directorOutputBudget(row), thinking: input.thinking,
           looseSchema: input.looseSchema === true,
           schema: input.schema ? { type: 'json_schema', json_schema: { name: task, strict: true, schema: input.schema } } : undefined });
         return llm.extractJsonObject(output);

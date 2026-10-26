@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { backdropClose } from '$lib/backdropClose';
   let {src,label,onclose}:{src:string;label:string;onclose:()=>void}=$props();
   let dialog=$state<HTMLDialogElement>();
   let actualSize=$state(false);
@@ -6,7 +7,7 @@
   $effect(()=>{if(dialog && !dialog.open) dialog.showModal();});
 </script>
 
-<dialog bind:this={dialog} aria-label="Director log image" onclose={onclose} onclick={event=>{if(event.target===dialog) dialog?.close();}}>
+<dialog bind:this={dialog} aria-label="Director log image" onclose={onclose} use:backdropClose={()=>dialog?.close()}>
   <header>
     <span>{label}{dimensions ? ` · ${dimensions}` : ''}</span>
     <div>
