@@ -87,6 +87,7 @@ const states: States = (globalState.__scanImageEditStates ??= {
   'qwen-image-edit-2511-lightning': freshState(),
   'qwen-image-edit-2511-q3': freshState(),
   'qwen-image-edit-2511-q2': freshState(),
+  'flux-3-image-klein': freshState(),
 });
 
 function modelState(id: ImageEditModelId): ModelState {
@@ -195,7 +196,7 @@ export function installedImageEdit(id: ImageEditModelId): Recipe | null {
     const encoderFile = String(marker?.textEncoder?.file || model.encoderFile);
     const encoderVision = String(marker?.textEncoder?.vision || model.encoderVisionFile);
     if (!existsSync(join(model.encoderDir, encoderFile))) return null;
-    if (!existsSync(join(model.encoderDir, encoderVision))) return null;
+    if (encoderVision && !existsSync(join(model.encoderDir, encoderVision))) return null;
     if (!existsSync(bin())) return null;
     const editor = imageEditModelOf(id);
     if (editor.lora) {
@@ -389,7 +390,7 @@ function serverArgs(recipe: Recipe, listenPort: number): string[] {
     '--diffusion-model', join(model.dir, recipe.diffusion),
     '--vae', join(model.dir, recipe.vae),
     '--llm', join(model.encoderDir, model.encoderFile),
-    '--llm_vision', join(model.encoderDir, model.encoderVisionFile),
+    ...(model.encoderVisionFile ? ['--llm_vision', join(model.encoderDir, model.encoderVisionFile)] : []),
     '--listen-ip', '127.0.0.1',
     '--listen-port', String(listenPort),
   ];
@@ -397,7 +398,7 @@ function serverArgs(recipe: Recipe, listenPort: number): string[] {
   if (gpu) {
     const plan = placeImageEditModules(card, {
       diffusion: fileMiB(join(model.dir, recipe.diffusion)),
-      te: fileMiB(join(model.encoderDir, model.encoderFile)) + fileMiB(join(model.encoderDir, model.encoderVisionFile)),
+      te: fileMiB(join(model.encoderDir, model.encoderFile)) + (model.encoderVisionFile ? fileMiB(join(model.encoderDir, model.encoderVisionFile)) : 0),
       vae: fileMiB(join(model.dir, recipe.vae)),
     }, ggmlDevices(0).devices);
     args.push('--backend', plan.backend, '--diffusion-fa');

@@ -305,6 +305,7 @@ test('the editor loads its own weights, encoder and sampling defaults', async ()
     ['qwen-image-edit-2511-lightning', false, false],
     ['qwen-image-edit-2511-q3', false, false],
     ['qwen-image-edit-2511-q2', false, false],
+    ['flux-3-image-klein', false, false],
   ]);
   assert.equal(editStatus.quant, 'q4_k_m');
 });
@@ -375,6 +376,7 @@ test('a running 2511 server is reused for a Lightning clean', async () => {
       ['qwen-image-edit-2511-lightning', true, true],
       ['qwen-image-edit-2511-q3', false, false],
       ['qwen-image-edit-2511-q2', false, false],
+      ['flux-3-image-klein', false, false],
     ]);
 
     process.env.SCAN_IMAGE_EDIT_LIGHTNING_CFG = '1.5';

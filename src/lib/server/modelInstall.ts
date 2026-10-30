@@ -1,3 +1,5 @@
+import { installedImageEdit } from './imageEdit';
+import { flux3Dir } from './imageEditModels';
 import { deciderInstalled, deciderRuntimeDir, deciderModelsDir, deciderBinary } from './deciderRuntime';
 import { modelDefaultFor, setModelDefault } from './modelDefaultStore';
 import { activeModelUses, lockModelLifecycle } from './modelUsage';
@@ -204,6 +206,10 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-image-edit-model.py', imageEditInstallArgs(target.id as ImageEditModelId));
 			break;
+		case 'flux-3-image-klein':
+			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
+			args = script('install-flux3-klein.py');
+			break;
 		case 'aot':
 		case 'lama-manga':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
@@ -380,6 +386,12 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 				? { installed: true }
 				: { installed: false, detail: 'sd-server is not built' };
 		case 'qwen-image-edit-2511-q3':
+		case 'flux-3-image-klein':
+			if (!installedImageEdit('flux-3-image-klein'))
+				return existsSync(sdServerBin())
+					? { installed: false, detail: 'Weights not downloaded' }
+					: { installed: false, detail: 'sd-server is not built (install Qwen-Image-Edit 2511 first)' };
+			return { installed: true };
 		case 'qwen-image-edit-2511-q2': {
 			const marker = quantMarker(target.id);
 			if (!marker || !existsSync(join(imageEditModelDir('qwen-image-edit-2511'), marker)))
@@ -1034,6 +1046,11 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		warnings.push('A running editor must be stopped first.');
 		warnings.push('Qwen-Image-Edit 2511 Lightning uses these weights.');
 		warnings.push('The Q3_K_M and Q2_K editors live in this directory and are removed with it.');
+		return { paths, alsoRemoves, warnings };
+	}
+	if (targetId === 'flux-3-image-klein') {
+		paths.push(describePath(flux3Dir(), 'FLUX 3 Image Klein weights, VAE and encoder'));
+		warnings.push('A running editor must be stopped first.');
 		return { paths, alsoRemoves, warnings };
 	}
 	const marker = quantMarker(targetId);

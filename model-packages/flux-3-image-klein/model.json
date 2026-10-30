@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "flux-3-image-klein",
+  "name": "FLUX 3 Image Klein",
+  "revision": "1",
+  "access": "local_http",
+  "adapter": {
+    "id": "image-editor"
+  },
+  "config": {
+    "backend": "flux-3-image-klein",
+    "aliases": [
+      "flux3-klein"
+    ]
+  },
+  "service": {
+    "id": "image-editor-service"
+  },
+  "setup": {
+    "executable": "python3",
+    "args": [
+      "{root}/scripts/install-flux3-klein.py"
+    ]
+  },
+  "dependencies": [
+    "env-workflow"
+  ],
+  "environment": [
+    "SCAN_IMAGE_MODELS_DIR",
+    "SCAN_REVIEW_LLAMA_SERVER"
+  ],
+  "artifactDirectories": [
+    {
+      "path": "{root}/data/models/image",
+      "rootEnv": "SCAN_IMAGE_MODELS_DIR",
+      "subdirectory": "flux-3-image-klein"
+    }
+  ]
+}

@@ -3,7 +3,8 @@ export type ImageEditModelId =
   | 'qwen-image-edit-2511'
   | 'qwen-image-edit-2511-lightning'
   | 'qwen-image-edit-2511-q3'
-  | 'qwen-image-edit-2511-q2';
+  | 'qwen-image-edit-2511-q2'
+  | 'flux-3-image-klein';
 
 /** 8-step distillation of Qwen-Image-Edit-2511. It is applied on top of the base weights. */
 export const IMAGE_EDIT_LIGHTNING_LORA = 'Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors';
@@ -85,6 +86,17 @@ export const IMAGE_EDIT_MODELS: ImageEditModel[] = [
     envPrefix: 'SCAN_IMAGE_EDIT_Q2',
     sampling: { steps: 20, cfg: 2.5, denoise: 1, flowShift: 3 },
     quant: 'q2_k',
+  },
+  {
+    id: 'flux-3-image-klein',
+    label: 'FLUX 3 Image Klein',
+    method: 'flux3-klein',
+    methodLabel: 'FLUX 3 Image Klein · edit artwork',
+    summary: 'Black Forest Labs 5.6B editor (Q8_0, ~11 GB with its encoder). Distilled: 16 steps.',
+    envPrefix: 'SCAN_IMAGE_EDIT_FLUX3',
+    // stable-diffusion.cpp's FLUX.3 docs: the distilled model runs 16 euler steps at CFG 1.0,
+    // with the server's own time shift (6.93).
+    sampling: { steps: 16, cfg: 1, denoise: 1 },
   },
 ];
 

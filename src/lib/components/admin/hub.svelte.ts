@@ -660,6 +660,7 @@ const TARGET_TASKS: Record<string, AdminTask['id'][]> = {
 	'qwen-image-edit-2511-lightning': ['clean'],
 	'qwen-image-edit-2511-q3': ['clean'],
 	'qwen-image-edit-2511-q2': ['clean'],
+	'flux-3-image-klein': ['clean'],
 	aot: ['clean'],
 	'lama-manga': ['clean'],
 };

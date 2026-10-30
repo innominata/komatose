@@ -245,13 +245,15 @@ export function imageEditVulkanDevice() {
 }
 
 /**
- * One port per weight set: 2511 and Lightning share the base port, and each smaller
- * quant takes the next one so it can run beside them for comparison.
+ * One port per weight set: 2511 and Lightning share the base port, and every other editor
+ * (smaller quants, FLUX 3) takes one from base + 9 up, so it can run beside them for
+ * comparison. The gap keeps clear of 18093 (managed chat) and 18094 (manga-ocr NAR small).
  */
 export function imageEditListenPort(id?: string) {
   const base = Math.max(1, Number(process.env.SCAN_IMAGE_EDIT_PORT || process.env.SCAN_IMAGE_PORT) || 18092);
   const host = IMAGE_EDIT_MODELS.find((model) => model.id === id)?.weightHost ?? id;
-  return base + Math.max(0, imageEditWeightHosts().indexOf(host as ImageEditModelId));
+  const index = Math.max(0, imageEditWeightHosts().indexOf(host as ImageEditModelId));
+  return index === 0 ? base : base + 8 + index;
 }
 
 function imageEditWeightHosts(): ImageEditModelId[] {

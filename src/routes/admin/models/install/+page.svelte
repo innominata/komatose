@@ -22,7 +22,7 @@
 		{ id: 'essentials', name: 'Essentials', icon: 'bi-lightning-charge', blurb: 'Detect, transcribe and fill on the CPU. Pair with any chat model.', items: ['rtdetr', 'ctd', 'hayai-ocr-v2', 'paddleocr-vl-1.6', 'lama-manga'] },
 		{ id: 'local-translate', name: 'Local translation', icon: 'bi-gpu-card', blurb: 'Run translation and notes on this machine.', items: ['qwen3.8-27b', 'hy-mt2-manga-v5'] },
 		{ id: 'light-chat', name: 'Light chat & vision', icon: 'bi-feather', blurb: 'Qwen3-VL 8B — a working chat model that fits modest hardware, even CPU.', items: ['qwen3-vl-8b'] },
-		{ id: 'local-clean', name: 'Local cleaning', icon: 'bi-magic', blurb: 'Redraw artwork under lettering without a remote service.', items: ['koharu', 'qwen-image-edit-2511', 'qwen-image-edit-2511-lightning', 'qwen-image-edit-2511-q3', 'qwen-image-edit-2511-q2', 'lama-manga'] },
+		{ id: 'local-clean', name: 'Local cleaning', icon: 'bi-magic', blurb: 'Redraw artwork under lettering without a remote service.', items: ['koharu', 'qwen-image-edit-2511', 'qwen-image-edit-2511-lightning', 'qwen-image-edit-2511-q3', 'qwen-image-edit-2511-q2', 'flux-3-image-klein', 'lama-manga'] },
 	];
 
 	function togglePick(id: string, on: boolean) {

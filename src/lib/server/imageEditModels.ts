@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { IMAGE_EDIT_MODELS, type ImageEditModelId } from '../imageEdit';
-import { imageEditModelDir, imageEditTextEncoderDir } from './gpuMode';
+import { imageEditModelDir, imageEditModelsDir, imageEditTextEncoderDir } from './gpuMode';
+
+export const flux3Dir = () => join(imageEditModelsDir(), 'flux-3-image-klein');
 
 /**
  * Where the artwork editor's weights live and how stable-diffusion.cpp must load them.
@@ -16,6 +18,7 @@ export type ImageEditModelFiles = {
   /** Text encoder directory, and the files inside it the server loads. */
   encoderDir: string;
   encoderFile: string;
+  /** Vision projector loaded with `--llm_vision`; empty when the architecture needs none. */
   encoderVisionFile: string;
   /** Extra `--model-args` stable-diffusion.cpp needs for this architecture. */
   modelArgs: string[];
@@ -59,6 +62,22 @@ export function imageEditModelFiles(): Record<ImageEditModelId, ImageEditModelFi
     },
     'qwen-image-edit-2511-q3': quantVariant('qwen-image-edit-2511-q3', 'Qwen-Image-Edit 2511 Q3_K_M', 'q3_k_m', 'Q3_K_M'),
     'qwen-image-edit-2511-q2': quantVariant('qwen-image-edit-2511-q2', 'Qwen-Image-Edit 2511 Q2_K', 'q2_k', 'Q2_K'),
+    // FLUX.3 Image Klein: a FLUX.3 transformer, the FLUX.2 VAE, and Qwen3-VL 4B as its text
+    // encoder (stable-diffusion.cpp docs/flux3.md). The reference image goes through the VAE,
+    // so the encoder needs no vision projector.
+    'flux-3-image-klein': {
+      id: 'flux-3-image-klein',
+      label: 'FLUX 3 Image Klein',
+      // Its own folder: SCAN_IMAGE_EDIT_MODEL_DIR names the Qwen weights, not every editor's.
+      dir: flux3Dir(),
+      marker: 'installed.json',
+      encoderDir: flux3Dir(),
+      encoderFile: process.env.SCAN_IMAGE_EDIT_FLUX3_TEXT_ENCODER || 'Qwen3VL-4B-Instruct-Q8_0.gguf',
+      encoderVisionFile: '',
+      modelArgs: [],
+      flags: [],
+      fallback: { diffusion: 'flux3-image-klein-Q8_0.gguf', vae: 'flux2-vae.safetensors' },
+    },
   };
 }
 

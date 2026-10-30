@@ -395,6 +395,17 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		requires: ['env-workflow'],
 		unlocks: 'comparing the smallest editor quant in Clean',
 	},
+	{
+		id: 'flux-3-image-klein',
+		group: 'image-edit',
+		label: 'FLUX 3 Image Klein',
+		summary:
+			'Black Forest Labs 5.6B instruction editor (Q8_0), with the FLUX.2 VAE and Qwen3-VL 4B encoder. Uses the sd-server Qwen-Image-Edit builds. FLUX Kommunity License.',
+		diskBytes: 6_151_716_032 + 336_211_292 + 4_280_406_144,
+		memoryBytes: 13 * GB,
+		requires: ['env-workflow'],
+		unlocks: 'comparing a second editor family in Clean',
+	},
 
 	// --- Inpainting -----------------------------------------------------------
 	{
