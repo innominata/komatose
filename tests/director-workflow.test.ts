@@ -2065,6 +2065,8 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
   const {readAsset,assetPath} = await import('../src/lib/server/workflowStore');
   const editor = 'qwen-image-edit-2511-lightning';
   await fixturePasses(editor,['cleaning']);
+  // Nothing is built in: bubbles inpaint with the first model that passed Inpaint.
+  await fixturePasses('lama-manga',['inpaint']);
   type Options = {batch?:number[];qwen?:number[];final?:number[];bubble?:boolean;crossed?:boolean;
     damageBubble?:boolean;contradictoryQwen?:boolean;failBatch?:boolean;locked?:boolean;cancelAfterFill?:boolean;noEditor?:boolean;finalDispute?:boolean;failPlan?:boolean;
     persistentFinalDispute?:boolean;finalRegionalSafe?:boolean;finalAffected?:number[];tightPolygon?:boolean;failFinalRegional?:boolean;finalProblem?:'remaining-text'|'artwork-damage';
@@ -4428,7 +4430,7 @@ test("Director turns duplicate rendering off, retains text/layout and supports u
         skipThumbnail: true,
       },
     );
-    assert.equal(psd.children!.filter((layer) => layer.text).length, 1);
+    assert.equal(psd.children!.filter((layer) => layer.text && !layer.name?.startsWith("Komatose export data")).length, 1);
     const { readiness } = await import("../src/lib/server/workflowService");
     const issues = readiness(
       page.series,

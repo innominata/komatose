@@ -9,7 +9,13 @@ import { listImages, toImage } from '$lib/server/queries';
 import { broadcast } from '$lib/server/realtime';
 import { packForStitch, removeImageFile, saveImageFile, sniffMime, stitchPack, STITCH_MIN_COUNT } from '$lib/server/storage';
 import sharp from 'sharp';
-import { ensurePageThumbnail } from '$lib/server/workflowService';
+import { isPsd, psdToPng, readLayeredPsd } from '$lib/server/replaceImage';
+import { createImportedRegions, layerToRegion, pageDpi, psdPageParts, psdTextLayers, psdTxt2, setUploadedArtwork } from '$lib/server/psdRegions';
+import { listFonts } from '$lib/server/typesetting';
+import type { Psd } from 'ag-psd';
+
+type PsdUpload = { layered: Psd; artwork: Buffer | null; name: string };
+import { ensurePageThumbnail, preparePage } from '$lib/server/workflowService';
 import { hash, storeAsset, putDoc, getDoc } from '$lib/server/workflowStore';
 import { readFile } from 'node:fs/promises';
 import { origImagePath } from '$lib/server/storage';
@@ -78,15 +84,29 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		const seen = new Set<string>();
 		for (const img of existing) { try { seen.add(hash(await readFile(origImagePath(series.slug,episode.slug,img.filename)))); } catch {} }
 		for (const file of files) {
-			const bytes = Buffer.from(await file.arrayBuffer());
+			let bytes: Buffer = Buffer.from(await file.arrayBuffer());
+			let name = file.name;
+			let psd: PsdUpload | undefined;
+			// Photoshop files become PNG pages: the raw image, its artwork and its text (see psdPageParts).
+			if (isPsd(bytes, name)) {
+				const source = bytes;
+				const layered = readLayeredPsd(source);
+				const parts = await psdPageParts(layered, () => psdToPng(source));
+				const density = layered.imageResources?.resolutionInfo?.horizontalResolution;
+				bytes = density && density >= 10 && density <= 2400 ? await sharp(parts.raw).withMetadata({ density }).png().toBuffer() : parts.raw;
+				name = name.replace(/\.psd$/i, '') + '.png';
+				psd = { layered, artwork: parts.artwork, name: file.name };
+				warnings.push(...parts.notes.map((n) => `${file.name}: ${n}`));
+			}
 			const digest = await storeAsset(bytes);
 			if (seen.has(digest)) warnings.push(`Duplicate content: ${file.name}`);
-			seen.add(digest); uploadHashes.push({ hash: digest, originalName:file.name });
-			const mime = sniffMime(file.name, file.type);
+			seen.add(digest); uploadHashes.push({ hash: digest, originalName:name });
+			const mime = sniffMime(name, file.type);
 			const meta = await sharp(bytes).metadata();
 			incoming.push({
+				psd,
 				bytes,
-				originalName: file.name,
+				originalName: name,
 				mime,
 				width: meta.width || 0,
 				height: meta.height || 0
@@ -130,6 +150,23 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			const image = toImage(row);
 			created.push(image);
 			broadcast(episode.id, { type: 'image:upsert', image });
+			const psd = pack.length === 1 ? (pack[0] as { psd?: PsdUpload }).psd : undefined;
+			if (pack.length > 1 && pack.some((item) => (item as { psd?: PsdUpload }).psd))
+				warnings.push('PSDs stitched into a strip keep only their image; upload them separately to keep their artwork and text.');
+			if (psd) {
+				// The raw page is prepared first; the PSD's artwork and text go on top of it.
+				await preparePage(series, episode, image);
+				if (psd.artwork) setUploadedArtwork(episode.id, image.id, await storeAsset(psd.artwork));
+				const regionWarnings: string[] = [];
+				const txt2 = psdTxt2(psd.layered);
+				const dpi = pageDpi(episode.id, series.id, image);
+				const fonts = listFonts(series.id);
+				const regions = psdTextLayers(psd.layered)
+					.map((layer) => layerToRegion(layer, image, dpi, fonts, txt2, regionWarnings))
+					.filter((r): r is NonNullable<typeof r> => !!r);
+				const added = await createImportedRegions(series, episode, user.id, image, regions);
+				warnings.push(...[...regionWarnings, ...added.failed].map((w) => `${psd.name}: ${w}`));
+			}
 			await ensurePageThumbnail(series, episode, image);
 		}
 		const imports = getDoc<{ uploads: {hash:string;originalName:string}[] }>(`uploads:${episode.id}`, {uploads:[]});

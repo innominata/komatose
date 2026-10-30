@@ -72,12 +72,14 @@ const PYTHON_REVIEW_SCRIPTS = {
   'hayai-ocr-v2.5-nova': 'hayai_review.py',
   'pp-ocrv5-korean': 'ppocr_korean_review.py',
   'manga-ocr': 'manga_ocr_review.py',
+  'manga-ocr-nar-small': 'manga_ocr_nar_review.py',
 } satisfies Partial<Record<LocalReviewModelId, string>>;
 const files: Record<LocalReviewModelId, string[]> = {
   'hayai-ocr-v2': ['model.safetensors', 'config.json', 'modeling_hayai.py', 'configuration_hayai.py', 'tokenizer.json'],
   'hayai-ocr-v2.5-nova': ['model.safetensors', 'config.json', 'modeling_hayai.py', 'configuration_hayai.py', 'tokenizer.json'],
   'pp-ocrv5-korean': ['recognizer/inference.pdiparams', 'recognizer/inference.json', 'recognizer/inference.yml', 'detector/inference.pdiparams', 'detector/inference.json', 'detector/inference.yml'],
   'manga-ocr': ['model.safetensors', 'config.json', 'preprocessor_config.json', 'tokenizer_config.json', 'vocab.txt'],
+  'manga-ocr-nar-small': ['model.safetensors', 'config.json', 'nar_vocabulary_6817.json', 'manga_ocr_nar_small/model.py', 'manga_ocr_nar_small/backends/cuda.py'],
   'paddleocr-vl-1.6': ['PaddleOCR-VL-1.6-GGUF.gguf', 'PaddleOCR-VL-1.6-GGUF-mmproj.gguf', 'chat_template.jinja'],
   'qwen3-vl-8b': ['Qwen3-VL-8B-Instruct-Q8_0.gguf', 'mmproj-F16.gguf'],
 };

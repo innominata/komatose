@@ -93,7 +93,11 @@ export function parseDetector(value: unknown): Detector {
   if (raw === 'heuristic' || findRegistryRow(raw)) return raw;
   const env = String(process.env.SCAN_DETECTOR ?? "").toLowerCase();
   if (env === 'heuristic' || findRegistryRow(env)) return env;
-  return "rtdetr";
+  // Nothing chosen: the first box detector whose Detect Text test passed.
+  const passed = listRegistryRows().find(row => !row.disabled && DETECTORS.includes(row.id) && row.id !== 'heuristic' && rowHasOperation(row, 'detect'));
+  if (passed) return passed.id;
+  console.error('[models] No text detector has passed the Detect Text test; only geometric bubble detection will run. Install one or run its test under Admin → Models.');
+  return 'heuristic';
 }
 
 export function parseDetectConf(value: unknown): number | undefined {

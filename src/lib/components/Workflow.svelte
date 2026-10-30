@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PAGE_FILE_ACCEPT, isPageFile } from "$lib/pageFiles";
   import { deciderPageStamp } from "$lib/decider";
   import { glossaryCharacters, resolveCharacter, characterLabel } from '$lib/characters';
   import type { GlossaryTerm } from '$lib/types';
@@ -33,6 +34,7 @@
   import DirectorWarnings from './workflow/DirectorWarnings.svelte';
   import DirectorMemory from './DirectorMemory.svelte';
   import StudioToasts from "./workflow/StudioToasts.svelte";
+  import CleanCompareDialog from "./workflow/CleanCompareDialog.svelte";
   import StudioTopBar from "./workflow/StudioTopBar.svelte";
   import StageBar from "./workflow/StageBar.svelte";
   import StudioBanners from "./workflow/StudioBanners.svelte";
@@ -167,6 +169,8 @@
     credits?: SeriesCredits;
     detectorDefaults?: DetectorDefaults;
     detection?: { setup: DetectorSetupConfig; conf: number; source: "request" | "chapter" | "default"; skipped: string[] };
+    /** The newest region deletion Undo can restore. */
+    deletion?: { id: string; label: string; count: number; at: number } | null;
   };
   let studioState = $state<State | null>(null);
   const blankRegionCount = $derived(studioState?.lines.filter(line => isBlankRegion(line) &&
@@ -192,6 +196,19 @@
   let finderOpen = $state(false);
   let finderQuery = $state("");
   let inspectorTab = $state("");
+  /** Region whose cleaning methods are being compared (the comparison dialog is open). */
+  let compareLineId = $state("");
+  /** Drawing a new text path for the selected region on the canvas. */
+  let drawingTextPath = $state(false);
+  let drawingTextPathFor = "";
+  function setDrawingTextPath(on: boolean) {
+    drawingTextPath = on;
+    drawingTextPathFor = on ? lineId : "";
+  }
+  $effect(() => {
+    // Selecting another region or leaving Typeset ends a drawing in progress.
+    if (drawingTextPath && (step !== "Typeset" || lineId !== drawingTextPathFor)) drawingTextPath = false;
+  });
   let detailTab = $state("suggestions");
   let stripFilter = $state<"all" | "todo" | "done">("all");
   let keysOpen = $state(false);
@@ -254,7 +271,7 @@
   let query = $state("");
   let unresolvedOnly = $state(false);
   let error = $state("");
-  let toasts = $state<{ id: number; text: string }[]>([]);
+  let toasts = $state<{ id: number; text: string; action?: { label: string; run: () => void } }[]>([]);
   let toastSeq = 0;
   let openMenu = $state<null | "series" | "chapter" | "page" | "view">(null);
   let busy = $state(false);
@@ -976,7 +993,7 @@
     if (
       confirm &&
       !window.confirm(
-        "Delete this region? Its text remains in revision history.",
+        "Delete this region? You can undo it with Ctrl+Z or the Undo button.",
       )
     )
       return;
@@ -988,6 +1005,7 @@
       saves.discard(line.id);
       if (lineId === line.id) lineId = "";
       await refresh();
+      deletedNotice(1);
     } catch (e) {
       error = String(e);
     }
@@ -1002,7 +1020,7 @@
     if (result) {
       for (const id of result.ids ?? []) saves.discard(id);
       if (!studioState?.lines.some((line) => line.id === lineId)) lineId = "";
-      notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"}.`);
+      notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"}.`, { label: "Undo", run: () => void restoreDeletedRegions() });
     }
   }
   const selectedPageRegionCount = $derived(studioState?.lines.filter(line =>
@@ -1016,7 +1034,7 @@
     if (result) {
       for (const id of result.ids ?? []) saves.discard(id);
       if (!studioState?.lines.some(line => line.id === lineId)) lineId = "";
-      notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"} from ${imageIds.length} selected page${imageIds.length === 1 ? "" : "s"}.`);
+      notify(`Removed ${result.removed} region${result.removed === 1 ? "" : "s"} from ${imageIds.length} selected page${imageIds.length === 1 ? "" : "s"}.`, { label: "Undo", run: () => void restoreDeletedRegions() });
     }
   }
   async function removeBlankRegions() {
@@ -1025,7 +1043,7 @@
     const result = await act({ action: "remove-blank-regions" });
     if (result) {
       if (!studioState?.lines.some((line) => line.id === lineId)) lineId = "";
-      notify(`Removed ${result.removed} blank region${result.removed === 1 ? "" : "s"}.`);
+      notify(`Removed ${result.removed} blank region${result.removed === 1 ? "" : "s"}.`, { label: "Undo", run: () => void restoreDeletedRegions() });
     }
   }
   async function addComment() {
@@ -1128,6 +1146,16 @@
   }
   async function replaceFile(file?: File) {
     if (!file) return;
+    // Replacing flattens a PSD to pixels. A PSD exported from this page is offered as an
+    // import instead, which keeps its text editable in the regions.
+    if (/\.psd$/i.test(file.name) && replacementId === page?.id && canClean) {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${apiBase}/images/${replacementId}/psd`, { method: "POST", body: form }).catch(() => null);
+      const plan = res?.ok ? ((await res.json()) as { fromExport?: boolean }) : null;
+      if (plan?.fromExport && window.confirm(`“${file.name}” is a PSD exported from ${preparePageLabel(replacementId, studioState?.images ?? [])}.\n\nOK: import its edits — text stays editable in the regions, and painted layers become the artwork.\nCancel: choose whether to replace the page with a flattened copy instead.`))
+        return importPsd(file);
+    }
     if (!window.confirm(`Replace ${preparePageLabel(replacementId, studioState?.images ?? [])} from “${file.name}”? This overwrites the current page pixels and may change its dimensions. Preparing the replacement can reset saved cleaning. Undo page edit will restore the saved previous version.`)) return;
     busy = true;
     try {
@@ -1158,19 +1186,20 @@
       const res = await fetch(`${apiBase}/images/${imageId}/psd`, { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      return data as { regions: { layer: string; changes: string[] }[]; artwork: boolean; warnings: string[]; failed?: string[] };
+      return data as { regions: { layer: string; changes: string[] }[]; created: { layer: string; text: string }[]; artwork: boolean; warnings: string[]; failed?: string[] };
     };
     busy = true;
     try {
       const plan = await send(false);
       const notes = plan.warnings.length ? `\n\nNotes:\n${plan.warnings.map((w) => `• ${w}`).join("\n")}` : "";
-      if (!plan.regions.length && !plan.artwork) {
+      if (!plan.regions.length && !plan.artwork && !plan.created.length) {
         window.alert(`“${file.name}” has no changes to import for ${preparePageLabel(imageId, studioState?.images ?? [])}.${notes}`);
         return;
       }
       const lines = [
         ...(plan.artwork ? ["• Page artwork (cleaned layer and painted layers)"] : []),
         ...plan.regions.map((r) => `• ${r.layer}: ${r.changes.join(", ")}`),
+        ...plan.created.map((r) => `• New Imported region from “${r.layer}”: ${r.text}`),
       ];
       if (!window.confirm(`Import these edits from “${file.name}” into ${preparePageLabel(imageId, studioState?.images ?? [])}?\n\n${lines.join("\n")}${notes}\n\nChanged text is refitted. Undo page edit restores everything.`)) return;
       const result = await send(true);
@@ -1665,6 +1694,12 @@
     }
   }
   function pageSavedHistory(history: "undo" | "redo") {
+    // Outside Prepare and Clean, which have their own page history, Ctrl+Z puts back the
+    // regions deleted last.
+    if (history === "undo" && step !== "Prepare" && step !== "Clean") {
+      void restoreDeletedRegions();
+      return;
+    }
     if (step === 'Prepare') {
       if (history === 'undo' && canUpload && !busy) void pageOperation({ op: 'undo' });
       return;
@@ -1797,10 +1832,11 @@
     if (!scroller || !page || !line || line.imageId !== page.id) return;
     const canvas = scroller.querySelector(".canvas-page");
     if (!(canvas instanceof HTMLElement)) return;
-    const padLeft = parseFloat(getComputedStyle(scroller).paddingLeft) || 0;
-    const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-    const left = padLeft + (line.x ?? 0) * canvas.offsetWidth;
-    const top = padTop + (line.y ?? 0) * canvas.offsetHeight;
+    // Measure where the page sits: it carries the overscroll gutter.
+    const s = scroller.getBoundingClientRect();
+    const c = canvas.getBoundingClientRect();
+    const left = scroller.scrollLeft + c.left - s.left + (line.x ?? 0) * canvas.offsetWidth;
+    const top = scroller.scrollTop + c.top - s.top + (line.y ?? 0) * canvas.offsetHeight;
     const w = (line.w ?? 0.2) * canvas.offsetWidth;
     const h = (line.h ?? 0.1) * canvas.offsetHeight;
     scroller.scrollTo({
@@ -1813,6 +1849,7 @@
     id: string,
     decision: "accept" | "reject",
     force = false,
+    english?: string,
   ) {
     await act({
       action: "suggestion",
@@ -1820,6 +1857,7 @@
       id,
       decision,
       force,
+      ...(english !== undefined ? { english } : {}),
     });
   }
   function choosePage(id: string) {
@@ -1864,7 +1902,11 @@
   });
   function styleFingerprint(style: Partial<TextStyle> | undefined) {
     const picked = pickStyle(style);
-    return STYLE_KEYS.map((key) => String(picked[key] ?? "")).join("\u001f");
+    // Objects (layer styles) by content, so changing one counts as a change.
+    return STYLE_KEYS.map((key) => {
+      const v = picked[key];
+      return v && typeof v === "object" ? JSON.stringify(v) : String(v ?? "");
+    }).join("\u001f");
   }
   $effect(() => {
     if (!selected) return;
@@ -1873,7 +1915,13 @@
     // rewrite this panel. Reset to Default and a chapter refit replace the
     // region's saved style, which does.
     const token = `${selected.id}:${data?.layout?.key ?? ""}:${styleFingerprint(data?.layout?.style)}:${styleFingerprint(data?.style)}`;
-    if (token === styleFor) return;
+    if (token === styleFor) {
+      // Other saves to the region (paths, character styles, masks, approval) move its
+      // revision without touching the style: follow it, or the next style save is refused
+      // as stale.
+      if (regionDoc && regionDoc.revision > styleRevision) styleRevision = regionDoc.revision;
+      return;
+    }
     styleFor = token;
     styleRevision = regionDoc?.revision ?? 0;
     regionStyle = shownStyle(selected.lineType, data);
@@ -2995,7 +3043,36 @@
       regionStyle = shownStyle(line.lineType, result.doc.data);
     }
   }
+  /**
+   * Character styles saved one at a time: a save asked for while one runs replaces any
+   * waiting one and goes when it ends, with the revision that save produced.
+   */
+  let charRunsSaving = false;
+  let charRunsNext: { id: string; runs: import("$lib/workflow").CharRun[]; body: string } | null = null;
+  async function saveCharRuns(charRuns: import("$lib/workflow").CharRun[], charRunsBody: string) {
+    if (!selected) return;
+    charRunsNext = { id: selected.id, runs: charRuns, body: charRunsBody };
+    if (charRunsSaving) return;
+    charRunsSaving = true;
+    try {
+      while (charRunsNext) {
+        const next = charRunsNext;
+        charRunsNext = null;
+        const doc = studioState?.regions[next.id];
+        if (!doc) break;
+        await act({ action: "region", id: next.id, expectedRevision: doc.revision, data: { charRuns: next.runs, charRunsBody: next.body } });
+      }
+    } finally {
+      charRunsSaving = false;
+    }
+  }
+  /** A region style save asked for while another request ran: it runs when that one ends. */
+  let styleQueued = false;
   async function applyStyle(scope = "region") {
+    if (scope === "region" && busy && selected && canClean && !regionDoc?.data.locked) {
+      styleQueued = true;
+      return;
+    }
     if (!selected || !regionDoc || !canClean || busy || regionDoc.data.locked) return;
     const id = selected.id;
     if (scope === "region") {
@@ -3007,7 +3084,13 @@
       });
       if (result?.doc && selected?.id === id) {
         styleRevision = result.doc.revision;
-        regionStyle = shownStyle(selected.lineType, result.doc.data);
+        // A newer edit made while this save ran is kept, not replaced by the saved style.
+        if (!styleQueued) regionStyle = shownStyle(selected.lineType, result.doc.data);
+      }
+      if (styleQueued && selected?.id === id) {
+        styleQueued = false;
+        await tick();
+        void applyStyle("region");
       }
     } else if (scope === 'series') {
       if (!canUpload) return;
@@ -3259,12 +3342,52 @@
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
-  function notify(text: string) {
+  /**
+   * While a colour picker or opacity slider is being dragged, the panel's style changes
+   * before it is saved: recolour the selected region's fitted lettering to match, so the
+   * page shows the change live. The saved refit replaces it once the picker closes.
+   * Groups painted in the old fill / outline (not character-styled ones) are repainted.
+   */
+  function livePaint(id: string, layout: import("$lib/workflow").FittedLayout | undefined) {
+    if (!layout || id !== selected?.id || !regionStyle) return layout;
+    const was = layout.style, now = regionStyle;
+    const same = was.fill === now.fill && was.outline === now.outline &&
+      was.fillOpacity === now.fillOpacity && was.outlineOpacity === now.outlineOpacity;
+    if (same) return layout;
+    const op = (v: number | undefined) => String(Math.round(v ?? 100) / 100);
+    const svg = layout.svg.replace(
+      /<g fill="(#[0-9a-fA-F]{6})" stroke="\1" fill-opacity="([\d.]+)" stroke-opacity="\2"/g,
+      (m: string, color: string) => {
+        const c = color.toLowerCase();
+        const paint = c === was.fill.toLowerCase() ? [now.fill, now.fillOpacity]
+          : c === was.outline.toLowerCase() ? [now.outline, now.outlineOpacity] : null;
+        if (!paint) return m;
+        const [hex, o] = paint as [string, number];
+        return `<g fill="${hex}" stroke="${hex}" fill-opacity="${op(o)}" stroke-opacity="${op(o)}"`;
+      },
+    );
+    return { ...layout, svg };
+  }
+  function notify(text: string, action?: { label: string; run: () => void }) {
     const id = ++toastSeq;
-    toasts = [...toasts, { id, text }];
+    toasts = [...toasts, { id, text, action }];
     window.setTimeout(() => {
       toasts = toasts.filter((t) => t.id !== id);
-    }, 5000);
+    }, action ? 10000 : 5000);
+  }
+  /** Put back the newest deleted regions (with their comments and suggestions). */
+  async function restoreDeletedRegions() {
+    if (!canEdit || busy || !studioState?.deletion) return false;
+    const result = await act({ action: "restore-deleted-regions", batchId: studioState.deletion.id });
+    if (!result) return false;
+    await refresh();
+    const n = result.ids?.length ?? 0;
+    notify(`Restored ${n} region${n === 1 ? "" : "s"} (${result.label}).`);
+    if (n === 1) lineId = result.ids[0];
+    return true;
+  }
+  function deletedNotice(count: number) {
+    if (count) notify(`Deleted ${count} region${count === 1 ? "" : "s"}.`, { label: "Undo", run: () => void restoreDeletedRegions() });
   }
   function dismissToast(id: number) {
     toasts = toasts.filter((t) => t.id !== id);
@@ -3773,9 +3896,7 @@
         (e.target as HTMLElement)?.closest("input,textarea,[contenteditable]")
       )
         return;
-      const files = [...(e.clipboardData?.files ?? [])].filter((f) =>
-        f.type.startsWith("image/"),
-      );
+      const files = [...(e.clipboardData?.files ?? [])].filter(isPageFile);
       if (files.length) {
         e.preventDefault();
         addFiles(files);
@@ -4036,7 +4157,7 @@
   bind:this={importInput}
   type="file"
   multiple
-  accept="image/*"
+  accept={PAGE_FILE_ACCEPT}
   onchange={(e) => {
     addFiles([...(e.currentTarget.files ?? [])]);
     step = "Prepare";
@@ -4187,6 +4308,26 @@
     <button class="ed-btn" type="button" data-find="palette" aria-label="Find an action" onclick={() => (finderOpen = true)}><i class="bi bi-search" aria-hidden="true"></i><span class="txt">Find an action</span><kbd aria-hidden="true">Ctrl K</kbd></button>
   </StudioTopBar>
   <StudioToasts {error} {toasts} ondismisserror={() => (error = "")} ondismiss={dismissToast} />
+  {#if compareLineId && page && pageDoc}
+    {@const compareLine = pageLines.find((l) => l.id === compareLineId)}
+    {#if compareLine}
+      <CleanCompareDialog
+        {apiBase}
+        {asset}
+        {backend}
+        {page}
+        pageData={pageDoc.data}
+        line={compareLine}
+        region={studioState?.regions[compareLine.id]?.data}
+        regionNumber={pageLines.indexOf(compareLine) + 1}
+        onclose={() => (compareLineId = "")}
+        onapplied={async () => {
+          await refresh();
+          notify("Applied the chosen cleaning to the region. Review it, then approve the page.");
+        }}
+      />
+    {/if}
+  {/if}
   {#if issuesOpen}
     <div class="issues-pop" role="menu">
       {#each exceptions as item (item.id ?? item.label)}
@@ -4486,6 +4627,8 @@
             />
             <div class="canvas-stage">
             <WorkflowCanvas
+              drawTextPath={drawingTextPath}
+              ondrawtextpath={setDrawingTextPath}
               {page}
               {step}
               {pageTool}
@@ -4530,7 +4673,7 @@
               {reslicePreview}
               {selectedPolygon}
               scrollAction={canvasScroll}
-              regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:studioState?.regions[id]?.data.layout}
+              regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:livePaint(id, studioState?.regions[id]?.data.layout)}
               regionTextMask={(id: string) => studioState?.regions[id]?.data.textMask}
               {overlayStyle}
               {adjustedBounds}
@@ -4875,6 +5018,7 @@
             ondetect={() => void applyMask(true)}
             onapprovemask={() => void approveMask()}
             onclean={(method) => void cleanWith(method)}
+            oncompare={selected && selected.imageId === page?.id ? () => (compareLineId = selected!.id) : undefined}
             onapplypass={() => void applyCleaningPass()}
             onapproveclean={() => void approveCleanedAndNext()}
             onclearstrokes={() => (strokes = [])}
@@ -4903,6 +5047,12 @@
             fitting={typesetRunning()}
             onfit={() => selected && regionDoc && act({ action: "fit", id: selected.id, expectedRevision: regionDoc.revision })}
             tab={activeTab === "style" || activeTab === "shape" ? activeTab : "text"}
+            seriesId={series.id}
+            pageSize={page ? { width: page.width, height: page.height } : undefined}
+            oncharruns={saveCharRuns}
+            ontextpaths={(textPaths) => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { textPaths } })}
+            drawingTextPath={drawingTextPath}
+            ondrawtextpath={setDrawingTextPath}
             onrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderEnabled:regionDoc.data.renderEnabled===false}})}
             onconfirmrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderReviewConfirmed:true}})}
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
@@ -6304,12 +6454,13 @@
     await refresh(); return result;
   }}
   suggestions={studioState?.suggestions ?? []}
-  decide={async (id, decision, force) => {
+  decide={async (id, decision, force, english) => {
     if (!(await saves.flushAll())) throw new Error("Resolve unsaved drafts first");
     const acceptedLineId = decision === "accept"
       ? studioState?.suggestions.find((s) => s.id === id)?.line_id
       : undefined;
-    await request(`${apiBase}/workflow`, { action: "suggestion", id, decision, force, translationModel: aiModels.translate });
+    await request(`${apiBase}/workflow`, { action: "suggestion", id, decision, force, translationModel: aiModels.translate,
+      ...(english !== undefined ? { english } : {}) });
     await refresh();
     if (acceptedLineId) await refitAfterText(acceptedLineId);
   }} />
@@ -6322,12 +6473,13 @@
     await refresh(); return result;
   }}
   suggestions={studioState?.suggestions ?? []}
-  decide={async (id, decision, force) => {
+  decide={async (id, decision, force, english) => {
     if (!(await saves.flushAll())) throw new Error("Resolve unsaved drafts first");
     const acceptedLineId = decision === "accept"
       ? studioState?.suggestions.find((s) => s.id === id)?.line_id
       : undefined;
-    await request(`${apiBase}/workflow`, { action: "suggestion", id, decision, force, translationModel: aiModels.translate });
+    await request(`${apiBase}/workflow`, { action: "suggestion", id, decision, force, translationModel: aiModels.translate,
+      ...(english !== undefined ? { english } : {}) });
     await refresh();
     if (acceptedLineId) await refitAfterText(acceptedLineId);
   }} />

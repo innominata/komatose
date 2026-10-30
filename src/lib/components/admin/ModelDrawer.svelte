@@ -39,7 +39,7 @@
 		const review = data.reviewServers.find((item) => item.id === entry.id);
 		if (review) {
 			if (entry.id === 'pp-ocrv5-korean') return null; // CPU PaddlePaddle; no ggml/PyTorch device picker.
-			const torch = entry.id === 'hayai-ocr-v2' || entry.id === 'hayai-ocr-v2.5-nova' || entry.id === 'manga-ocr';
+			const torch = entry.id === 'hayai-ocr-v2' || entry.id === 'hayai-ocr-v2.5-nova' || entry.id === 'manga-ocr' || entry.id === 'manga-ocr-nar-small';
 			return { runtime: torch ? 'torch' : 'llama', env: 'env-review', key: entry.id, label: torch ? 'GPU' : 'Device' };
 		}
 		if (entry.id === 'hy-mt2-manga-v5' || entry.id === 'shisa-v2.1-qwen3-8b-q4')

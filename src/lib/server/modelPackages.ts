@@ -121,7 +121,7 @@ const SHARED_TASK_FILES = [
 ];
 /** Implementation files for one builtin adapter. A change restales only that adapter's models. */
 const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
-  'native-ocr': ['src/lib/server/localReview.ts', 'ocr/hayai_review.py', 'ocr/manga_ocr_review.py', 'ocr/ppocr_korean_review.py', 'ocr/worker.py'],
+  'native-ocr': ['src/lib/server/localReview.ts', 'ocr/hayai_review.py', 'ocr/manga_ocr_review.py', 'ocr/manga_ocr_nar_review.py', 'ocr/ppocr_korean_review.py', 'ocr/worker.py'],
   'native-translator': ['src/lib/server/specialistTranslation.ts', 'src/lib/server/translationRuntime.ts', 'src/lib/translationModels.json',
     'ocr/ko_en_translate.py', 'ocr/opus_mt_translate.py', 'ocr/sugoi_translate.py', 'ocr/translategemma-ja-en.jinja'],
   'workflow-image': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/detect.ts',
@@ -137,7 +137,7 @@ const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
 function pythonRuntimeFingerprint(adapter: string | undefined, row: ModelRow) {
   const workflow = adapter === 'workflow-image' || adapter === 'native-detector';
   const translator = translationModel(row.id);
-  const review = adapter === 'native-ocr' && ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'manga-ocr'].includes(row.id)
+  const review = adapter === 'native-ocr' && ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'manga-ocr', 'manga-ocr-nar-small'].includes(row.id)
     || adapter === 'native-translator' && translator && translationRuntimeOf(translator) === 'pytorch';
   const paddle = adapter === 'native-ocr' && row.id === 'pp-ocrv5-korean';
   if (!workflow && !review && !paddle) return undefined;
@@ -242,8 +242,8 @@ export function packageRows(existing: ModelRow[]): ModelRow[] {
     const general = ['openai', 'local-chat', 'cli'].includes(adapter || '');
     const qualificationAdapter = general ? 'general' : adapter === 'native-ocr' ? 'ocr' : adapter === 'native-translator' ? 'translator' : 'direct';
     const backend = String(pkg?.manifest.config?.backend || row.id);
-    const implementedTasks = general ? MODEL_TASK_IDS.filter(task => !['sourceDecide', 'textMask', 'segmentBubble', 'inpaint', 'cleaning'].includes(task)
-      && (adapter !== 'cli' || task !== 'detect')).concat(adapter === 'cli' && (row.cliAdapter || pkg?.manifest.config?.provider) === 'codex' ? ['cleaning'] : [])
+    const implementedTasks = general ? MODEL_TASK_IDS.filter(task => !['textMask', 'segmentBubble', 'inpaint', 'cleaning'].includes(task)
+      && (adapter !== 'cli' || (task !== 'detect' && task !== 'sourceDecide'))).concat(adapter === 'cli' && (row.cliAdapter || pkg?.manifest.config?.provider) === 'codex' ? ['cleaning'] : [])
       : adapter === 'systemone' ? ['sourceDecide'] as const
       : adapter === 'native-ocr' ? ['vision', 'sourceReview'] as const
       : adapter === 'native-translator' ? ['translate'] as const

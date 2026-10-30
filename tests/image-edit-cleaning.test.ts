@@ -89,6 +89,8 @@ await sharp({ create: { width: 512, height: 256, channels: 3, background: '#c832
 
 const { cleanWithQwenImage } = await import('../src/lib/server/qwenImageClean');
 const { imageEditStatus, probeImageEditCleaning, stopAllImageEditServers } = await import('../src/lib/server/imageEdit');
+// Nothing is built in: these fixtures clean with 2511 as the operator's Cleaning default.
+(await import('../src/lib/server/modelDefaultStore')).setModelDefault('cleaning', 'qwen-image-edit-2511');
 
 const calls = async () =>
   (await readFile(requestsPath, 'utf8').catch(() => ''))

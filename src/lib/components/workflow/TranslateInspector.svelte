@@ -117,7 +117,7 @@
     onenquire: (line: LineRow) => void;
     onapprove: (line: LineRow) => void;
     onsuggest: (line: LineRow) => void;
-    ondecide: (id: string, decision: "accept" | "reject", force?: boolean) => void;
+    ondecide: (id: string, decision: "accept" | "reject", force?: boolean, english?: string) => void;
     oncommentinput: (comment: CommentRow, body: string) => void;
     ondeletecomment: (id: string) => void;
     onaddcomment: () => void;

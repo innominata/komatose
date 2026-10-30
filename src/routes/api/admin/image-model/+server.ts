@@ -8,9 +8,11 @@ import {
   requireUser,
   statusOf,
 } from "$lib/server/http";
-import { DEFAULT_IMAGE_EDIT_MODEL_ID, imageEditModelOf } from "$lib/imageEdit";
+import { IMAGE_EDIT_MODELS, imageEditModelOf } from "$lib/imageEdit";
 import {
+  defaultImageEditModel,
   imageEditStatus,
+  requireImageEditModel,
   imageEditStatuses,
   missingImageEditError,
   operateImageEditServer,
@@ -34,7 +36,8 @@ function requestedModel(body: Record<string, unknown>) {
 export const GET: RequestHandler = async ({ locals }) => {
   try {
     requireManageUsers(requireUser(locals.user));
-    return json({ ok: true, model: imageEditStatus(), models: imageEditStatuses() });
+    return json({ ok: true, // The summary card shows the default editor; with none, the first listed so its install state shows.
+    model: imageEditStatus(defaultImageEditModel() ?? IMAGE_EDIT_MODELS[0].id), models: imageEditStatuses() });
   } catch (error) {
     return fail(statusOf(error), messageOf(error));
   }
@@ -46,7 +49,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const body = await request.json();
     if (!["start", "stop", "restart"].includes(body.action))
       return fail(400, "Choose Start, Stop, or Restart");
-    const id = requestedModel(body) ?? DEFAULT_IMAGE_EDIT_MODEL_ID;
+    const id = requestedModel(body) ?? requireImageEditModel();
     if (body.action !== "stop" && !imageEditStatus(id).installed) throw missingImageEditError(id);
     return json({ ok: true, model: startPackageOperation(id, body.action) }, { status: 202 });
   } catch (error) {
@@ -61,7 +64,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     const body = await request.json();
     if (!["start", "stop", "restart"].includes(body.action))
       return fail(400, "Choose Start, Stop, or Restart");
-    const id = requestedModel(body) ?? DEFAULT_IMAGE_EDIT_MODEL_ID;
+    const id = requestedModel(body) ?? requireImageEditModel();
     if (body.action !== "stop" && !imageEditStatus(id).installed) throw missingImageEditError(id);
     if (body.action === 'restart') await operatePackage(id, 'stop', request.signal);
     await operatePackage(id, body.action === 'restart' ? 'start' : body.action, request.signal);

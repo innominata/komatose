@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PAGE_FILE_ACCEPT, isPsdFile } from "$lib/pageFiles";
   // Opens whenever files are staged for upload so adding images never looks
   // like nothing happened: the letterer previews, reorders, then confirms or
   // cancels before carrying on.
@@ -78,7 +79,7 @@
     <ol class="grid">
       {#each files as file, i (file)}
         <li>
-          <div class="thumb"><img src={url(file)} alt="" loading="lazy" /></div>
+          <div class="thumb">{#if isPsdFile(file)}<span class="psd" title="Photoshop file: flattened to a PNG page on upload">PSD</span>{:else}<img src={url(file)} alt="" loading="lazy" />{/if}</div>
           <div class="meta">
             <span class="n">{i + 1}</span>
             <span class="name" title={file.name}>{file.name}</span>
@@ -95,7 +96,7 @@
     <div class="hud-modal-actions">
       <label class="btn-hud-ghost more">
         Add more…
-        <input type="file" accept="image/*" multiple disabled={busy}
+        <input type="file" accept={PAGE_FILE_ACCEPT} multiple disabled={busy}
           onchange={(e) => { onaddfiles([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ""; }} />
       </label>
       <span class="spacer"></span>
@@ -121,6 +122,7 @@
   li { display: grid; gap: 4px; border: 1px solid var(--hud-line); padding: 6px; background: var(--hud-canvas, var(--hud-bg)); }
   .thumb { aspect-ratio: 3 / 4; display: grid; place-items: center; overflow: hidden; background: #0002; }
   .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .thumb .psd { font: 700 1.1rem/1 var(--hud-mono, monospace); letter-spacing: .08em; color: var(--hud-muted); border: 1px solid var(--hud-line); border-radius: 4px; padding: 6px 10px; }
   .meta { display: flex; gap: 6px; align-items: baseline; min-width: 0; font-size: 0.75rem; color: var(--hud-text); }
   .n { font-weight: 700; color: var(--hud-teal, inherit); }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

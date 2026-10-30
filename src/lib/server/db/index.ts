@@ -166,6 +166,15 @@ if (!sessionCols.some((c) => c.name === 'last_seen_at')) {
 	client.exec('ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER NOT NULL DEFAULT 0');
 }
 client.exec('CREATE INDEX IF NOT EXISTS idx_activity_user ON activity(user_id, created_at)');
+// Regions deleted from a chapter, kept so the deletion can be undone (see regionTrash.ts).
+client.exec(`CREATE TABLE IF NOT EXISTS deleted_regions (
+  id TEXT PRIMARY KEY,
+  episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+)`);
+client.exec('CREATE INDEX IF NOT EXISTS idx_deleted_regions_episode ON deleted_regions(episode_id, created_at)');
 
 if (!episodeCols.some((c) => c.name === 'glossary')) {
 	client.exec("ALTER TABLE episodes ADD COLUMN glossary TEXT NOT NULL DEFAULT '[]'");

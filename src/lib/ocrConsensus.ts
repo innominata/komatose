@@ -8,6 +8,8 @@ export type OcrReading = {
   source: string;
   error?: string;
   translation?: string;
+  /** Read from the lettering-mask silhouette instead of the masked crop. */
+  view?: 'silhouette';
 };
 export type OcrConsensus = { agreed: boolean; source: string; readings: OcrReading[]; decision?: import('./decider').TranscriptionDecision };
 
@@ -36,7 +38,7 @@ export function ocrComparableKey(value: string): string {
 
 export function compareOcrReadings(
   readings: OcrReading[],
-  preferIds: string[] = ['paddleocr-vl-1.6'],
+  preferIds: string[] = [],
 ): OcrConsensus {
   const clusters = new Map<string, OcrReading[]>();
   for (const reading of readings) {
@@ -46,10 +48,12 @@ export function compareOcrReadings(
     list.push(reading);
     clusters.set(key, list);
   }
-  const ranked = [...clusters.values()].sort((a, b) => b.length - a.length);
+  // A model reading both the crop and its silhouette is one voice, not two.
+  const votes = (list: OcrReading[]) => new Set(list.map((reading) => reading.model)).size;
+  const ranked = [...clusters.values()].sort((a, b) => votes(b) - votes(a));
   const top = ranked[0];
   const second = ranked[1];
-  const agreed = Boolean(top && (!second || top.length > second.length));
+  const agreed = Boolean(top && (!second || votes(top) > votes(second)));
   let source = '';
   if (agreed && top) {
     const preferred = preferIds.map((id) => top.find((reading) => reading.model === id)).find(Boolean);

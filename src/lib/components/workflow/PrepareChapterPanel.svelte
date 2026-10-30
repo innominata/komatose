@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PAGE_FILE_ACCEPT } from "$lib/pageFiles";
   import "./studio-controls.css";
   import RegionAiSettings from "../RegionAiSettings.svelte";
   import type { RegionAiSettings as RegionAiSettingsData } from "$lib/regionAi";
@@ -102,9 +103,9 @@
   </p>
   {/if}
   {#if canUpload && (section === "full" || section === "upload")}<label class="upload" data-find="upload-order"
-      >Add images or paste from clipboard<input
+      >Add images or PSDs, or paste from clipboard<input
         type="file"
-        accept="image/*"
+        accept={PAGE_FILE_ACCEPT}
         multiple
         onchange={(e) => onaddfiles([...(e.currentTarget.files ?? [])])}
       /></label

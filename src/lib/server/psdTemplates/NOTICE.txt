@@ -1,0 +1,9 @@
+pathText.ts holds the document text-engine block (`Txt2`) of
+photoshop/text/path-wave-open.psd from the PhotoCraft test corpus
+(https://github.com/storytold/photocraft-corpus), saved by Adobe Photoshop and
+licensed under the Apache License 2.0. It is used unchanged as the template for
+the Txt2 objects PSD export writes for type on a path.
+
+The PSD text-on-path and Warp Text geometry in src/lib/textWarp.ts,
+src/lib/textPath.ts, src/lib/textEffects.ts (layer styles) and src/lib/server/txt2.ts follow PhotoCraft
+(https://github.com/storytold/photocraft), MIT OR Apache-2.0.

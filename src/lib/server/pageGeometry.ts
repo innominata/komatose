@@ -1,3 +1,4 @@
+import { mapTextPaths } from "../textPath";
 import sharp, { type OverlayOptions } from "sharp";
 import type { ImageRow, LineRow } from "../types";
 import type { PageData, RegionData } from "../workflow";
@@ -69,7 +70,11 @@ export function transformRegion(line: LineRow, region: RegionData, page: ImageRo
   });
   const position = point({ x: line.x ?? 0, y: line.y ?? 0 });
   const bounds = { ...position, w: (line.w ?? 0) * page.width * t.sx / t.width, h: (line.h ?? 0) * page.height * t.sy / t.height };
-  const next: RegionData = { ...region, ...(region.polygon ? { polygon: region.polygon.map(point) } : {}) };
+  const next: RegionData = {
+    ...region,
+    ...(region.polygon ? { polygon: region.polygon.map(point) } : {}),
+    ...mapTextPaths(region, point),
+  };
   if (region.layout) {
     const old = region.layout;
     const svg = old.svg.replace(/(<svg\b[^>]*>)/, `$1<g transform="translate(${t.dx} ${t.dy}) scale(${t.sx} ${t.sy})">`).replace(/<\/svg>\s*$/, "</g></svg>")

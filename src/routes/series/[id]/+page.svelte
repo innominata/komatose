@@ -6,7 +6,6 @@
 	import SeriesTypeDialog from '$lib/components/SeriesTypeDialog.svelte';
 	import WorkCredit from '$lib/components/WorkCredit.svelte';
 	import FontLibrary from '$lib/components/FontLibrary.svelte';
-	import { FONT_CATEGORIES } from '$lib/fontCategories';
 
 	let { data, form } = $props();
 	let typeRevision = $state(data.typeRevision);
@@ -275,7 +274,7 @@
 </div>
 
 <div class="hud-card mt-3" id="type">
-	<div class="d-flex justify-content-between align-items-start gap-3">
+	<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
 		<div>
 			<div class="hud-kicker mb-2">Fonts &amp; type</div>
 			<p class="small text-secondary mb-0">
@@ -296,21 +295,11 @@
 		/>
 	</div>
 	{#if form?.message}<p class="small" role="status">{form.message}</p>{/if}
-	{#if data.canManageType}
-		<form method="POST" action="?/uploadFont" enctype="multipart/form-data" use:enhance class="d-flex flex-wrap gap-2 align-items-end my-3">
-			<label class="small mb-0">Upload TTF or OTF <input class="form-control" name="font" type="file" accept=".ttf,.otf" multiple required /></label>
-			<label class="small mb-0">Category
-				<select class="form-select" name="category">
-					{#each FONT_CATEGORIES as c}<option value={c.id} selected={c.id === 'lettering'}>{c.label}</option>{/each}
-				</select>
-			</label>
-			<button class="btn-hud" type="submit">Add fonts</button>
-		</form>
-	{/if}
 	<FontLibrary
 		fonts={data.fonts}
 		base={`/series/${data.series.id}/fonts`}
 		canManage={data.canManageType}
+		uploadAction="?/uploadFont"
 		emptyText="No fonts yet. Upload one or add shared fonts in Settings."
 	/>
 	<h3 class="h6 mt-4">Type defaults</h3>

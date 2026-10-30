@@ -138,7 +138,7 @@
 		</div>
 		<div class="kicker" style="margin-top:1rem">Optional</div>
 		<div class="pick-list" style="max-height:none">
-			{#each ['manga-ocr', 'koharu', 'coo', 'qwen3-vl-8b', 'hy-mt2-manga-v5', 'imsbee-ko-en-translator', 'shisa-v2.1-qwen3-8b-q4', 'sugoi-v4-ja-en'] as id (id)}
+			{#each ['manga-ocr', 'manga-ocr-nar-small', 'koharu', 'coo', 'qwen3-vl-8b', 'hy-mt2-manga-v5', 'imsbee-ko-en-translator', 'shisa-v2.1-qwen3-8b-q4', 'sugoi-v4-ja-en'] as id (id)}
 				{@const target = INSTALL_TARGETS.find((item) => item.id === id)!}
 				<label class="pick">
 					<input type="checkbox" checked={installed(id) || read.has(id)} disabled={installed(id)} onchange={() => (read = toggleSet(read, id))} />

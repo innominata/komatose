@@ -3,12 +3,19 @@
   import { type LineRow } from "$lib/types";
   import { builtinRegionKinds, regionKindOptions, type RegionKind } from "$lib/regionCatalog";
   import { groupFontsByCategory } from "$lib/fontCategories";
+  import CharacterStylePanel from "./CharacterStylePanel.svelte";
+  import LayerStylePanel from "./LayerStylePanel.svelte";
+  import { throttle } from "$lib/throttle";
+  import TextPathPanel from "./TextPathPanel.svelte";
+  import { regionTextPaths } from "$lib/textPath";
   import {
     MIN_STYLE_SIZE,
     TEXT_WARP_STYLE_LABELS,
     TEXT_WARP_STYLES,
     type FontAsset,
     type RegionData,
+    type CharRun,
+    type TextPath,
     type TextStyle,
     type WorkflowDoc,
   } from "$lib/workflow";
@@ -44,6 +51,12 @@
     canSegmentBubble = false,
     onrefinebubble,
     tab = "text",
+    seriesId,
+    pageSize,
+    oncharruns,
+    ontextpaths,
+    drawingTextPath = false,
+    ondrawtextpath,
   }: {
     selected: LineRow | undefined;
     regionDoc: WorkflowDoc<RegionData> | undefined;
@@ -75,6 +88,14 @@
     canSegmentBubble?: boolean;
     onrefinebubble?: () => void;
     tab?: "text" | "style" | "shape";
+    /** Series whose font route serves the faces shown in the typeface preview. */
+    seriesId?: string;
+    /** Page pixels, for measuring a text path. */
+    pageSize?: { width: number; height: number };
+    oncharruns?: (runs: CharRun[], body: string) => void;
+    ontextpaths?: (paths: TextPath[]) => void;
+    drawingTextPath?: boolean;
+    ondrawtextpath?: (on: boolean) => void;
   } = $props();
 
   const fontGroups = $derived(groupFontsByCategory(fonts));
@@ -90,6 +111,38 @@
     regionStyle.fontId = fontChoices[next].id;
     void onapplystyle();
   }
+
+  // ── Typeface preview ────────────────────────────────────────────────────
+  let previewEl = $state<HTMLDialogElement>();
+  let previewOpen = $state(false);
+  let previewCategory = $state<string>("");
+  let previewText = $state("");
+  let previewSize = $state(28);
+  const previewGroup = $derived(fontGroups.find(g => g.id === previewCategory) ?? fontGroups[0]);
+
+  function openPreview() {
+    previewText = selected?.body?.trim() || "The quick brown fox. I can do this!";
+    const current = fonts.find(f => f.id === regionStyle.fontId);
+    previewCategory = (current && fontGroups.find(g => g.fonts.includes(current))?.id) || fontGroups[0]?.id || "";
+    previewOpen = true;
+    try { previewEl?.showModal(); } catch { previewEl?.setAttribute("open", ""); }
+  }
+
+  function closePreview() {
+    if (previewEl?.open) previewEl.close();
+    previewOpen = false;
+  }
+
+  function chooseFont(id: string) {
+    if (!canClean || busy || regionDoc?.data.locked) return;
+    if (regionStyle.fontId !== id) {
+      regionStyle.fontId = id;
+      void onapplystyle();
+    }
+    closePreview();
+  }
+
+  const liveApply = throttle(() => void onapplystyle(), 1000);
 
   function swapFillAndBorder() {
     const fill = regionStyle.fill;
@@ -159,7 +212,12 @@
       <summary>Style</summary>
       <fieldset
         disabled={!canClean || busy || regionDoc.data.locked}
-        onchange={() => void onapplystyle()}
+        onchange={() => { liveApply.cancel(); void onapplystyle(); }}
+        oninput={(e) => {
+          // Colour pickers and sliders save while dragged, at most once a second.
+          const type = (e.target as HTMLInputElement).type;
+          if (type === "color" || type === "range") liveApply();
+        }}
       >
         <div class="font-picker">
           <label for="region-font-face">Font face</label>
@@ -175,12 +233,15 @@
             <button type="button" aria-label="Previous font" title="Previous font" disabled={!fontChoices.length} onclick={() => cycleFont(-1)}><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
             <button type="button" aria-label="Next font" title="Next font" disabled={!fontChoices.length} onclick={() => cycleFont(1)}><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
           </div>
+          {#if seriesId}
+            <button type="button" class="preview-faces" disabled={!fontChoices.length} onclick={openPreview}><i class="bi bi-fonts" aria-hidden="true"></i> Preview typefaces</button>
+          {/if}
         </div>
         <div class="style-grid">
-          {#each [["size", "Default size (pt)"], ["minSize", "Minimum size (pt)"], ["leading", "Leading multiplier"], ["padding", "Padding (pt)"], ["outlineWidth", "Outline (pt)"], ["rotation", "Text rotation (°)"], ["skewX", "Skew H (°)"], ["skewY", "Skew V (°)"]] as [k, label]}<label
+          {#each [["size", "Default size (pt)"], ["minSize", "Minimum size (pt)"], ["leading", "Leading multiplier"], ["padding", "Padding (pt)"], ["outlineWidth", "Outline (pt)"], ["rotation", "Text rotation (°)"], ["skewX", "Skew H (°)"], ["skewY", "Skew V (°)"], ["tracking", "Tracking (‰ em)"]] as [k, label]}<label
               >{label}<input
                 type="number"
-                step={k === "skewX" || k === "skewY" ? 1 : ".25"}
+                step={k === "skewX" || k === "skewY" ? 1 : k === "tracking" ? 10 : ".25"}
                 min={k === "size" || k === "minSize"
                   ? MIN_STYLE_SIZE
                   : k === "skewX" || k === "skewY"
@@ -211,6 +272,33 @@
               disabled={regionStyle.warpStyle === "none"}
               bind:value={regionStyle.warpBend}
             /></label
+          ><label
+            >Horizontal distortion (%)<input
+              type="number"
+              aria-label="Horizontal distortion (%)"
+              step="1"
+              min="-100"
+              max="100"
+              disabled={regionStyle.warpStyle === "none"}
+              bind:value={regionStyle.warpHorizontal}
+            /></label
+          ><label
+            >Vertical distortion (%)<input
+              type="number"
+              aria-label="Vertical distortion (%)"
+              step="1"
+              min="-100"
+              max="100"
+              disabled={regionStyle.warpStyle === "none"}
+              bind:value={regionStyle.warpVertical}
+            /></label
+          ><label
+            >Warp orientation<select
+              aria-label="Warp orientation"
+              disabled={regionStyle.warpStyle === "none"}
+              bind:value={regionStyle.warpOrientation}
+              ><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select
+            ></label
           ><label
             >Alignment<select bind:value={regionStyle.align}
               ><option>center</option><option>left</option><option>right</option
@@ -282,6 +370,26 @@
       </div>
       <small>Refit copies the series default onto every unlocked {categoryLabel} region in this chapter. Saved bubble geometry, text masks and placement transforms stay.</small>
     </details>
+    <LayerStylePanel
+      effects={regionStyle.effects}
+      disabled={!canClean || busy || regionDoc.data.locked}
+      onchange={(effects) => {
+        regionStyle.effects = effects;
+        void onapplystyle();
+      }}
+    />
+    {#if oncharruns}
+      <CharacterStylePanel
+        body={selected.body}
+        runs={regionDoc.data.charRuns}
+        runsBody={regionDoc.data.charRunsBody}
+        {regionStyle}
+        {fonts}
+        {seriesId}
+        disabled={!canClean || busy || regionDoc.data.locked}
+        onchange={oncharruns}
+      />
+    {/if}
     {/if}
     {#if tab === "shape"}
       <section class="sec" data-find="bubble-shape">
@@ -301,6 +409,10 @@
           <p class="muted">Needs geometry approval</p>
         {/if}
       </section>
+      {#if ontextpaths}
+        <TextPathPanel line={selected} paths={regionTextPaths(regionDoc.data)} layout={regionDoc.data.layout} pageWidth={pageSize?.width} pageHeight={pageSize?.height}
+          drawing={drawingTextPath} ondraw={ondrawtextpath} disabled={!canClean || busy || regionDoc.data.locked} onchange={ontextpaths} />
+      {/if}
       <p data-find="text-mask">Text mask brush and erase are on the rail. Knock out and clear text mask are on the region menu.</p>
     {/if}
     {#if tab === "text" && regionDoc.data.layout}
@@ -326,6 +438,51 @@
   {/if}
 </div>
 
+<svelte:head>
+  {#if seriesId && previewOpen}
+    {@html `<style>${fonts.map((f) => `@font-face{font-family:scan-${f.id};src:url('/series/${seriesId}/fonts/${f.id}');}`).join("")}</style>`}
+  {/if}
+</svelte:head>
+
+{#if seriesId}
+  <dialog class="hud-modal tf-preview" bind:this={previewEl} aria-labelledby="tf-preview-title" onclose={() => (previewOpen = false)}>
+    {#if previewOpen}
+      <header class="hud-window-bar"><h3 id="tf-preview-title">Preview typefaces</h3></header>
+      <div class="tf-tools">
+        <div class="tf-tabs" role="tablist" aria-label="Font categories">
+          {#each fontGroups as group (group.id)}
+            <button type="button" role="tab" aria-selected={previewGroup?.id === group.id} class:active={previewGroup?.id === group.id} onclick={() => (previewCategory = group.id)}
+              >{group.label} <small>{group.fonts.length}</small></button>
+          {/each}
+        </div>
+        <label class="tf-text">Text <textarea rows="2" bind:value={previewText}></textarea></label>
+        <label class="tf-size">Size <input type="range" min="12" max="72" step="1" bind:value={previewSize} /><span>{previewSize}px</span></label>
+      </div>
+      <div class="tf-list" role="listbox" aria-label={`${previewGroup?.label ?? ""} fonts`}>
+        {#each previewGroup?.fonts ?? [] as f (f.id)}
+          <button
+            type="button"
+            role="option"
+            class="tf-item"
+            class:active={f.id === regionStyle.fontId}
+            aria-selected={f.id === regionStyle.fontId}
+            disabled={!canClean || busy || regionDoc?.data.locked}
+            title="Use this font"
+            onclick={() => chooseFont(f.id)}
+          >
+            <small>{f.familyName} · {f.subfamilyName}{#if f.id === regionStyle.fontId} · current{/if}</small>
+            <span class="tf-sample" style={`font-family:scan-${f.id};font-size:${previewSize}px;text-align:${regionStyle.align || "center"}`}>{previewText}</span>
+          </button>
+        {/each}
+      </div>
+      <footer class="tf-foot">
+        <span class="panel-hint">Click a typeface to use it for this region.</span>
+        <button type="button" onclick={closePreview}>Close</button>
+      </footer>
+    {/if}
+  </dialog>
+{/if}
+
 <style>
   .ts-insp { padding: 12px 14px; display: grid; gap: 8px; border-bottom: 1px solid var(--hud-line); }
   .ts-insp :global(label) { margin: 0; display: grid; gap: 4px; }
@@ -335,6 +492,29 @@
   .font-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; }
   .font-controls select { min-width: 0; }
   .font-controls button { justify-content: center; padding: 5px 8px; }
+  .preview-faces { justify-self: start; }
+  .tf-preview { width: min(960px, 94vw); max-height: 92vh; padding: 0; }
+  .tf-preview[open] { display: flex; flex-direction: column; }
+  .tf-tools { display: grid; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hud-line); }
+  .tf-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tf-tabs button {
+    background: transparent; color: var(--hud-muted); border: 1px solid var(--hud-line);
+    border-radius: 4px; padding: 3px 9px; font-size: 12px; cursor: pointer;
+  }
+  .tf-tabs button.active { color: var(--hud-text); border-color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
+  .tf-tabs small { color: var(--hud-muted); margin-left: 2px; }
+  .tf-text, .tf-size { display: grid; gap: 4px; font-size: 12px; }
+  .tf-size { grid-template-columns: auto minmax(0, 240px) auto; align-items: center; }
+  .tf-list { overflow: auto; padding: 10px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .tf-item {
+    display: grid; gap: 6px; text-align: left; padding: 8px 10px; cursor: pointer;
+    color: var(--hud-text); background: var(--hud-bg-2); border: 1px solid var(--hud-line); border-radius: 5px;
+  }
+  .tf-item:hover:not(:disabled) { border-color: var(--hud-teal-ink); }
+  .tf-item.active { border-color: var(--hud-teal-ink); background: var(--hud-teal-dim); }
+  .tf-item small { color: var(--hud-muted); font-size: 11px; }
+  .tf-sample { line-height: 1.2; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tf-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--hud-line); }
   .ts-insp details { border: 1px solid var(--hud-line); border-radius: 5px; padding: 8px 10px; display: grid; gap: 8px; }
   .ts-insp summary { cursor: pointer; font-size: 12px; color: var(--hud-text); }
   .ts-insp fieldset { border: 0; padding: 0; margin: 8px 0; display: grid; gap: 8px; }

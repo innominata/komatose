@@ -224,7 +224,7 @@ export async function checkRegionAi({
     name: "AI source review",
     exact: true,
   });
-  await expect(review.getByLabel("Mask crop with detected text", { exact: true })).toBeChecked();
+  await expect(review.getByRole("tab", { name: "Mask", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect
     .poll(() => requests.some((item) => item.action === "detect-mask"))
     .toBe(true);
@@ -249,9 +249,11 @@ export async function checkRegionAi({
   await expect(review.getByRole("button", { name: "View crop at 2×", exact: true })).toBeVisible();
   await expect(review.getByRole("button", { name: "View crop at 4×", exact: true })).toBeVisible();
   await expect(review.getByRole("button", { name: "Brush 8 pixels", exact: true })).toBeVisible();
-  await expect(
-    review.getByText("The long dash is visible.", { exact: true }),
-  ).toBeVisible();
+  // Readings show only source and English; the reviewer's commentary stays out of the list.
+  await expect(review.getByText("The long dash is visible.", { exact: true })).toHaveCount(0);
+  await expect(review.locator(".reading-cell.source").getByText("待って——！", { exact: true })).toBeVisible();
+  await expect(review.getByRole("tab", { name: "Trace", exact: true })).toBeVisible();
+  await expect(review.getByRole("button", { name: "Review help", exact: true })).toBeVisible();
   await expect(
     review.getByText("Review failed: Fixture reviewer unavailable", {
       exact: true,
@@ -280,9 +282,14 @@ export async function checkRegionAi({
   await review.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(review.getByRole("button", { name: "Enter characters", exact: true })).toBeVisible();
   await expect(review.getByRole("log", { name: "Reviewer responses", exact: true })).toBeVisible();
-  await expect(review.locator(".review-crop")).toBeVisible();
-  await expect(review.locator(".action-card").getByText("English translation", { exact: true })).toBeVisible();
-  await expect(review.locator(".action-card").getByText("Hold on!", { exact: true })).toBeVisible();
+  await expect(review.locator(".mode-pane:not([hidden]) .review-crop")).toBeVisible();
+  await expect(review.locator(".reading-cell.english").getByText("Hold on!", { exact: true })).toBeVisible();
+  await expect(review.getByRole("button", { name: "Reject", exact: true })).toBeVisible();
+  // Source and English sit side by side on one row.
+  const sourceBox = await review.locator(".reading-cell.source").first().boundingBox();
+  const englishBox = await review.locator(".reading-cell.english").first().boundingBox();
+  expect(Math.abs(sourceBox.y - englishBox.y)).toBeLessThan(2);
+  expect(englishBox.x).toBeGreaterThan(sourceBox.x + sourceBox.width - 1);
   const reviewBounds = await review.boundingBox();
   expect(reviewBounds.width).toBeGreaterThan(1200);
   expect(reviewBounds.height).toBeGreaterThan(850);
@@ -294,8 +301,8 @@ export async function checkRegionAi({
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(review.getByRole("button", { name: "Close AI dialog" })).toBeVisible();
   expect(await review.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await review.locator(".translation").scrollIntoViewIfNeeded();
-  await expect(review.locator(".translation")).toBeVisible();
+  await review.locator(".reading-cell.english").first().scrollIntoViewIfNeeded();
+  await expect(review.locator(".reading-cell.english").first()).toBeVisible();
   await page.screenshot({ path: "/tmp/scan-acceptance/region-review-mobile.png", fullPage: true });
   await page.setViewportSize(viewport);
   await review.getByRole("button", { name: "View crop at 2×", exact: true }).click();
@@ -304,13 +311,13 @@ export async function checkRegionAi({
   await expect.poll(() => requests.filter(item => item.action === "review").length).toBe(4);
   expect(requests.filter(item => item.action === "review").slice(-2).every(item => item.cropScale === 2)).toBe(true);
   await expect(review.getByText("Waiting for response…")).toHaveCount(0);
-  await expect(review.getByText("Sent crop: 2×", { exact: true })).toHaveCount(2);
+  await expect(review.getByText("mask · 2×", { exact: true })).toHaveCount(2);
   expect(requests.filter(item => item.action === "review").every(item => item.maskEnabled && item.mask?.startsWith("data:image/png;base64,"))).toBe(true);
-  await review.getByLabel("Mask crop with detected text", { exact: true }).uncheck();
+  await review.getByRole("tab", { name: "Crop", exact: true }).click();
   await expect(review.getByRole("button", { name: "View crop at 2×", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect
     .poll(() =>
-      review.locator(".review-crop").evaluate((img) => img.naturalWidth),
+      review.getByAltText("Original text region sent to reviewers").evaluate((img) => img.naturalWidth),
     )
     .toBeGreaterThan(0);
   expect(
@@ -329,7 +336,7 @@ export async function checkRegionAi({
   const enlargedRequest = requests.filter(item => item.action === "review").at(-1);
   expect(enlargedRequest.cropScale).toBe(4);
   expect(enlargedRequest.maskEnabled).toBe(false);
-  await expect(review.getByText("Sent crop: 4×", { exact: true })).toBeVisible();
+  await expect(review.getByText("crop · 4×", { exact: true })).toBeVisible();
   expect(
     requests
       .filter((r) => r.action === "review")
@@ -342,6 +349,25 @@ export async function checkRegionAi({
     ["paddleocr-vl-1.6"],
     ["reviewer-grok-fixture"],
   ]);
+  // Trace: nothing can be sent until the text is drawn, then only the strokes go out.
+  await review.getByRole("tab", { name: "Trace", exact: true }).click();
+  await expect(review.getByRole("button", { name: "Resubmit", exact: true })).toBeDisabled();
+  await expect(review.getByText("Trace the text first", { exact: true })).toBeVisible();
+  const traceCanvas = review.getByRole("application", { name: "Trace the text over this crop", exact: true });
+  const traceBox = await traceCanvas.boundingBox();
+  await page.mouse.move(traceBox.x + traceBox.width * 0.3, traceBox.y + traceBox.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(traceBox.x + traceBox.width * 0.7, traceBox.y + traceBox.height * 0.6, { steps: 8 });
+  await page.mouse.up();
+  await expect(review.getByRole("button", { name: "Resubmit", exact: true })).toBeEnabled();
+  const beforeTrace = requests.filter(item => item.action === "review").length;
+  await review.getByRole("button", { name: "Resubmit", exact: true }).click();
+  await expect.poll(() => requests.filter(item => item.action === "review").length).toBe(beforeTrace + 2);
+  const traceRequests = requests.filter(item => item.action === "review").slice(-2);
+  expect(traceRequests.every(item => item.view === "trace" && !item.mask && item.trace?.startsWith("data:image/png;base64,"))).toBe(true);
+  await expect(review.getByText("Waiting for response…")).toHaveCount(0);
+  await expect(review.getByText("trace · 4×", { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: "/tmp/scan-acceptance/region-review-trace.png", fullPage: true });
   await review
     .getByRole("button", { name: "Use source & English", exact: true })
     .click();

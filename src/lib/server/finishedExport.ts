@@ -2,7 +2,7 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { writePsdBuffer, type Layer, type PixelData, type Psd } from "ag-psd";
 import type { Episode, ImageRow, LineRow, Series } from "../types";
-import { exportBlockers, exportRequiresCompletion, type FittedLayout, type PageData, type RegionData } from "../workflow";
+import { exportBlockers, exportRequiresCompletion, type FittedLayout, type PageData, type RegionData, type TextPath } from "../workflow";
 import { getDoc, readAsset, storeAsset, WorkflowError } from "./workflowStore";
 import { listImages, listLines } from "./queries";
 import {
@@ -15,6 +15,10 @@ import { createJob, updateJob, pageResult } from "./jobs";
 import { exportJobPayload, pruneExportJobs, unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
 import { textMatrix } from "./typesetting";
 import { psdTextWarp, warpPad } from "../textWarp";
+import { activeEffects, effectsReach, psdEffects } from "../textEffects";
+import { regionTextPaths, textPathBeziers, trimBeziers } from "../textPath";
+import { buildTxt2, type Txt2Layer, type Txt2Run } from "./txt2";
+import { metaLayer, pixelHash, regionSnapshot, writeMeta, type ExportMeta } from "./psdMeta";
 import { applyTextMaskToLayer, cropTextMask, maskPixelData } from "./textMask";
 import { db, sqlite } from "./db";
 import { images, lines, episodes, series as seriesTable } from "./db/schema";
@@ -95,15 +99,19 @@ export async function renderPage(page: ExportPage, options: { includeOverflow?: 
   for (const region of renderable) {
     const { line, data } = region;
     const l = data.layout!;
-    const points = data.polygon?.length
-      ? data.polygon
-      : [
-          { x: line.x ?? 0, y: line.y ?? 0 },
-          {
-            x: (line.x ?? 0) + (line.w ?? 0.2),
-            y: (line.y ?? 0) + (line.h ?? 0.1),
-          },
-        ];
+    const points = [
+      ...(data.polygon?.length
+        ? data.polygon
+        : [
+            { x: line.x ?? 0, y: line.y ?? 0 },
+            {
+              x: (line.x ?? 0) + (line.w ?? 0.2),
+              y: (line.y ?? 0) + (line.h ?? 0.1),
+            },
+          ]),
+      // Path text can run outside the region; its crop covers every path.
+      ...(l.onPath ? regionTextPaths(data).flatMap((p) => p.points) : []),
+    ];
     const regionW =
       (Math.max(...points.map((p) => p.x)) - Math.min(...points.map((p) => p.x))) *
       page.image.width;
@@ -117,7 +125,8 @@ export async function renderPage(page: ExportPage, options: { includeOverflow?: 
     const margin = Math.ceil(
       ((l.size * 2 + l.style.outlineWidth) * page.dpi) / 72 +
         shear +
-        warpPad(l.style, regionW, regionH),
+        warpPad(l.style, regionW, regionH) +
+        (effectsReach(l.style.effects) * page.dpi) / 72,
     );
     const left = Math.max(0, Math.min(page.image.width,
       Math.floor(Math.min(...points.map((p) => p.x)) * page.image.width) - margin));
@@ -264,7 +273,25 @@ export async function finishedPsd(
     { name: "Prepared source", hidden: true, imageData: prepared },
     { name: "Cleaned artwork", imageData: await pixels(r.base) },
   ];
-  for (const [i, layout] of r.layouts.entries()) {
+  // Type on a path needs the document Txt2 block; once one layer has it, every type layer
+  // gets its object there, numbered by TextIndex in layer order.
+  const txt2Layers: Txt2Layer[] = [];
+  // Path text that overflows is left out of the composite like any overflow, but the PSD
+  // keeps it as type so it can be fixed in Photoshop, where overset path text just stops.
+  const overflowing = page.regions.filter(
+    (x) => x.data.layout?.onPath && x.data.layout.overflow && x.data.renderEnabled !== false && x.line.sourceState !== "ignored",
+  );
+  const extra = overflowing.length
+    ? await renderPage({ ...page, regions: overflowing }, { includeOverflow: true, base: r.base })
+    : undefined;
+  const entries = [
+    ...r.layouts.map((layout, i) => ({ layout, layer: r.layers[i] })),
+    ...(extra?.layouts.map((layout, i) => ({ layout, layer: extra.layers[i] })) ?? []),
+  ];
+  const writeTxt2 = entries.some((e) => e.layout.onPath && e.layout.rows.length);
+  /** Child index → region id of each type layer, for the export record (see psdMeta). */
+  const layerRegion = new Map<number, string>();
+  for (const [i, { layout, layer }] of entries.entries()) {
     const s = layout.style;
     const rows = layout.rows;
     if (!rows.length) continue;
@@ -316,20 +343,31 @@ export async function finishedPsd(
       strokeColor: rgb(s.outline),
       outlineWidth: s.outlineWidth,
     };
-    // Paragraph indents preserve each fitted line's placement within the one editable box.
-    const layerLeft = r.layers[i].left;
-    const layerTop = r.layers[i].top;
-    const layerWidth = r.layers[i].width;
-    const layerHeight = r.layers[i].height;
-    children.push({
-      name: `Bubble ${i + 1} · ${region.line.id}`,
-      left: layerLeft,
-      top: layerTop,
-      right: layerLeft + layerWidth,
-      bottom: layerTop + layerHeight,
-      imageData: await pixels(r.layers[i].bytes),
-      fillOpacity: fillOpacity < 1 ? fillOpacity : undefined,
-      mask: region.data.textMask
+    const styleRuns = psdStyleRuns(layout, textStyle);
+    const boxBounds: [number, number, number, number] = [minX * units, top * units, maxX * units + 0.5, bottom * units];
+    const layerLeft = layer.left;
+    const layerTop = layer.top;
+    const layerWidth = layer.width;
+    const layerHeight = layer.height;
+    const layerFx = psdEffects(activeEffects(s.effects), page.dpi) as Layer["effects"];
+    const effects: Layer["effects"] =
+      s.outlineWidth > 0
+        ? {
+            ...layerFx,
+            stroke: [
+              {
+                enabled: true,
+                position: "outside",
+                fillType: "color",
+                color: rgb(s.outline),
+                size: { units: "Pixels", value: (s.outlineWidth * page.dpi) / 72 },
+                opacity: outlineOpacity,
+                blendMode: "normal",
+              },
+            ],
+          }
+        : layerFx && Object.keys(layerFx).length ? layerFx : undefined;
+    const mask = async (): Promise<Layer["mask"]> => region.data.textMask
         ? {
             defaultColor: 255,
             positionRelativeToLayer: false,
@@ -347,16 +385,62 @@ export async function finishedPsd(
               ),
             ),
           }
-        : undefined,
+        : undefined;
+    if (layout.onPath) {
+      // Photoshop sets one path per type layer, so each path's line is its own layer, with
+      // only its own glyphs as the layer's pixels.
+      const paths = regionTextPaths(region.data);
+      for (const [k, row] of rows.entries()) {
+        const path = paths[row.path ?? 0];
+        if (!path) continue;
+        const geo = psdTextPath(path, row.x, width, height, units);
+        const runs = psdStyleRuns({ ...layout, rows: [row] }, textStyle);
+        txt2Layers.push({ text: row.text, runs: runs.map(txt2Run), justification: "left", frame: { path: geo.segments } });
+        layerRegion.set(children.length, region.line.id);
+        children.push({
+          name: `Bubble ${i + 1} · line ${k + 1} · ${region.line.id}${layout.overflow ? " · overflows path" : ""}`,
+          left: layerLeft,
+          top: layerTop,
+          right: layerLeft + layerWidth,
+          bottom: layerTop + layerHeight,
+          imageData: await pixels(await layerPixels(layout.svg, k, page.image, layer, region.data.textMask)),
+          fillOpacity: fillOpacity < 1 ? fillOpacity : undefined,
+          mask: await mask(),
+          text: {
+            text: row.text,
+            index: txt2Layers.length - 1,
+            shapeType: "box",
+            // Photoshop describes path text as a box over the path's bounds; the path itself
+            // is the layer's Txt2 frame. Text space is the page in points, unrotated.
+            boxBounds: geo.bounds,
+            transform: [1 / units, 0, 0, 1 / units, 0, 0],
+            style: textStyle,
+            styleRuns: runs,
+            paragraphStyle: { justification: "left", autoHyphenate: false, everyLineComposer: false },
+          },
+          effects,
+        });
+      }
+      continue;
+    }
+    if (writeTxt2)
+      txt2Layers.push({ text, runs: styleRuns.map((run) => txt2Run(run)), justification: s.align, frame: { box: boxBounds } });
+    // Paragraph indents preserve each fitted line's placement within the one editable box.
+    layerRegion.set(children.length, region.line.id);
+    children.push({
+      name: `Bubble ${i + 1} · ${region.line.id}`,
+      left: layerLeft,
+      top: layerTop,
+      right: layerLeft + layerWidth,
+      bottom: layerTop + layerHeight,
+      imageData: await pixels(isMarked(layout.svg) ? await layerPixels(layout.svg, undefined, page.image, layer, region.data.textMask) : layer.bytes),
+      fillOpacity: fillOpacity < 1 ? fillOpacity : undefined,
+      mask: await mask(),
       text: {
         text,
+        ...(writeTxt2 ? { index: txt2Layers.length - 1 } : {}),
         shapeType: "box",
-        boxBounds: [
-          minX * units,
-          top * units,
-          maxX * units + 0.5,
-          bottom * units,
-        ],
+        boxBounds,
         // Photoshop's 2×3 affine (xx, xy, yx, yy, tx, ty): text space in points → page pixels,
         // pivoting about the region centre. Skew rides along in the same matrix, so the layer
         // stays fully editable (it is what Free Transform → Skew writes).
@@ -369,7 +453,7 @@ export async function finishedPsd(
           cy - (b * cx + d * cy),
         ],
         style: textStyle,
-        styleRuns: [{ length: text.length, style: textStyle }],
+        styleRuns,
         paragraphStyle: {
           justification: s.align,
           autoHyphenate: false,
@@ -388,31 +472,36 @@ export async function finishedPsd(
         })),
         warp: psdTextWarp(s),
       },
-      effects:
-        s.outlineWidth > 0
-          ? {
-              stroke: [
-                {
-                  enabled: true,
-                  position: "outside",
-                  fillType: "color",
-                  color: rgb(s.outline),
-                  size: {
-                    units: "Pixels",
-                    value: (s.outlineWidth * page.dpi) / 72,
-                  },
-                  opacity: outlineOpacity,
-                  blendMode: "normal",
-                },
-              ],
-            }
-          : undefined,
+      effects,
     });
   }
+  // The export record: fixed layer ids (Photoshop keeps them through edits and renames), the
+  // layer → region map and each region as exported, so an import applies only what changed.
+  children.forEach((child, k) => (child.id = k + 1));
+  const meta: ExportMeta = {
+    v: 1,
+    page: page.image.id,
+    exportedAt: Date.now(),
+    artwork: await pixelHash(r.base),
+    regions: Object.fromEntries(
+      page.regions.flatMap((x) => {
+        const snap = regionSnapshot(x.line, x.data);
+        return snap && [...layerRegion.values()].includes(x.line.id) ? [[x.line.id, snap]] : [];
+      }),
+    ),
+    layers: Object.fromEntries([...layerRegion].map(([k, id]) => [String(children[k].id), id])),
+  };
+  const hidden = metaLayer(meta, children.length + 1);
+  if (writeTxt2) {
+    hidden.text!.index = txt2Layers.length;
+    txt2Layers.push({ text: hidden.text!.text, runs: [txt2Run({ length: hidden.text!.text.length, style: { font: { name: "ArialMT" }, fontSize: 1, leading: 1, fauxBold: false, fauxItalic: false, horizontalScale: 1, verticalScale: 1, fillColor: { r: 0, g: 0, b: 0 }, strokeColor: { r: 0, g: 0, b: 0 } } })], justification: "left", frame: { box: [0, 0, 1, 1] } });
+  }
+  children.push(hidden);
   const psd: Psd = {
     width,
     height,
     children,
+    ...(writeTxt2 ? { engineData: Buffer.from(buildTxt2(txt2Layers)).toString("base64") } : {}),
     imageData: await pixels(r.composite),
     imageResources: {
       resolutionInfo: {
@@ -425,6 +514,7 @@ export async function finishedPsd(
       },
     },
   };
+  writeMeta(psd, meta);
   return writePsdBuffer(psd, { generateThumbnail: false });
 }
 export async function captureExport(
@@ -695,4 +785,116 @@ export function startExport(snapshot: ExportSnapshot, retryId?: string) {
       }
     });
   return id;
+}
+
+/**
+ * Photoshop character runs for a layout: one run per styled piece of each row, with the row
+ * break carried by the piece that ends the row. Per-character opacity has no PSD equivalent
+ * and stays in the pixels.
+ */
+function psdStyleRuns(layout: FittedLayout, base: Record<string, unknown>) {
+  const rows = layout.rows;
+  const text = rows.map((row) => row.text).join("\r");
+  if (!layout.charStyles || !rows.some((row) => row.pieces)) return [{ length: text.length, style: base }];
+  const runs: { length: number; style: Record<string, unknown> }[] = [];
+  rows.forEach((row, i) => {
+    const pieces = row.pieces ?? [{ text: row.text, style: 0 }];
+    pieces.forEach((piece, k) => {
+      const c = layout.charStyles![piece.style] ?? { postscriptName: layout.font.postscriptName };
+      const style = {
+        ...base,
+        font: { name: c.postscriptName },
+        fontSize: layout.size * ((c.size ?? 100) / 100),
+        ...(c.fill ? { fillColor: rgb(c.fill) } : {}),
+        ...(c.outline ? { strokeColor: rgb(c.outline) } : {}),
+        ...(c.emphasis ? { fauxBold: c.emphasis === "bold", fauxItalic: c.emphasis === "italic" } : {}),
+        tracking: (layout.style.tracking ?? 0) + (c.tracking ?? 0),
+        baselineShift: c.baselineShift ?? 0,
+        horizontalScale: (c.horizontalScale ?? 100) / 100,
+        verticalScale: (c.verticalScale ?? 100) / 100,
+      };
+      const length = piece.text.length + (k === pieces.length - 1 && i < rows.length - 1 ? 1 : 0);
+      const last = runs.at(-1);
+      if (last && JSON.stringify(last.style) === JSON.stringify(style)) last.length += length;
+      else runs.push({ length, style });
+    });
+  });
+  return runs;
+}
+
+/**
+ * A text path for the PSD: the curve our layout follows as cubic segments in text space
+ * (page points), starting where the fitted line starts, since Photoshop sets path type from
+ * the path's beginning.
+ */
+export function psdTextPath(path: TextPath, start: number, width: number, height: number, units: number) {
+  const px = path.points.map((p) => ({ x: p.x * width, y: p.y * height }));
+  const segments = trimBeziers(textPathBeziers(px, !!path.flip), Math.max(0, start)).map((seg) =>
+    seg.map((p) => [p.x * units, p.y * units] as [number, number]),
+  );
+  const xs = segments.flat().map((p) => p[0]);
+  const ys = segments.flat().map((p) => p[1]);
+  return {
+    segments,
+    bounds: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as [number, number, number, number],
+  };
+}
+
+function txt2Run(run: { length: number; style: Record<string, unknown> }): Txt2Run {
+  const s = run.style as {
+    font: { name: string };
+    fontSize: number;
+    leading: number;
+    fauxBold: boolean;
+    fauxItalic: boolean;
+    horizontalScale: number;
+    verticalScale: number;
+    tracking?: number;
+    baselineShift?: number;
+    fillColor: { r: number; g: number; b: number };
+    strokeColor: { r: number; g: number; b: number };
+  };
+  return {
+    length: run.length,
+    font: s.font.name,
+    size: s.fontSize,
+    leading: s.leading,
+    fauxBold: s.fauxBold,
+    fauxItalic: s.fauxItalic,
+    horizontalScale: s.horizontalScale,
+    verticalScale: s.verticalScale,
+    tracking: s.tracking ?? 0,
+    baselineShift: s.baselineShift ?? 0,
+    fill: s.fillColor,
+    stroke: s.strokeColor,
+  };
+}
+
+/** Layouts that mark their outline and effects (see fitText), so the glyphs can be drawn alone. */
+const isMarked = (svg: string) => svg.includes("<!--outline-->");
+
+/**
+ * A type layer's own pixels, cropped to its region's layer box: the glyphs without the
+ * outline and effects Photoshop draws from them (its Stroke and layer styles), and for a
+ * path layout just one row.
+ */
+async function layerPixels(
+  svg: string,
+  row: number | undefined,
+  image: ImageRow,
+  box: { left: number; top: number; width: number; height: number },
+  textMask?: string,
+) {
+  const only = svg
+    .replace(/<!--row:(\d+)-->[\s\S]*?<!--\/row:\1-->/g, (m, k) => (row === undefined || Number(k) === row ? m : ""))
+    .replace(/<!--fx-->[\s\S]*?<!--\/fx-->/g, "")
+    .replace(/<!--outline-->[\s\S]*?<!--\/outline-->/g, "")
+    .replace(/ filter="url\(#fx-int\)"/g, "")
+    .replace(
+      `width="${image.width}" height="${image.height}" viewBox="0 0 ${image.width} ${image.height}"`,
+      `width="${box.width}" height="${box.height}" viewBox="${box.left} ${box.top} ${box.width} ${box.height}"`,
+    );
+  let bytes = await sharp(Buffer.from(only)).png().toBuffer();
+  if (textMask) bytes = await applyTextMaskToLayer(bytes, await readAsset(textMask), box.left, box.top, box.width, box.height);
+  return bytes;
 }

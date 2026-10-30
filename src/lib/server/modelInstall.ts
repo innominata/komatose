@@ -175,6 +175,7 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 		case 'hayai-ocr-v2.5-nova':
 		case 'pp-ocrv5-korean':
 		case 'manga-ocr':
+		case 'manga-ocr-nar-small':
 		case 'paddleocr-vl-1.6':
 		case 'qwen3-vl-8b':
 			bin = pythonFor(target.id === 'pp-ocrv5-korean' ? ['env-ocr'] : ['env-review', 'env-ocr', 'env-workflow']);
@@ -367,6 +368,7 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 		case 'hayai-ocr-v2.5-nova':
 		case 'pp-ocrv5-korean':
 		case 'manga-ocr':
+		case 'manga-ocr-nar-small':
 		case 'paddleocr-vl-1.6':
 		case 'qwen3-vl-8b':
 			return reviewWeightsInstalled(target.id)
@@ -1006,7 +1008,7 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 			paths.push(describePath(join(DATA_DIR, 'models/coo'), 'Its model directory'));
 		return { paths, alsoRemoves, warnings };
 	}
-	const REVIEW_IDS = ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'pp-ocrv5-korean', 'manga-ocr', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];
+	const REVIEW_IDS = ['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'pp-ocrv5-korean', 'manga-ocr', 'manga-ocr-nar-small', 'paddleocr-vl-1.6', 'qwen3-vl-8b'];
 	if (REVIEW_IDS.includes(targetId)) {
 		paths.push(describePath(join(reviewDir(), targetId), 'Model weights'));
 		paths.push({ path: join(reviewDir(), 'installed.json'), note: `Its “${targetId}” entry in the install record`, kind: 'marker' });

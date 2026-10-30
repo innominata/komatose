@@ -1,13 +1,10 @@
 import { rowHasOperation, isTranslationSpecialist } from '../modelRegistry';
 import { deciderPageStamp } from '../decider';
 import type { PageData } from '../workflow';
-import { DEFAULT_CHAT_MODEL_ID } from '../modelDefaults';
-import { effectiveDefault } from './modelDefaultStore';
+import { effectiveDefault, requireDefault } from './modelDefaultStore';
 import { normalizeTranslation } from "../translationText";
 import { assertTranslationLanguage, translationModel } from '../translationModels';
 import { regionAiSettings, resolveTaskModel } from "../regionAi";
-import { singleAvailableEngineFor } from "../providerCatalog";
-import { registryPickerRows } from "./registryPicker";
 import { regionRectangle, sameDetectedTextBox } from "../regionGeometry";
 import { assertOcrConsensusInstalled, defaultTranscriptionRead, readOcrConsensus, saveOcrConsensus, transcriptionModelIds } from "./ocrConsensus";
 import {
@@ -29,7 +26,7 @@ import {
   readsAsLettering,
   transcriptionOverlapSource,
 } from "../transcribeRegions";
-import { detectLetteringMask, maskedBubbleCrop, transcribeBubbleCrop } from "./reviewMask";
+import { bubbleSilhouette, detectLetteringMask, maskedBubbleCrop, transcribeBubbleCrop } from "./reviewMask";
 import { describePages, isDescribeRunning } from "./pageEdit";
 import { isResliceRunning } from "./reslice";
 import { acceptSuggestion, preferences } from "./workflowService";
@@ -604,10 +601,10 @@ export function startRegionOcr(opts: {
 
 export function acceptRegionSuggestion(opts: {
   series: Series; episode: Episode; user: PublicUser;
-  id: string; decision: string; force?: boolean;
+  id: string; decision: string; force?: boolean; english?: string;
   engine?: TranslateEngine; model?: string; lang?: OcrLang;
 }): { jobId?: string } {
-  const changed = acceptSuggestion(opts.episode.id, opts.id, opts.user.id, opts.decision, opts.force);
+  const changed = acceptSuggestion(opts.episode.id, opts.id, opts.user.id, opts.decision, opts.force, opts.english);
   return changed ? startSourceRetranslation({ ...opts, ...changed }) : {};
 }
 
@@ -623,7 +620,7 @@ export function startSourceRetranslation(opts: {
     throw new AiJobError("Region changed since this source correction. Request a new translation for the current text.", 409);
   const line = toLine(row);
   const model = regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi,
-    { engine: opts.engine || effectiveDefault('translate', DEFAULT_CHAT_MODEL_ID), model: opts.model || "" }).translate;
+    { engine: opts.engine || effectiveDefault('translate'), model: opts.model || "" }).translate;
   const lang = opts.lang || parseOcrLang(undefined);
   const jobId = createJob(opts.episode.id, "source-translation", {
     lineId: line.id, expectedRevision: line.revision, ...model, lang,
@@ -1113,6 +1110,8 @@ async function runTranscribeJob(
               job.lang,
               ocrIds,
               { decider: transcriptionDeciderFor(opts.series.id, job.episodeId),
+                silhouette: mask ? () => bubbleSilhouette(mask!, region.ocr) : undefined,
+                sfx: region.kind === "free" || Boolean(region.provenance?.backend?.startsWith("coo")),
                 onDecide: (id) => reportStep(job, { step: "Deciding transcription", engine: id, model: liveAssistantName(id) }),
                 onTranslate: () => reportStep(job, {
                 step: "Translating transcription",
@@ -1397,7 +1396,7 @@ function beginAiJob(
     message,
     abort: new AbortController(),
     user: opts.user,
-    engine: kind === "transcribe" ? (ocrIds[0] || "hayai-ocr-v2") : selected.engine,
+    engine: kind === "transcribe" ? (ocrIds[0] ?? "") : selected.engine,
     detection,
     detector: detection && detectorSetupId(detection.setup),
     detectConf: detection?.conf,
@@ -1497,7 +1496,7 @@ export function startAiProofread(opts: {
     message: "Starting proofread…",
     abort: new AbortController(),
     user: opts.user,
-    engine: opts.engine || effectiveDefault('proofreadEnglish', DEFAULT_CHAT_MODEL_ID),
+    engine: opts.engine || requireDefault('proofreadEnglish'),
     lang: opts.lang || parseOcrLang(undefined),
     kind: "proofread",
     imageIds: opts.imageIds,
@@ -1576,19 +1575,9 @@ async function runProofreadJob(
   }
 }
 
-/**
- * The chapter review fallback: with exactly one review-capable model available,
- * it is the default review model — matching the setup report — otherwise the
- * shipped chat-model default stands.
- */
+/** The chapter review default, else the first model whose Chapter Review test passed. */
 async function defaultReviewEngine(): Promise<string> {
-  const fallback = effectiveDefault('chapterReview', DEFAULT_CHAT_MODEL_ID);
-  try {
-    const rows = await registryPickerRows(undefined, 'chapterReview');
-    return singleAvailableEngineFor(rows, 'chapterReview') || fallback;
-  } catch {
-    return fallback;
-  }
+  return requireDefault('chapterReview');
 }
 
 export async function startAiReview(opts: {
@@ -1759,7 +1748,7 @@ export async function translateRegion(opts: {
     throw new AiJobError("Selection is too small");
 
   const lang = opts.lang || parseOcrLang(undefined);
-  const engine = opts.engine || effectiveDefault('vision', DEFAULT_CHAT_MODEL_ID);
+  const engine = opts.engine || requireDefault('vision');
   const models = regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi, { engine, model: opts.model || "" });
   const target = opts.lineId
     ? (await listLines(opts.episode.id)).find(
@@ -2082,7 +2071,7 @@ export async function startSuggestAlternatives(opts: {
     throw new AiJobError("Wait for or cancel queued work first", 409);
   const abort = new AbortController();
   suggestBatches.set(opts.episode.id, abort);
-  const engine = opts.engine || effectiveDefault('alternatives', DEFAULT_CHAT_MODEL_ID);
+  const engine = opts.engine || requireDefault('alternatives');
   const lang = opts.lang || parseOcrLang(undefined);
   const jobId = createJob(opts.episode.id, "suggest", {
     action: "suggest-alternatives",

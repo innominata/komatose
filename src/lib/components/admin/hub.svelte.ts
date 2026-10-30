@@ -12,7 +12,7 @@ import { pciKey, shownDevice, type GpuUsage, type HardwareSnapshot, type Resolve
 import type { NvtopStatus } from '$lib/nvtopStatus';
 import { nameResidents, type KnownProcess } from '$lib/gpuResidents';
 import { collectGpuServices, residentControl, type GpuStop, type GpuWorkerRow } from '$lib/gpuRelease';
-import type { DetectorDefaults } from '$lib/detectorSetup';
+import { detectorSetupLabel, parseDetectorSetup, type DetectorDefaults } from '$lib/detectorSetup';
 
 /**
  * Shared state for the Admin → Models area. One snapshot endpoint feeds every
@@ -333,6 +333,12 @@ export type Coverage = {
 
 const nameOf = (rows: PublicRow[]) => rows.map((row) => row.name);
 
+/** The chosen default when it is ready, else the first ready model, as the server resolves it. */
+function defaultOf(data: HubData | null, op: ProviderOperation, ready: PublicRow[]): PublicRow | undefined {
+	const stored = data?.defaults[op];
+	return ready.find((row) => row.id === stored) ?? ready[0];
+}
+
 function fallbackNotice(data: HubData | null, op: ProviderOperation): { wanted?: PublicRow; fallback?: PublicRow } {
 	const ready = readyRowsForOp(data, op);
 	const wantedId = data?.defaults[op];
@@ -342,40 +348,30 @@ function fallbackNotice(data: HubData | null, op: ProviderOperation): { wanted?:
 }
 
 export function coverageFor(data: HubData | null, task: AdminTask): Coverage {
-	const installed = (id: string) => installFor(data, id)?.installed === true;
-	const reviewInstalled = (id: string) =>
-		data?.reviewServers.find((item) => item.id === id)?.installed === true || installed(id);
 	const none: Coverage = { tone: 'idle', label: 'Not set up', others: [] };
 
 	switch (task.id) {
 		case 'detect': {
-			if (installed('rtdetr') || installed('ctd'))
-				return { tone: 'ok', label: 'Ready', defLabel: installed('rtdetr') ? 'RT-DETR' : 'Comic Text Detector', others: [] };
-			return { tone: 'warn', label: 'Basic only', others: [], text: 'Only the built-in heuristic detector, which cannot see borderless text.' };
+			const setup = parseDetectorSetup(data?.detector?.setup);
+			if (setup && setup.base !== 'heuristic')
+				return { tone: 'ok', label: 'Ready', defLabel: detectorSetupLabel(setup), others: [] };
+			return { tone: 'warn', label: 'Basic only', others: [], text: 'No text detector has passed Detect Text, so only geometric bubble detection runs, which cannot see borderless text.' };
 		}
 		case 'mask': {
-			const have = ['ctd', 'koharu'].filter(installed);
-			if (have.length) return { tone: 'ok', label: 'Ready', defLabel: have.includes('ctd') ? 'Comic Text Detector' : 'Koharu', others: [] };
-			return { tone: 'warn', label: 'Brush only', others: [], text: 'Masks are painted by hand.' };
+			const ready = readyRowsForOp(data, 'textMask');
+			const def = defaultOf(data, 'textMask', ready);
+			if (def) return { tone: 'ok', label: 'Ready', def, others: nameOf(ready.filter((r) => r !== def)) };
+			return { tone: 'warn', label: 'Brush only', others: [], text: 'No model has passed Text Mask, so masks are painted by hand.' };
 		}
 		case 'clean': {
-			const editors = (data?.editors || []).filter((m) => m.installed);
-			const fill = ['lama-manga', 'aot'].filter(installed);
-			if (editors.length)
-				return { tone: 'ok', label: 'Ready', defLabel: editors[0].label, others: editors.slice(1).map((m) => m.label), note: fill.length ? `Fill methods: ${fill.length} installed.` : undefined };
-			if (fill.length) return { tone: 'warn', label: 'Fill only', defLabel: 'Inpainting fill', others: [], text: 'Detailed art under lettering can’t be redrawn.' };
+			const editors = readyRowsForOp(data, 'cleaning');
+			const fill = readyRowsForOp(data, 'inpaint');
+			const def = defaultOf(data, 'cleaning', editors);
+			if (def)
+				return { tone: 'ok', label: 'Ready', def, others: nameOf(editors.filter((r) => r !== def)), note: fill.length ? `Fill methods: ${fill.length} ready.` : undefined };
+			const fillDef = defaultOf(data, 'inpaint', fill);
+			if (fillDef) return { tone: 'warn', label: 'Fill only', def: fillDef, others: nameOf(fill.filter((r) => r !== fillDef)), text: 'Detailed art under lettering can’t be redrawn.' };
 			return { tone: 'warn', label: 'Built-ins only', others: [], text: 'Flat fill and Telea only.' };
-		}
-		case 'transcribe': {
-			const councilIds = ['hayai-ocr-v2', 'paddleocr-vl-1.6'];
-			const council = councilIds.filter(reviewInstalled).map((id) => rowById(data, id)).filter((r): r is PublicRow => Boolean(r));
-			const vision = readyRowsForOp(data, 'vision').filter((row) => !councilIds.includes(row.id));
-			if (council.length === 2)
-				return { tone: 'ok', label: 'Ready', defLabel: council.map((r) => r.name).join(' + '), others: nameOf(vision) };
-			if (council.length === 1)
-				return { tone: 'warn', label: 'Half council', defLabel: council[0].name, others: nameOf(vision), text: 'Disagreements can’t be caught with one reader.' };
-			if (vision.length) return { tone: 'warn', label: 'Fallback', def: vision[0], others: nameOf(vision.slice(1)), text: 'No OCR council; transcription falls back to an image model.' };
-			return { tone: 'bad', label: 'Blocked', others: [], text: 'Nothing can read source text yet.' };
 		}
 		default: {
 			if (!task.op) return none;
@@ -387,7 +383,7 @@ export function coverageFor(data: HubData | null, task: AdminTask): Coverage {
 					others: [],
 					text: task.required ? `No model can ${task.label.toLowerCase()}.` : undefined,
 				};
-			const stored = data?.defaults[task.op];
+			const stored = (task.id === 'transcribe' && data?.defaults.transcribe) || data?.defaults[task.op];
 			const wanted = stored ? rowById(data || null, stored) : undefined;
 			if (wanted && !ready.includes(wanted))
 				return {
@@ -646,7 +642,9 @@ const TARGET_TASKS: Record<string, AdminTask['id'][]> = {
 	koharu: ['detect', 'mask'],
 	coo: ['detect'],
 	'hayai-ocr-v2': ['transcribe', 'review'],
+	'hayai-ocr-v2.5-nova': ['transcribe', 'review'],
 	'manga-ocr': ['transcribe'],
+	'manga-ocr-nar-small': ['transcribe'],
 	'paddleocr-vl-1.6': ['transcribe', 'review'],
 	'qwen3-vl-8b': ['transcribe', 'describe', 'review'],
 	'cat-translate-7b-q4': ['translate'],

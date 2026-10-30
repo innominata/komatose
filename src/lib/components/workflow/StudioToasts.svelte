@@ -6,7 +6,7 @@
     ondismiss,
   }: {
     error: string;
-    toasts: { id: number; text: string }[];
+    toasts: { id: number; text: string; action?: { label: string; run: () => void } }[];
     ondismisserror: () => void;
     ondismiss: (id: number) => void;
   } = $props();
@@ -25,6 +25,9 @@
     {#each toasts as t (t.id)}
       <div class="toast" role="status">
         <p>{t.text}</p>
+        {#if t.action}
+          <button type="button" class="toast-action" onclick={() => { t.action!.run(); ondismiss(t.id); }}>{t.action.label}</button>
+        {/if}
         <button type="button" onclick={() => ondismiss(t.id)} aria-label="Dismiss"
           >×</button
         >
@@ -34,6 +37,16 @@
 {/if}
 
 <style>
+  .toast-action {
+    flex: none;
+    padding: 2px 10px;
+    border: 1px solid var(--ed-active, var(--hud-teal));
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ed-active, var(--hud-teal));
+    font-weight: 600;
+    cursor: pointer;
+  }
   .toasts {
     position: fixed;
     right: 16px;

@@ -45,6 +45,7 @@ export function aliasFromArgs(args: string[]): string {
 	if (args.some((arg) => arg.includes('hayai_review.py'))) return flagValue(args, ['--model-id']) || 'hayai-ocr-v2';
 	if (args.some((arg) => arg.includes('ppocr_korean_review.py'))) return 'pp-ocrv5-korean';
 	if (args.some((arg) => arg.includes('manga_ocr_review.py'))) return 'manga-ocr';
+	if (args.some((arg) => arg.includes('manga_ocr_nar_review.py'))) return 'manga-ocr-nar-small';
 	return '';
 }
 
@@ -114,7 +115,7 @@ export async function inferenceHealthy(
 export type ReviewVerdict = 'ready' | 'loading' | 'unauthorized' | 'mismatch' | 'down';
 
 /** Python review workers expose model identity on `/health`; llama-server uses `/v1/models`. */
-const HEALTH_IDENTITY_REVIEW_MODELS = new Set(['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'pp-ocrv5-korean', 'manga-ocr']);
+const HEALTH_IDENTITY_REVIEW_MODELS = new Set(['hayai-ocr-v2', 'hayai-ocr-v2.5-nova', 'pp-ocrv5-korean', 'manga-ocr', 'manga-ocr-nar-small']);
 
 /**
  * llama-server `/health` is unauthenticated, so a chat model on a review port

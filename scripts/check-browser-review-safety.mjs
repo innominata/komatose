@@ -71,7 +71,7 @@ export async function checkReviewSafety({ page, context, base }) {
   await page.locator(".pages > button").first().click();
   await card.getByRole("button", { name: "Review Transcription", exact: true }).click();
   await expect(review).toBeVisible();
-  await expect(review.getByLabel("Mask crop with detected text", { exact: true })).toBeChecked();
+  await expect(review.getByRole("tab", { name: "Mask", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => maskRequests.length).toBe(1);
   await expect(runLocal()).toBeDisabled();
   await expect(review.getByRole("button", { name: "Brush", exact: true })).toBeDisabled();
@@ -161,7 +161,7 @@ export async function checkReviewSafety({ page, context, base }) {
   await other.getByRole("button", { name: "Review Transcription", exact: true }).click();
   await expect.poll(() => maskRequests.at(-1)?.lineId).toBe("fixture-line-0-1");
   await expect(runPaid(paidNames[1])).toBeEnabled();
-  await expect(review.getByLabel("Mask crop with detected text", { exact: true })).toBeChecked();
+  await expect(review.getByRole("tab", { name: "Mask", exact: true })).toHaveAttribute("aria-selected", "true");
   await close();
 
   const state = await (await context.request.get(`${api}/workflow`)).json();

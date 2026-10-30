@@ -6,7 +6,9 @@ import {
   looksLikeDialogue,
   looksLikeOnomatopoeia,
   lookupStandaloneSfx,
+  sfxAlternatives,
   sfxClassificationSource,
+  sfxEnglishChoices,
   sfxGlossaryPrompt,
   sfxTranslateHit,
   withSfxGlossary,
@@ -184,4 +186,17 @@ test('Korean region type follows the dictionary, and hangul sentences stay speec
   assert.equal(looksLikeDialogue('하아'), false);
   assert.equal(looksLikeOnomatopoeia('쿵쿵쿵'), true);
   assert.equal(looksLikeOnomatopoeia('기다려 주세요'), false);
+});
+
+test('SFX alternatives split single-word slashes and spaced slashes, not phrases', () => {
+  assert.deepEqual(sfxAlternatives('soft/float'), ['soft', 'float']);
+  assert.deepEqual(sfxAlternatives('float / softly'), ['float', 'softly']);
+  assert.deepEqual(sfxAlternatives('write/read fluently'), ['write/read fluently']);
+  assert.deepEqual(sfxAlternatives('squeeze/rub repeatedly / squeak'), ['squeeze/rub repeatedly', 'squeak']);
+  assert.deepEqual(sfxAlternatives('Soft / soft'), ['Soft']);
+  assert.deepEqual(sfxEnglishChoices('ふわ', 'soft/float'), ['soft', 'float']);
+  assert.deepEqual(sfxEnglishChoices('ふわ', 'soft'), [], 'one meaning needs no choice');
+  assert.deepEqual(sfxEnglishChoices('待って', 'wait/hold on'), [], 'dialogue is never split');
+  assert.deepEqual(sfxEnglishChoices('待って', 'wait/stop', '::'), ['wait', 'stop'], 'an SFX region type counts');
+  assert.deepEqual(sfxEnglishChoices('어떻게\n알았냐고?', 'How did I know? / How did you know?'), []);
 });

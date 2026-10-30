@@ -31,6 +31,7 @@ import {
   detectReviewMask,
   parseReviewMaskPng,
   parseReviewCropScale,
+  parseReviewView,
   regionReviewCrop,
 } from "$lib/server/reviewMask";
 import { saveCleanExample, parseComparisonFormat, regionComparison } from "$lib/server/regionCompare";
@@ -80,10 +81,15 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       const reviewers = validateReviewers(b.reviewers, b.selectedReviewer);
       await reserve(reviewers);
       if (!page) throw new WorkflowError("Region needs image bounds");
-      const mask = b.mask != null ? parseReviewMaskPng(b.mask)
-        : b.maskEnabled === false ? undefined
-        : await detectReviewMask(series, episode, line, page, b.expansion, request.signal);
-      const crop = await regionReviewCrop(series, episode, line, page, mask, cropScale);
+      // `view` replaces the older maskEnabled flag; both stay accepted.
+      const view = parseReviewView(b.view) ?? (b.maskEnabled === false ? "crop" : "mask");
+      const crop = await regionReviewCrop(series, episode, line, page,
+        view === "trace" ? { kind: "trace", trace: parseReviewMaskPng(b.trace) }
+          : view === "crop" ? { kind: "crop" }
+          : { kind: "mask", silhouette: b.silhouette === true,
+              mask: b.mask != null ? parseReviewMaskPng(b.mask)
+                : await detectReviewMask(series, episode, line, page, b.expansion, request.signal) },
+        cropScale);
       const results = [];
       // Sequential calls also support local servers that load one model at a time.
       for (const model of reviewers) {

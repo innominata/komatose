@@ -250,7 +250,7 @@ export function listDetectorSetups() {
 export function chapterSetupId(): string {
 	const defaults = detectorDefaults();
 	const { available } = defaults;
-	const setup = parseDetectorSetup(defaults.setup) ?? { base: 'rtdetr', coo: false, koharu: false };
+	const setup = parseDetectorSetup(defaults.setup)!;
 	return detectorSetupId({
 		base: setup.base,
 		coo: setup.coo && available.coo.installed,

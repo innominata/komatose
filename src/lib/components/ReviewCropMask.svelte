@@ -7,37 +7,54 @@
     shiftBrushWheel,
     type ReviewCropZoom,
   } from "$lib/brush";
+  import HelpTip from "./HelpTip.svelte";
 
-  const FIT_MAX = 360;
+  // A fitted crop may be enlarged this much to fill the panel.
+  const FIT_UPSCALE = 4;
+  // How much of the crop shows through under traced strokes.
+  const TRACE_CROP_ALPHA = 0.35;
 
   let {
     cropUrl,
-    maskUrl,
+    maskUrl = "",
+    variant = "mask",
+    silhouette = false,
     disabled = false,
     expansion = $bindable(3),
     zoom = $bindable<ReviewCropZoom>(1),
     detecting = false,
     autodetect = false,
     ondetect,
+    onchange,
   }: {
     cropUrl: string;
-    maskUrl: string;
+    maskUrl?: string;
+    /** "mask" marks lettering pixels; "trace" draws ink over a faded crop. */
+    variant?: "mask" | "trace";
+    /** Mask preview shows the silhouette that will be sent. */
+    silhouette?: boolean;
     disabled?: boolean;
     expansion?: number;
     zoom?: ReviewCropZoom;
     detecting?: boolean;
     autodetect?: boolean;
-    ondetect: () => void;
+    ondetect?: () => void;
+    onchange?: () => void;
   } = $props();
 
+  const trace = $derived(variant === "trace");
   let tool = $state<"brush" | "erase">("brush");
-  let radius = $state(8);
+  // The variant is fixed per editor; only the starting size depends on it.
+  // svelte-ignore state_referenced_locally
+  let radius = $state(variant === "trace" ? 4 : 8);
   let previewSent = $state(false);
+  let painted = $state(false);
   let crop = $state<HTMLImageElement>();
   let view = $state<HTMLCanvasElement>();
   let mask = $state<HTMLCanvasElement>();
   let wrapWidth = $state(0);
-  let history: ImageData[] = [];
+  let wrapHeight = $state(0);
+  let history = $state<ImageData[]>([]);
   let loadGen = 0;
   let autoStarted = false;
   let painting = false;
@@ -46,8 +63,10 @@
   let hit = $state<HTMLDivElement>();
   const baseScale = $derived.by(() => {
     if (!crop?.naturalWidth || !crop.naturalHeight) return 1;
-    const maxW = wrapWidth > 0 ? wrapWidth : crop.naturalWidth;
-    return Math.min(1, FIT_MAX / crop.naturalHeight, maxW / crop.naturalWidth);
+    // Leave room for the brush margin around the image.
+    const maxW = wrapWidth > 0 ? wrapWidth - 24 : crop.naturalWidth;
+    const maxH = wrapHeight > 0 ? wrapHeight - 24 : crop.naturalHeight;
+    return Math.max(0.05, Math.min(FIT_UPSCALE, maxW / crop.naturalWidth, maxH / crop.naturalHeight));
   });
   const displayW = $derived((crop?.naturalWidth ?? 0) * baseScale * zoom);
   const displayH = $derived((crop?.naturalHeight ?? 0) * baseScale * zoom);
@@ -64,12 +83,30 @@
     };
   });
 
+  /** Mask: white marks lettering. Trace: dark strokes on white, the image that is read. */
   export function maskDataUrl() {
-    return mask?.toDataURL("image/png") ?? "";
+    if (!mask) return "";
+    if (!trace) return mask.toDataURL("image/png");
+    const out = document.createElement("canvas");
+    out.width = mask.width;
+    out.height = mask.height;
+    const outCtx = ctx(out);
+    const pixels = ctx(mask).getImageData(0, 0, mask.width, mask.height);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      const ink = pixels.data[i] > 127 ? 0 : 255;
+      pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = ink;
+      pixels.data[i + 3] = 255;
+    }
+    outCtx.putImageData(pixels, 0, 0);
+    return out.toDataURL("image/png");
   }
 
-  function ctx(canvas: HTMLCanvasElement, name: "2d") {
-    const context = canvas.getContext(name, { willReadFrequently: true });
+  export function hasStrokes() {
+    return painted;
+  }
+
+  function ctx(canvas: HTMLCanvasElement) {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) throw new Error("Mask editor needs a canvas");
     return context;
   }
@@ -84,41 +121,47 @@
       canvas.width = width;
       canvas.height = height;
     }
-    const maskCtx = ctx(mask, "2d");
+    const maskCtx = ctx(mask);
     maskCtx.fillStyle = "#000";
     maskCtx.fillRect(0, 0, width, height);
     history = [];
+    painted = false;
     void draw();
   }
 
   function snapshot() {
     if (!mask) return;
-    history.push(ctx(mask, "2d").getImageData(0, 0, mask.width, mask.height));
-    if (history.length > 30) history.shift();
+    history = [...history.slice(-29), ctx(mask).getImageData(0, 0, mask.width, mask.height)];
   }
 
   async function draw() {
     if (!view || !mask || !crop?.naturalWidth) return;
-    const viewCtx = ctx(view, "2d");
-    const maskCtx = ctx(mask, "2d");
+    const viewCtx = ctx(view);
+    const maskCtx = ctx(mask);
     viewCtx.fillStyle = "#fff";
     viewCtx.fillRect(0, 0, view.width, view.height);
-    viewCtx.drawImage(crop, 0, 0, view.width, view.height);
+    if (!(previewSent && (trace || silhouette))) {
+      viewCtx.globalAlpha = trace ? TRACE_CROP_ALPHA : 1;
+      viewCtx.drawImage(crop, 0, 0, view.width, view.height);
+      viewCtx.globalAlpha = 1;
+    }
     const pixels = maskCtx.getImageData(0, 0, mask.width, mask.height);
     const overlay = viewCtx.getImageData(0, 0, view.width, view.height);
     for (let i = 0; i < pixels.data.length; i += 4) {
-      if (pixels.data[i] > 127) {
+      const marked = pixels.data[i] > 127;
+      if (trace || (previewSent && silhouette)) {
+        // Strokes and silhouettes are sent as black on white.
+        if (marked) overlay.data[i] = overlay.data[i + 1] = overlay.data[i + 2] = 0;
+        continue;
+      }
+      if (marked) {
         if (previewSent) continue;
         overlay.data[i] = Math.round(overlay.data[i] * 0.55 + 255 * 0.45);
         overlay.data[i + 1] = Math.round(overlay.data[i + 1] * 0.55);
         overlay.data[i + 2] = Math.round(overlay.data[i + 2] * 0.55);
         continue;
       }
-      if (previewSent) {
-        overlay.data[i] = 255;
-        overlay.data[i + 1] = 255;
-        overlay.data[i + 2] = 255;
-      }
+      if (previewSent) overlay.data[i] = overlay.data[i + 1] = overlay.data[i + 2] = 255;
     }
     viewCtx.putImageData(overlay, 0, 0);
   }
@@ -134,16 +177,28 @@
       image.src = url;
     });
     if (gen !== loadGen || !mask) return;
-    const maskCtx = ctx(mask, "2d");
+    const maskCtx = ctx(mask);
     if (mask.width) snapshot();
     maskCtx.fillStyle = "#000";
     maskCtx.fillRect(0, 0, mask.width, mask.height);
     maskCtx.drawImage(image, 0, 0, mask.width, mask.height);
+    painted = true;
     await draw();
   }
 
   export async function replaceMask(url: string) {
     await loadMask(url);
+  }
+
+  function clear() {
+    if (!mask) return;
+    snapshot();
+    const maskCtx = ctx(mask);
+    maskCtx.fillStyle = "#000";
+    maskCtx.fillRect(0, 0, mask.width, mask.height);
+    painted = false;
+    onchange?.();
+    void draw();
   }
 
   function point(e: PointerEvent) {
@@ -158,7 +213,7 @@
 
   function stamp(from: { x: number; y: number }, to: { x: number; y: number }) {
     if (!mask) return;
-    const maskCtx = ctx(mask, "2d");
+    const maskCtx = ctx(mask);
     maskCtx.strokeStyle = tool === "erase" ? "#000" : "#fff";
     maskCtx.fillStyle = maskCtx.strokeStyle;
     maskCtx.lineWidth = radius * 2;
@@ -183,6 +238,7 @@
     last = at;
     snapshot();
     stamp(at, at);
+    if (tool === "brush") painted = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     await draw();
   }
@@ -197,6 +253,7 @@
   }
 
   function up() {
+    if (painting) onchange?.();
     painting = false;
     last = null;
   }
@@ -208,7 +265,7 @@
     image.onload = () => {
       crop = image;
       sizeCanvases(image.naturalWidth, image.naturalHeight);
-      if (maskUrl && !autodetect) void loadMask(maskUrl);
+      if (maskUrl && !autodetect && !trace) void loadMask(maskUrl);
     };
     image.src = url;
   });
@@ -216,24 +273,25 @@
   $effect(() => {
     if (!autodetect || autoStarted || disabled || !crop?.naturalWidth || !mask?.width) return;
     autoStarted = true;
-    ondetect();
+    ondetect?.();
   });
 
   $effect(() => {
     previewSent;
+    silhouette;
     void draw();
   });
 </script>
 
 <div class="mask-editor">
-  <div class="crop-wrap" bind:clientWidth={wrapWidth}>
+  <div class="crop-wrap" bind:clientWidth={wrapWidth} bind:clientHeight={wrapHeight}>
     <div
       bind:this={hit}
       class="crop-hit"
       class:drawing={!disabled}
       style={`padding:${pad}px`}
       role="application"
-      aria-label="Lettering mask for this crop"
+      aria-label={trace ? "Trace the text over this crop" : "Lettering mask for this crop"}
       use:shiftBrushWheel={{
         enabled: () => !disabled,
         value: () => radius,
@@ -267,32 +325,37 @@
   </div>
   <canvas bind:this={mask} hidden></canvas>
   <div class="mask-tools">
-    <label
-      ><input
-        type="checkbox"
-        bind:checked={previewSent}
-        disabled={disabled}
-      /> Preview sent crop</label
-    >
-    <label
-      >Detection padding (px)<input
-        type="number"
-        min="0"
-        max="20"
-        bind:value={expansion}
+    <span class="tool-group" role="group" aria-label="Tool">
+      <button
+        type="button"
         disabled={disabled || detecting}
-      /></label
-    >
-    <span class="zoom-group" role="group" aria-label="Crop zoom">
-      {#each REVIEW_CROP_ZOOMS as amount}
-        <button
-          type="button"
-          aria-pressed={zoom === amount}
-          aria-label={`View crop at ${amount}×`}
-          title={`View at ${amount}× and send a ${amount}× crop on the next transcription request`}
-          onclick={() => (zoom = amount)}>{amount}×</button
-        >
-      {/each}
+        aria-pressed={tool === "brush"}
+        title={trace ? "Pen" : "Brush"}
+        onclick={() => (tool = "brush")}>{trace ? "Pen" : "Brush"}</button
+      >
+      <button
+        type="button"
+        disabled={disabled || detecting}
+        aria-pressed={tool === "erase"}
+        onclick={() => (tool = "erase")}>Erase</button
+      >
+      <button
+        type="button"
+        disabled={disabled || detecting || !history.length}
+        aria-label="Undo stroke"
+        title="Undo stroke"
+        onclick={() => {
+          const prior = history.at(-1);
+          if (!mask || !prior) return;
+          history = history.slice(0, -1);
+          ctx(mask).putImageData(prior, 0, 0);
+          onchange?.();
+          void draw();
+        }}>↶</button
+      >
+      {#if trace}
+        <button type="button" disabled={disabled || !painted} onclick={clear}>Clear</button>
+      {/if}
     </span>
     <span class="size-group" role="group" aria-label="Brush size">
       {#each BRUSH_PRESETS as size}
@@ -310,51 +373,67 @@
           ></span></button
         >
       {/each}
+      <span class="ed-status">{radius}px</span>
     </span>
-    <span class="ed-status">{radius}px</span>
-    <button
-      type="button"
-      disabled={disabled || detecting}
-      aria-pressed={tool === "brush"}
-      onclick={() => (tool = "brush")}>Brush</button
+    <span class="zoom-group" role="group" aria-label="Crop zoom">
+      {#each REVIEW_CROP_ZOOMS as amount}
+        <button
+          type="button"
+          aria-pressed={zoom === amount}
+          aria-label={`View crop at ${amount}×`}
+          title={`View at ${amount}× and send a ${amount}× crop on the next transcription request`}
+          onclick={() => (zoom = amount)}>{amount}×</button
+        >
+      {/each}
+    </span>
+    <label class="check"
+      ><input type="checkbox" bind:checked={previewSent} disabled={disabled} /> Preview sent</label
     >
-    <button
-      type="button"
-      disabled={disabled || detecting}
-      aria-pressed={tool === "erase"}
-      onclick={() => (tool = "erase")}>Erase</button
-    >
-    <button
-      type="button"
-      disabled={disabled || detecting || !history.length}
-      onclick={() => {
-        const prior = history.pop();
-        if (!mask || !prior) return;
-        ctx(mask, "2d").putImageData(prior, 0, 0);
-        void draw();
-      }}>Undo stroke</button
-    >
-    <button type="button" disabled={disabled || detecting} onclick={ondetect}
-      >Detect text</button
-    >
+    {#if !trace}
+      <label class="check" title="Padding added around detected text, in pixels"
+        >Pad<input
+          type="number"
+          min="0"
+          max="20"
+          bind:value={expansion}
+          disabled={disabled || detecting}
+        /></label
+      >
+      <button type="button" disabled={disabled || detecting} onclick={() => ondetect?.()}
+        >{detecting ? "Detecting…" : "Detect text"}</button
+      >
+    {/if}
+    <HelpTip label={trace ? "Trace help" : "Mask help"}>
+      {#if trace}
+        Write the text over the faded crop with the pen, one character at a time, in reading order.
+        Only your strokes are sent, as black on white, so neat strokes read best. Use this when the
+        lettering is too stylized for the readers. Shift-scroll changes pen size by 1px.
+      {:else}
+        Detection starts automatically and uses the Clean-step text detector inside this crop.
+        Brush adds lettering, Erase removes it; brush from the margin around the image to reach the
+        edges. Unmasked pixels are sent as white. Shift-scroll changes brush size by 1px.
+      {/if}
+      Zoom enlarges both the preview and the next transcription request.
+    </HelpTip>
   </div>
-  <p>
-    Detection starts automatically and uses the Clean-step text detector inside
-    this crop. Zoom enlarges both the preview and the next transcription request. Brush from the margin around
-    the image to reach the edges. Shift-scroll changes brush size by 1px.
-    Unmasked pixels are sent as white.
-  </p>
 </div>
 
 <style>
   .mask-editor {
-    display: grid;
-    gap: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-height: 0;
+    height: 100%;
   }
   .crop-wrap {
+    flex: 1 1 0;
+    min-height: 120px;
     overflow: auto;
-    max-height: min(70dvh, 640px);
     background: #111;
+    display: grid;
+    /* safe: an enlarged crop stays scrollable to its top-left edge. */
+    place-items: safe center;
   }
   .crop-hit {
     position: relative;
@@ -386,23 +465,29 @@
   .mask-tools {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem 0.7rem;
+    gap: 0.35rem 0.6rem;
     align-items: center;
+    flex-shrink: 0;
   }
-  .mask-tools label {
+  .mask-tools button {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+  }
+  .check {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    font-size: 0.85rem;
+    gap: 0.3rem;
+    font-size: 0.8rem;
   }
-  .mask-tools input[type="number"] {
-    width: 4.2rem;
+  .check input[type="number"] {
+    width: 3.2rem;
     background: var(--hud-input-bg);
     color: var(--hud-text);
     border: 1px solid var(--hud-line);
-    border-radius: 4px;
-    padding: 0.2rem 0.35rem;
+    border-radius: 2px;
+    padding: 0.1rem 0.3rem;
   }
+  .tool-group,
   .zoom-group,
   .size-group {
     display: flex;
@@ -410,9 +495,9 @@
     gap: 2px;
     align-items: center;
   }
-  .brush-preset {
-    width: 28px;
-    height: 28px;
+  .mask-tools .brush-preset {
+    width: 24px;
+    height: 24px;
     padding: 0;
     display: grid;
     place-items: center;
@@ -424,15 +509,11 @@
     outline: 1px solid currentColor;
   }
   .ed-status {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--hud-muted);
+    margin-left: 0.2rem;
   }
   button[aria-pressed="true"] {
     background: var(--hud-teal-dim);
-  }
-  p {
-    white-space: normal;
-    font-size: 0.85rem;
-    margin: 0;
   }
 </style>

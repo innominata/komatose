@@ -10,8 +10,12 @@ import {
   type RegionData,
   type FittedLayout,
   type FontAsset,
+  type CharStyle,
 } from "../workflow";
-import { hasTextWarp, isTextWarpStyle, layoutWarpBox, warpFontPath } from "../textWarp";
+import { glyphToPage, isTextWarpStyle, layoutWarpBox, textWarpMap, warpFontPath } from "../textWarp";
+import { remapCharRuns } from "../charStyles";
+import { activeEffects, effectFilters, effectsReach, normalizeEffects } from "../textEffects";
+import { pathFrame, regionTextPaths } from "../textPath";
 import { effectiveTextRotation } from "../textRotation";
 import { sqlite } from "./db";
 import { readAsset, storeAsset, hash, WorkflowError } from "./workflowStore";
@@ -244,10 +248,17 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
     ["skewX", -MAX_SKEW, MAX_SKEW],
     ["skewY", -MAX_SKEW, MAX_SKEW],
     ["warpBend", -100, 100],
+    ["warpHorizontal", -100, 100],
+    ["warpVertical", -100, 100],
+    ["tracking", -500, 2000],
   ] as const) {
     const n = Number(s[key]);
-    s[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : DEFAULT_STYLE[key];
+    s[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : DEFAULT_STYLE[key]!;
   }
+  if (s.warpOrientation !== "vertical") s.warpOrientation = "horizontal";
+  const effects = normalizeEffects(s.effects);
+  if (effects) s.effects = effects;
+  else delete s.effects;
   s.autoContrast = s.autoContrast !== false;
   if (s.minSize > s.size) s.minSize = s.size;
   s.fillOpacity = Math.round(s.fillOpacity);
@@ -325,7 +336,11 @@ export function layoutKey(
   style: TextStyle,
   dpi: number,
 ) {
-  const s = validateStyle(style);
+  const s: Partial<TextStyle> = validateStyle(style);
+  // Fields added after layouts were first keyed only count once they leave their defaults,
+  // so existing layouts stay current.
+  for (const key of ["warpHorizontal", "warpVertical", "tracking", "warpOrientation"] as const)
+    if (s[key] === DEFAULT_STYLE[key]) delete s[key];
   return hash(
     JSON.stringify({
       body: line.body,
@@ -335,6 +350,8 @@ export function layoutKey(
       h: line.h,
       poly: region.polygon,
       style: s,
+      ...(region.charRuns?.length ? { charRuns: region.charRuns, charRunsBody: region.charRunsBody } : {}),
+      ...(regionTextPaths(region).length ? { textPaths: regionTextPaths(region) } : {}),
       dpi,
       width: page.width,
       height: page.height,
@@ -345,7 +362,15 @@ export function layoutKey(
   );
 }
 /** `gap` is the whitespace before the word, kept when both words land on the same row. */
-type Token = { text: string; gap?: string; alone?: boolean; breakBefore?: boolean };
+type Token = {
+  text: string;
+  gap?: string;
+  alone?: boolean;
+  breakBefore?: boolean;
+  /** `text` and `gap` with the body index of each character, for character styles. */
+  chars?: { text: string; src: number[] };
+  gapChars?: { text: string; src: number[] };
+};
 export function dictionaryFragments(
   word: string,
   width: number,
@@ -369,6 +394,32 @@ export function dictionaryFragments(
   if (current) out.push(current);
   return out;
 }
+/** One resolved character style of a layout: its font and every paint and spacing value. */
+type LayoutStyle = {
+  font: fontkit.Font;
+  metadata: FontAsset;
+  char: CharStyle;
+  factor: number;
+  fill: string;
+  fillOpacity: number;
+  outline: string;
+  outlineOpacity: number;
+  outlineWidth: number;
+  emphasis: TextStyle["emphasis"];
+  /** Thousandths of an em after each character. */
+  tracking: number;
+  /** Points. */
+  baselineShift: number;
+  hs: number;
+  vs: number;
+};
+/** Text with the source body index of each of its characters (hyphens and expanded tabs repeat one). */
+type Chars = { text: string; src: number[] };
+const joinChars = (...parts: Chars[]): Chars => ({
+  text: parts.map((p) => p.text).join(""),
+  src: parts.flatMap((p) => p.src),
+});
+
 export async function fitText(
   line: LineRow,
   region: RegionData,
@@ -381,14 +432,57 @@ export async function fitText(
     throw new WorkflowError("DPI must be between 10 and 2400");
   if (line.body.length > 12000)
     throw new WorkflowError("Region text is too long to fit");
-  const { font, metadata } = await loadFont(style.fontId);
-  const missingGlyphs = [
-    ...new Set(
-      [...line.body].filter(
-        (c) => !/\s/.test(c) && !font.hasGlyphForCodePoint(c.codePointAt(0)!),
-      ),
-    ),
-  ];
+  const body = line.body.replace(/\r\n?/g, "\n");
+  const runs = remapCharRuns(region.charRuns, region.charRunsBody?.replace(/\r\n?/g, "\n"), body);
+  const base = await loadFont(style.fontId);
+  const { font, metadata } = base;
+
+  // ── Character styles ────────────────────────────────────────────────
+  const styles: LayoutStyle[] = [];
+  const styleKeys = new Map<string, number>();
+  const resolve = async (char: CharStyle) => {
+    const key = JSON.stringify(char);
+    if (styleKeys.has(key)) return styleKeys.get(key)!;
+    // A character font removed since it was chosen falls back to the region's font.
+    const f = char.fontId && char.fontId !== style.fontId ? await loadFont(char.fontId).catch(() => base) : base;
+    styles.push({
+      font: f.font,
+      metadata: f.metadata,
+      char,
+      factor: (char.size ?? 100) / 100,
+      fill: char.fill ?? style.fill,
+      fillOpacity: char.fillOpacity ?? style.fillOpacity,
+      outline: char.outline ?? style.outline,
+      outlineOpacity: char.outlineOpacity ?? style.outlineOpacity,
+      outlineWidth: char.outlineWidth ?? style.outlineWidth,
+      emphasis: char.emphasis ?? style.emphasis,
+      tracking: (style.tracking ?? 0) + (char.tracking ?? 0),
+      baselineShift: char.baselineShift ?? 0,
+      hs: (char.horizontalScale ?? 100) / 100,
+      vs: (char.verticalScale ?? 100) / 100,
+    });
+    styleKeys.set(key, styles.length - 1);
+    return styles.length - 1;
+  };
+  await resolve({});
+  const charStyle = new Array<number>(body.length).fill(0);
+  for (const run of runs) {
+    const idx = await resolve(run.style);
+    for (let i = run.start; i < run.end; i++) charStyle[i] = idx;
+  }
+  const styleOf = (src: number) => (src >= 0 && src < charStyle.length ? charStyle[src] : 0);
+  const used = [...new Set(charStyle.filter((_, i) => !/\s/.test(body[i])))];
+  if (!used.length) used.push(0);
+
+  const missing = new Set<string>();
+  for (let i = 0; i < body.length; i++) {
+    const cp = body.codePointAt(i)!;
+    const c = String.fromCodePoint(cp);
+    if (!/\s/.test(c) && !styles[styleOf(i)].font.hasGlyphForCodePoint(cp)) missing.add(c);
+    if (cp > 0xffff) i++;
+  }
+  const missingGlyphs = [...missing];
+
   let poly = regionPolygon(line, region, page);
   const cx =
     (Math.min(...poly.map((p) => p.x)) + Math.max(...poly.map((p) => p.x))) / 2;
@@ -405,23 +499,50 @@ export async function fitText(
     maxY = Math.max(...poly.map((p) => p.y));
   const px = dpi / 72,
     padding = (style.padding + style.outlineWidth) * px;
-  const unitWidths = new Map<string, number>();
-  const measure = (text: string, size: number) => {
-    if (!unitWidths.has(text)) {
-      const r = font.layout(text);
-      unitWidths.set(
-        text,
-        r.positions.reduce((sum, p) => sum + p.xAdvance, 0),
-      );
+
+  /** Chars cut into pieces of one style each. */
+  const pieces = (c: Chars) => {
+    const out: { text: string; style: number; src: number[] }[] = [];
+    for (let i = 0; i < c.text.length; i++) {
+      const st = styleOf(c.src[i]);
+      const last = out.at(-1);
+      if (last && last.style === st) {
+        last.text += c.text[i];
+        last.src.push(c.src[i]);
+      } else out.push({ text: c.text[i], style: st, src: [c.src[i]] });
     }
-    return (
-      (unitWidths.get(text)! * size * px) / font.unitsPerEm +
-      (style.emphasis === "italic" ? size * px * 0.22 : 0) +
-      (style.emphasis === "bold" ? size * px * 0.04 : 0)
-    );
+    return out;
   };
-  const minHeight =
-    ((font.ascent - font.descent) / font.unitsPerEm) * style.minSize * px;
+  const unitWidths = new Map<string, number>();
+  const unitWidth = (text: string, st: number) => {
+    const key = `${st}\u0000${text}`;
+    if (!unitWidths.has(key)) {
+      const r = styles[st].font.layout(text);
+      unitWidths.set(key, r.positions.reduce((sum, p) => sum + p.xAdvance, 0));
+    }
+    return unitWidths.get(key)!;
+  };
+  const measure = (c: Chars, size: number) => {
+    const parts = pieces(c);
+    let width = 0;
+    for (const part of parts) {
+      const st = styles[part.style];
+      const em = size * st.factor * px;
+      width += (unitWidth(part.text, part.style) * em * st.hs) / st.font.unitsPerEm;
+      width += (st.tracking / 1000) * em * [...part.text].length;
+    }
+    const last = styles[parts.at(-1)?.style ?? 0];
+    const em = size * last.factor * px;
+    return width + (last.emphasis === "italic" ? em * 0.22 : 0) + (last.emphasis === "bold" ? em * 0.04 : 0);
+  };
+  /** Ascent and descent in pixels per point of size, over every style the text uses. */
+  const ascentPerPt = Math.max(...used.map((i) => (styles[i].font.ascent / styles[i].font.unitsPerEm) * styles[i].factor * styles[i].vs * px + Math.max(0, styles[i].baselineShift) / (style.size || 1) * px));
+  const descentPerPt = Math.max(...used.map((i) => (-styles[i].font.descent / styles[i].font.unitsPerEm) * styles[i].factor * styles[i].vs * px + Math.max(0, -styles[i].baselineShift) / (style.size || 1) * px));
+
+  // ── Tokens ──────────────────────────────────────────────────────────
+  let hyphenated = false;
+  const tokens: Token[] = [];
+  const minHeight = (ascentPerPt + descentPerPt) * style.minSize;
   let maxWidthAtMin = 0;
   for (
     let y = minY + padding + 0.01;
@@ -431,48 +552,124 @@ export async function fitText(
     const span = availableSpan(poly, y, y + minHeight, padding);
     if (span) maxWidthAtMin = Math.max(maxWidthAtMin, span[1] - span[0]);
   }
-  let hyphenated = false;
-  const tokens: Token[] = [];
-  for (const [i, paragraph] of line.body
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .entries()) {
+  const expand = (gap: string, at: number): Chars => {
+    const out: Chars = { text: "", src: [] };
+    for (let k = 0; k < gap.length; k++) {
+      const n = gap[k] === "\t" ? 4 : 1;
+      out.text += " ".repeat(n);
+      for (let j = 0; j < n; j++) out.src.push(at + k);
+    }
+    return out;
+  };
+  const textPaths = regionTextPaths(region);
+  const onPath = textPaths.length > 0;
+  let offset = 0;
+  for (const [i, paragraph] of body.split("\n").entries()) {
     // Keep runs of spaces between words, and before a paragraph's first word so spaces can
     // nudge a line sideways; only wrapped line breaks swallow them.
-    const words = [...paragraph.trimEnd().matchAll(/(\s*)(\S+)/g)].map(([, gap, word], w) => {
-      const spaces = gap.replace(/\t/g, "    ").replace(/\s/g, " ");
-      return w === 0 ? { word: spaces + word, gap: "" } : { word, gap: spaces };
+    const words = [...paragraph.trimEnd().matchAll(/(\s*)(\S+)/g)].map((m, w) => {
+      const gapAt = offset + m.index!;
+      const wordAt = gapAt + m[1].length;
+      const spaces = expand(m[1], gapAt);
+      const word = { text: m[2], src: Array.from({ length: m[2].length }, (_, k) => wordAt + k) };
+      return w === 0 ? { word: joinChars(spaces, word), gap: { text: "", src: [] } } : { word, gap: spaces };
     });
-    if (!words.length) words.push({ word: "", gap: "" });
+    if (!words.length) words.push({ word: { text: "", src: [] }, gap: { text: "", src: [] } });
     for (const [w, { word, gap }] of words.entries()) {
+      // Fragments are measured in the word's opening style; each keeps its own characters'.
       const parts =
-        measure(word, style.minSize) > maxWidthAtMin && maxWidthAtMin > 0
-          ? dictionaryFragments(word, maxWidthAtMin, (s) =>
-              measure(s, style.minSize),
+        !onPath && measure(word, style.minSize) > maxWidthAtMin && maxWidthAtMin > 0
+          ? dictionaryFragments(word.text, maxWidthAtMin, (t) =>
+              measure({ text: t, src: new Array<number>(t.length).fill(word.src[0] ?? 0) }, style.minSize),
             )
           : null;
       if (parts) {
         hyphenated = true;
-        for (const part of parts)
-          tokens.push({ text: part, gap, alone: true, breakBefore: true });
+        let at = 0;
+        for (const [k, part] of parts.entries()) {
+          const plain = k < parts.length - 1 ? part.slice(0, -1) : part;
+          const src = word.src.slice(at, at + plain.length);
+          const chars = plain === part ? { text: part, src } : { text: part, src: [...src, src.at(-1) ?? 0] };
+          tokens.push({ text: chars.text, chars, gap: gap.text, gapChars: gap, alone: true, breakBefore: true });
+          at += plain.length;
+        }
       } else
         tokens.push({
-          text: word,
-          gap,
+          text: word.text,
+          chars: word,
+          gap: gap.text,
+          gapChars: gap,
           breakBefore: i > 0 && w === 0,
-          alone: !word,
+          alone: !word.text,
         });
     }
+    offset += paragraph.length + 1;
   }
-  let rows: FittedLayout["rows"] = [];
+  const gapOf = (t: Token, prev: Token): Chars =>
+    t.gapChars?.text ? t.gapChars : { text: " ", src: [prev.chars!.src.at(-1) ?? t.chars!.src[0] ?? 0] };
+
+  let rows: { chars: Chars; width: number; x: number; baseline: number; path?: number }[] = [];
   let chosen = style.minSize;
   let found = false;
   const sizes: number[] = [];
   for (let s = style.size; s > style.minSize; s -= 0.25) sizes.push(s);
   sizes.push(style.minSize);
+  const frames = textPaths.map((p) => pathFrame(p.points.map((q) => ({ x: q.x * page.width, y: q.y * page.height })), !!p.flip));
+  if (onPath) {
+    // Type on paths: the words fill each path in turn, like lines of a paragraph, at one size
+    // shrunk until every word has a place. A new paragraph starts a new path, and an empty one
+    // leaves its path blank, so text can skip a ruled line.
+    const place = (size: number) => {
+      const out: typeof rows = [];
+      let at = 0;
+      let fits = true;
+      for (const [pi, frame] of frames.entries()) {
+        if (at >= tokens.length) break;
+        if (!frame) continue;
+        const start = (textPaths[pi].offset ?? 0) * frame.length;
+        const available = Math.max(0, frame.length - start);
+        let chars: Chars | null = null;
+        while (at < tokens.length) {
+          const t = tokens[at];
+          if (!t.text) {
+            if (!chars && t.breakBefore) at++;
+            if (!chars && !t.breakBefore) { at++; continue; }
+            break;
+          }
+          if (chars && t.breakBefore) break;
+          const next: Chars = chars ? joinChars(chars, gapOf(t, tokens[at - 1]), t.chars!) : t.chars!;
+          if (chars && measure(next, size) > available) break;
+          chars = next;
+          at++;
+        }
+        if (!chars) continue;
+        const width = measure(chars, size);
+        if (width > available) fits = false;
+        const x = width > available || style.align === "left" ? start : style.align === "right" ? start + available - width : start + (available - width) / 2;
+        out.push({ chars, width, x, baseline: 0, path: pi });
+      }
+      if (at < tokens.length) {
+        fits = false;
+        // What did not fit runs on past the end of the last path (hidden there; whole in the PSD).
+        const rest = tokens.slice(at).filter((t) => t.text);
+        const lastPath = frames.length - 1;
+        let last = out.at(-1)?.path === lastPath ? out.pop() : undefined;
+        let chars = last?.chars ?? null;
+        for (const t of rest) chars = chars ? joinChars(chars, { text: " ", src: [t.chars!.src[0] ?? 0] }, t.chars!) : t.chars!;
+        const start = (textPaths[lastPath]?.offset ?? 0) * (frames[lastPath]?.length ?? 0);
+        if (chars && frames[lastPath]) out.push({ chars, width: measure(chars, size), x: last?.x ?? start, baseline: 0, path: lastPath });
+      }
+      return { rows: out, fits };
+    };
+    for (const size of sizes) {
+      const fit = place(size);
+      chosen = size;
+      rows = fit.rows;
+      if (fit.fits) { found = true; break; }
+    }
+  } else
   for (const size of sizes) {
-    const scale = (size * px) / font.unitsPerEm;
-    const glyphHeight = (font.ascent - font.descent) * scale;
+    const glyphHeight = (ascentPerPt + descentPerPt) * size;
     const lineHeight = Math.max(glyphHeight, size * px * style.leading);
     const maxLines = Math.min(
       tokens.length,
@@ -481,7 +678,8 @@ export async function fitText(
         (maxY - minY - padding * 2 + lineHeight - glyphHeight) / lineHeight,
       ),
     );
-    let best: { cost: number; rows: FittedLayout["rows"] } | null = null;
+    type Fit = { cost: number; rows: typeof rows };
+    let best: Fit | null = null;
     for (let count = 1; count <= maxLines; count++) {
       const top = cy - ((count - 1) * lineHeight + glyphHeight) / 2;
       if (
@@ -498,14 +696,8 @@ export async function fitText(
         ),
       );
       if (spans.some((s) => !s)) continue;
-      const memo = new Map<
-        string,
-        { cost: number; rows: FittedLayout["rows"] } | null
-      >();
-      const solve = (
-        at: number,
-        row: number,
-      ): { cost: number; rows: FittedLayout["rows"] } | null => {
+      const memo = new Map<string, Fit | null>();
+      const solve = (at: number, row: number): Fit | null => {
         if (row === count)
           return at === tokens.length ? { cost: 0, rows: [] } : null;
         if (at >= tokens.length) return null;
@@ -513,16 +705,16 @@ export async function fitText(
         if (memo.has(key)) return memo.get(key)!;
         const [left, right] = spans[row]!;
         const width = right - left;
-        let winner: ReturnType<typeof solve> = null;
-        let text = "";
+        let winner: Fit | null = null;
+        let chars: Chars = { text: "", src: [] };
         for (let end = at; end < tokens.length; end++) {
           if (
             end > at &&
             (tokens[end].breakBefore || tokens[end].alone || tokens[at].alone)
           )
             break;
-          text += (end > at ? tokens[end].gap || " " : "") + tokens[end].text;
-          const actual = measure(text, size);
+          chars = end > at ? joinChars(chars, gapOf(tokens[end], tokens[end - 1]), tokens[end].chars!) : tokens[end].chars!;
+          const actual = measure(chars, size);
           if (actual > width) break;
           const tail = solve(end + 1, row + 1);
           if (!tail) continue;
@@ -532,7 +724,7 @@ export async function fitText(
               cost,
               rows: [
                 {
-                  text,
+                  chars,
                   width: actual,
                   x:
                     style.align === "left"
@@ -540,7 +732,7 @@ export async function fitText(
                       : style.align === "right"
                         ? right - actual
                         : (left + right - actual) / 2,
-                  baseline: top + row * lineHeight + font.ascent * scale,
+                  baseline: top + row * lineHeight + ascentPerPt * size,
                 },
                 ...tail.rows,
               ],
@@ -559,51 +751,129 @@ export async function fitText(
       break;
     }
   }
-  const scale = (chosen * px) / font.unitsPerEm;
-  const box = layoutWarpBox(rows, chosen * px);
-  const warped = !!(box && hasTextWarp(style));
-  const italic = style.emphasis === "italic";
-  const paths: string[] = [];
-  for (const row of rows) {
-    const run = font.layout(row.text);
+
+  // ── Glyphs ──────────────────────────────────────────────────────────
+  const fittedRows: FittedLayout["rows"] = rows.map((r) => ({
+    text: r.chars.text,
+    width: r.width,
+    x: r.x,
+    baseline: r.baseline,
+    ...(r.path !== undefined ? { path: r.path } : {}),
+  }));
+  const box = onPath ? undefined : layoutWarpBox(fittedRows, chosen * px);
+  const warp = box ? textWarpMap(box, style) : undefined;
+  type Glyph = { d?: string; transform?: string; style: number; unit: number; row: number };
+  const glyphs: Glyph[] = [];
+  for (const [rowIndex, row] of rows.entries()) {
+    const frame = row.path !== undefined ? frames[row.path] : undefined;
     let x = row.x;
-    for (let i = 0; i < run.glyphs.length; i++) {
-      const p = run.positions[i];
-      const originX = x + p.xOffset * scale;
-      const originY = row.baseline - p.yOffset * scale;
-      if (warped && box) {
-        const d = warpFontPath(
-          run.glyphs[i].path.commands,
-          originX,
-          originY,
-          scale,
-          italic,
-          box,
-          style,
-        );
-        if (d) paths.push(`<path d="${d}"/>`);
-      } else {
-        const path = run.glyphs[i].path.toSVG();
-        paths.push(
-          `<path d="${path}" transform="translate(${originX} ${originY}) scale(${scale} ${-scale})${italic ? " skewX(12)" : ""}"/>`,
-        );
+    for (const part of pieces(row.chars)) {
+      const st = styles[part.style];
+      const em = chosen * st.factor * px;
+      const scale = em / st.font.unitsPerEm;
+      const italic = st.emphasis === "italic";
+      const shift = st.baselineShift * px * (chosen / (style.size || chosen));
+      const run = st.font.layout(part.text);
+      const track = (st.tracking / 1000) * em;
+      for (let i = 0; i < run.glyphs.length; i++) {
+        const p = run.positions[i];
+        const advance = p.xAdvance * scale * st.hs + track;
+        const commands = run.glyphs[i].path.commands;
+        if (frame) {
+          const placed = frame.frame(x + (p.xAdvance * scale * st.hs) / 2);
+          if (placed) {
+            // Glyph-local origin sits half an advance before the point on the path.
+            const ox = -(p.xAdvance * scale * st.hs) / 2 + p.xOffset * scale * st.hs;
+            const oy = -p.yOffset * scale * st.vs - shift;
+            glyphs.push({
+              transform: `matrix(${placed.join(" ")}) translate(${ox} ${oy}) scale(${scale * st.hs} ${-scale * st.vs})${italic ? " skewX(12)" : ""}`,
+              d: run.glyphs[i].path.toSVG(),
+              style: part.style,
+              unit: scale * Math.sqrt(st.hs * st.vs),
+              row: rowIndex,
+            });
+          }
+        } else {
+          const originX = x + p.xOffset * scale * st.hs;
+          const originY = row.baseline - p.yOffset * scale * st.vs - shift;
+          if (warp) {
+            const d = warpFontPath(commands, glyphToPage(originX, originY, scale, italic, st.hs, st.vs), warp);
+            if (d) glyphs.push({ d, style: part.style, unit: 1, row: rowIndex });
+          } else
+            glyphs.push({
+              d: run.glyphs[i].path.toSVG(),
+              transform: `translate(${originX} ${originY}) scale(${scale * st.hs} ${-scale * st.vs})${italic ? " skewX(12)" : ""}`,
+              style: part.style,
+              unit: scale * Math.sqrt(st.hs * st.vs),
+              row: rowIndex,
+            });
+        }
+        x += advance;
       }
-      x += p.xAdvance * scale;
     }
   }
-  const bold = style.emphasis === "bold" ? chosen * px * 0.035 : 0;
-  const glyphs = paths.join("");
-  const outlineStroke = style.outlineWidth * px * 2 + bold;
-  const stroke = warped ? outlineStroke : outlineStroke / scale;
-  const fillStroke = warped ? bold : bold / scale;
   const paint = (opacity: number) => {
     const value = Math.round(opacity) / 100;
     return ` fill-opacity="${value}" stroke-opacity="${value}"`;
   };
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${page.height}" viewBox="0 0 ${page.width} ${page.height}"><defs><g id="lettering">${glyphs}</g></defs><g transform="${textTransformSvg(style, cx, cy)}">${style.outlineWidth ? `<g fill="${style.outline}" stroke="${style.outline}"${paint(style.outlineOpacity)} stroke-width="${stroke}" stroke-linejoin="round"><use href="#lettering"/></g>` : ""}<g fill="${style.fill}" stroke="${style.fill}"${paint(style.fillOpacity)} stroke-width="${fillStroke}" stroke-linejoin="round"><use href="#lettering"/></g></g></svg>`;
+  const num = (n: number) => String(Math.round(n * 1e4) / 1e4);
+  /** Consecutive glyphs of one style share a group; each path carries its own stroke width. */
+  const pass = (outline: boolean, row?: number) => {
+    let out = "";
+    let open = -1;
+    for (const g of glyphs) {
+      if (row !== undefined && g.row !== row) continue;
+      const st = styles[g.style];
+      if (outline && !st.outlineWidth) continue;
+      if (g.style !== open) {
+        if (open >= 0) out += "</g>";
+        const color = outline ? st.outline : st.fill;
+        out += `<g fill="${color}" stroke="${color}"${paint(outline ? st.outlineOpacity : st.fillOpacity)} stroke-linejoin="round">`;
+        open = g.style;
+      }
+      const em = chosen * st.factor * px;
+      const bold = st.emphasis === "bold" ? em * 0.035 : 0;
+      const width = (outline ? st.outlineWidth * px * 2 + bold : bold) / g.unit;
+      out += `<path d="${g.d}"${g.transform ? ` transform="${g.transform}"` : ""} stroke-width="${num(width)}"/>`;
+    }
+    return open >= 0 ? out + "</g>" : out;
+  };
+  // Path rows are marked so PSD export can give each path its own layer pixels, and the
+  // outline and layer effects are marked so a PSD layer can hold the glyphs alone (Photoshop
+  // draws its stroke and effects itself).
+  const byRow = (outline: boolean) =>
+    onPath ? rows.map((_, k) => `<!--row:${k}-->${pass(outline, k)}<!--/row:${k}-->`).join("") : pass(outline);
+  const wrap = (content: string) => (onPath ? `<g>${content}</g>` : `<g transform="${textTransformSvg(style, cx, cy)}">${content}</g>`);
+  const outlinePart = byRow(true), fillPart = byRow(false);
+  const effects = activeEffects(style.effects);
+  let drawn: string;
+  if (Object.keys(effects).length) {
+    // Effects work in page space, so a shadow's angle stays put when the text rotates.
+    const pagePoly = onPath
+      ? frames.flatMap((fr) => (fr ? [fr.at(0), fr.at(fr.length / 2), fr.at(fr.length)] : []))
+      : regionPolygon(line, region, page);
+    const xs = pagePoly.map((p) => p.x), ys = pagePoly.map((p) => p.y);
+    const glyphPad = chosen * px * 1.5 + style.outlineWidth * px;
+    const bounds = { x: Math.min(...xs) - glyphPad / 2, y: Math.min(...ys) - glyphPad / 2, width: Math.max(...xs) - Math.min(...xs) + glyphPad, height: Math.max(...ys) - Math.min(...ys) + glyphPad };
+    const reach = effectsReach(effects) * px + glyphPad;
+    const rect = { x: bounds.x - reach, y: bounds.y - reach, width: bounds.width + reach * 2, height: bounds.height + reach * 2 };
+    const fx = effectFilters(effects, px, rect, bounds);
+    drawn =
+      `<defs>${fx.defs}<g id="tx-o">${wrap(outlinePart)}</g><g id="tx-f">${wrap(fillPart)}</g></defs>` +
+      (fx.exterior ? `<!--fx--><g filter="url(#fx-ext)"><use href="#tx-o"/><use href="#tx-f"/></g><!--/fx-->` : "") +
+      `<!--outline--><use href="#tx-o"/><!--/outline-->` +
+      `<g${fx.interior ? ` filter="url(#fx-int)"` : ""}><use href="#tx-f"/>${fx.overlay ? `<!--fx-->${fx.overlay}<!--/fx-->` : ""}</g>`;
+  } else drawn = `<!--outline-->${wrap(outlinePart)}<!--/outline-->${wrap(fillPart)}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${page.height}" viewBox="0 0 ${page.width} ${page.height}">${drawn}</svg>`;
+
+  const multi = styles.length > 1 && rows.some((r) => pieces(r.chars).some((p) => p.style !== 0));
+  if (multi)
+    rows.forEach((r, i) => {
+      fittedRows[i].pieces = pieces(r.chars).map((p) => ({ text: p.text, style: p.style }));
+    });
   return {
     key: layoutKey(line, region, page, style, dpi),
-    rows,
+    rows: fittedRows,
     size: chosen,
     dpi,
     width: page.width,
@@ -618,5 +888,7 @@ export async function fitText(
       hash: metadata.hash,
       postscriptName: metadata.postscriptName,
     },
+    ...(multi ? { charStyles: styles.map((st) => ({ ...st.char, postscriptName: st.metadata.postscriptName })) } : {}),
+    ...(onPath ? { onPath: true } : {}),
   };
 }

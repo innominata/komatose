@@ -20,6 +20,7 @@
     ondetect,
     onapprovemask,
     onclean,
+    oncompare,
     onapplypass,
     onapproveclean,
     onclearstrokes,
@@ -51,6 +52,8 @@
     ondetect?: () => void;
     onapprovemask?: () => void;
     onclean?: (method: string) => void;
+    /** Compare cleaning methods on the selected region; absent when no region is selected. */
+    oncompare?: () => void;
     onapplypass?: () => void;
     onapproveclean?: () => void;
     onclearstrokes?: () => void;
@@ -112,6 +115,11 @@
         </button>
       {/each}
     </div>
+    {#if oncompare}
+      <button type="button" class="method compare" disabled={!canClean || busy || !pageDoc?.data.mask}
+        title={pageDoc?.data.mask ? "Run several methods on the selected region and pick the best" : "Paint or detect a mask first"}
+        onclick={() => oncompare?.()}><i class="bi bi-layout-split" aria-hidden="true"></i> <span><b>Compare methods on this region…</b></span></button>
+    {/if}
     <div class="grid2">
       <label>Clone offset X (px)<input type="number" bind:value={cloneX} /></label>
       <label>Clone offset Y (px)<input type="number" bind:value={cloneY} /></label>

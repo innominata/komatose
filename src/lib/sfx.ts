@@ -3413,6 +3413,30 @@ export function withSfxGlossary(seriesGlossary: string | undefined, sources: str
 	return [series, ...fresh].filter(Boolean).join('\n');
 }
 
+/**
+ * Alternatives packed into one SFX meaning. " / " always separates them; a bare
+ * slash only when every side is one word, so "soft/float" splits but
+ * "write/read fluently" stays one phrase.
+ */
+export function sfxAlternatives(meaning: string): string[] {
+	const choices: string[] = [];
+	for (const part of meaning.split(/\s+\/\s+/).map((item) => item.trim()).filter(Boolean)) {
+		const words = part.split('/').map((item) => item.trim());
+		for (const choice of words.length > 1 && words.every((word) => word && !/\s/.test(word)) ? words : [part])
+			if (!choices.some((have) => have.toLowerCase() === choice.toLowerCase())) choices.push(choice);
+	}
+	return choices;
+}
+
+/** English choices a sound-effect suggestion offers separately; [] when it is not an SFX or has one. */
+export function sfxEnglishChoices(source: string, english: string, lineType?: string): string[] {
+	if (!english.trim() || english.includes('\n')) return [];
+	const sfx = lineType === '::' || !!lookupStandaloneSfx(source) || looksLikeOnomatopoeia(source);
+	if (!sfx) return [];
+	const choices = sfxAlternatives(english);
+	return choices.length > 1 ? choices : [];
+}
+
 export function sfxTranslateHit(source: string): SfxHit | null {
 	const entry = lookupStandaloneSfx(source);
 	if (!entry) return null;

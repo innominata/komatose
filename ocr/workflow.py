@@ -1741,6 +1741,9 @@ def run(req):
 
 
 def _configure_torch(device='cpu'):
+    if str(device).startswith('cuda'):
+        from rocm_idle import arm_rocm_blocking_sync
+        arm_rocm_blocking_sync()
     if not importlib.util.find_spec('torch'):
         return
     import torch

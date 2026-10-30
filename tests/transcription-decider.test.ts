@@ -32,6 +32,8 @@ const { activeModelUses, acquireModelUse } = await import('../src/lib/server/mod
 const { rowHasOperation } = await import('../src/lib/modelRegistry');
 const { parseProfileSelections, snapshotProfileSelections, mergeProfileIntoSettings, validateProfileSelections } = await import('../src/lib/modelProfiles');
 after(async () => { sqlite.close(); await rm(root, { recursive: true, force: true }); });
+// Agreeing readings take the Transcribe default's spelling.
+setModelDefault('transcribe', 'paddleocr-vl-1.6');
 const readings = [{ model: 'hayai-ocr-v2', source: '持って' }, { model: 'paddleocr-vl-1.6', source: '待って' }];
 const candidates = transcriptionCandidates(readings);
 const base = { modelId: 'd1-3b', modelName: 'd1', at: 1, cropHash: 'hash', candidates,
@@ -41,7 +43,7 @@ const otherId = candidates.find(c => c.id !== goodId)!.id;
 const distribution = (p = .8, second = .15) => ({ choice: goodId, probabilities: { [goodId]: p, [otherId]: second, none: Math.max(0, 1 - p - second), unclear: 0 } });
 
 // Source decisions are structured evidence, never a generated replacement string.
-test('deduplicates OCR clusters, preserves Paddle spacing, excludes errors, and hides vote counts', () => {
+test('deduplicates OCR clusters, keeps the Transcribe default spacing, excludes errors, and hides vote counts', () => {
   const inputs = [...readings, { model: 'third', source: '待 って' }, { model: 'fourth', source: '待って', error: 'failed' }, { model: 'empty', source: '...' }];
   assert.deepEqual(transcriptionCandidates(inputs), candidates);
   assert.deepEqual(transcriptionCandidates(inputs.reverse()), candidates);
@@ -75,7 +77,7 @@ test('Off, default-unset and agreements do not invoke; failures leave plurality 
   assert.equal(await decideTranscription(Buffer.from('image'), readings, signal, 'japanese', {}, undefined, invoke), undefined);
   const options = { selection: { engine: 'd1-3b', model: '' } };
   assert.equal(await decideTranscription(Buffer.from('image'), [readings[0]], signal, 'japanese', options, undefined, invoke), undefined);
-  const plurality = compareOcrReadings([...readings, readings[0]]);
+  const plurality = compareOcrReadings([...readings, { ...readings[0], model: 'manga-ocr' }]);
   assert.equal(plurality.agreed, true);
   const decision = await decideTranscription(Buffer.from('image'), plurality.readings, signal, 'japanese', options, undefined, invoke);
   assert.equal(decision?.status, 'error');
@@ -111,7 +113,7 @@ function createLine(source = '', extra: Record<string, any> = {}) {
 test('saves minority selection with provenance and retains dissenting suggestions', () => {
   const line = createLine();
   const decision = decideChoice(distribution(.9, .05), base);
-  const result = { ...compareOcrReadings([...readings, readings[0]]), source: '待って', decision };
+  const result = { ...compareOcrReadings([...readings, { ...readings[0], model: 'manga-ocr' }]), source: '待って', decision };
   const saved = saveOcrConsensus('e', line, result)!;
   assert.equal(saved.source, '待って');
   assert.equal(saved.sourceState, 'read');
@@ -124,7 +126,7 @@ test('saves minority selection with provenance and retains dissenting suggestion
 test('abstentions cannot fall through plurality or the lone-suggestion shortcut', () => {
   const line = createLine();
   const decision = decideChoice(distribution(.7, .2), base);
-  const result = { ...compareOcrReadings([...readings, readings[0]]), source: '', decision };
+  const result = { ...compareOcrReadings([...readings, { ...readings[0], model: 'manga-ocr' }]), source: '', decision };
   assert.equal(saveOcrConsensus('e', line, result)?.source, '');
   sqlite.prepare("UPDATE suggestions SET state='rejected' WHERE line_id=? AND body='持って'").run(line.id);
   assert.equal(applyLonePendingSource('e', line.id), false);

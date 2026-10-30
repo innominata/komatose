@@ -2,11 +2,10 @@ import { resolve } from 'node:path';
 import sharp from 'sharp';
 import {
   IMAGE_EDIT_ALIGN,
-  IMAGE_EDIT_MODELS,
   buildImageEditPrompt, imageEditLoraList, imageEditModelOf, imageEditTuning,
   normalizeImageEditPrompt, type ImageEditModelId,
 } from '../imageEdit';
-import { installedImageEdit, withImageEdit } from './imageEdit';
+import { installedImageEdit, requireImageEditModel, withImageEdit } from './imageEdit';
 import { imageEditLorasDir } from './gpuMode';
 
 // Same tiling as the Codex method. Codex keeps each reconstructed crop; this editor
@@ -185,7 +184,7 @@ export async function cleanWithQwenImage(opts: {
   prompt?: string;
   model?: ImageEditModelId;
 }, signal?: AbortSignal) {
-  const model = imageEditModelOf(opts.model ?? IMAGE_EDIT_MODELS[0].id);
+  const model = imageEditModelOf(opts.model ?? requireImageEditModel());
   if (!installedImageEdit(model.id))
     throw new Error(`${model.label} is not installed. See docs/WORKFLOW.md for the installer.`);
   try {

@@ -38,9 +38,10 @@ const fixtureSettings = getDoc('series:s', {});
 const OCR_PAIR = ['hayai-ocr-v2', 'paddleocr-vl-1.6'];
 putDoc(null, fixtureSettings.id, { regionAi: { translate: { engine: 'fixture', model: '' }, transcriptionModels: OCR_PAIR } }, fixtureSettings.revision);
 const series = (await getSeries('s'))!, episode = (await getEpisode('e'))!;
+// Paddle stands in for the Transcribe default, whose spelling wins among agreeing readings.
 const pair = (hayai: string, paddle: string) => compareOcrReadings([
   { model: 'hayai-ocr-v2', source: hayai }, { model: 'paddleocr-vl-1.6', source: paddle },
-]);
+], ['paddleocr-vl-1.6']);
 const current = async (id: string) => (await listLines('e')).find(l => l.id === id)!;
 async function addLine(id: string, extra: Record<string, unknown> = {}) {
   await db.insert(lines).values({ id, episodeId: 'e', source: '', body: '', lineType: 'plain',
@@ -189,6 +190,26 @@ test('source review API applies native masks then sends crops at the selected 1x
       assert.equal(response.status, 400, await response.text());
     }
     assert.equal(sent.length, cases.length, 'invalid scales must not send a model request');
+    const review = (extra: Record<string, unknown>) => POST({ locals: { user: { id: 'human', username: 'Human', role: 'admin' } }, params: { eid: 'e' },
+      request: new Request('http://fixture/region-ai', { method: 'POST', body: JSON.stringify({ action: 'review', lineId: line.id,
+        expectedRevision: line.revision, reviewers: [{ engine: 'qwen', model: 'review-mask-fixture' }], ...extra }) }) } as any);
+    // Silhouette: the mask itself, black where lettering is, regardless of source pixels.
+    assert.equal((await review({ view: 'mask', silhouette: true, mask: halfMask.toString('base64') })).status, 200);
+    const shape = await sharp(sent.at(-1)!).greyscale().raw().toBuffer();
+    assert.ok(shape[30 * 60 + 10] > 245 && shape[30 * 60 + 50] < 10, 'silhouette is white outside the mask and black inside');
+    // Trace: only the strokes are read, flattened to ink on white at crop size.
+    const strokes = await sharp({ create: { width: 30, height: 30, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: await sharp({ create: { width: 10, height: 10, channels: 3, background: 'black' } }).png().toBuffer(), left: 0, top: 0 }])
+      .png().toBuffer();
+    assert.equal((await review({ view: 'trace', trace: strokes.toString('base64'), cropScale: 2 })).status, 200);
+    const traced = await sharp(sent.at(-1)!).greyscale().raw().toBuffer({ resolveWithObject: true });
+    assert.deepEqual([traced.info.width, traced.info.height], [120, 120], 'trace is resized to crop size, then scaled');
+    assert.ok(traced.data[10 * 120 + 10] < 10 && traced.data[100 * 120 + 100] > 245, 'trace keeps strokes and drops the artwork');
+    const blank = await sharp({ create: { width: 30, height: 30, channels: 3, background: 'white' } }).png().toBuffer();
+    const sentBefore = sent.length;
+    assert.equal((await review({ view: 'trace', trace: blank.toString('base64') })).status, 400, 'an empty trace is refused');
+    assert.equal((await review({ view: 'outline' })).status, 400, 'unknown views are refused');
+    assert.equal(sent.length, sentBefore, 'refused views send nothing');
     assert.equal((await fixture.calls()).length, 1);
     assert.deepEqual(getDoc<any>('page:review-mask-p', {}).data, { cleanBase: cleaned, prepared: cleaned });
     assert.equal((await current(line.id)).source, '', 'review still only proposes changes');

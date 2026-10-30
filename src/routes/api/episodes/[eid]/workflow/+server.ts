@@ -1,3 +1,7 @@
+import { normalizeCharRuns } from "$lib/charStyles";
+import { restoreDeletion } from "$lib/server/regionTrash";
+import { applyCleanComparison, startCleanComparison } from "$lib/server/cleanCompare";
+import { mapTextPaths } from "$lib/textPath";
 import { runWorkflowPng } from '$lib/server/workflowImages';
 import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
 import { imageWorkflowModel, imageWorkflowChoices, runImageTaskFiles } from '$lib/server/modelImageWorkflow';
@@ -276,6 +280,13 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
   try {
     const user = requireUser(locals.user);
     const { series, episode } = await requireEpisodeAccess(user, params.eid);
+    if (url.searchParams.has("compare")) {
+      const job = sqlite.prepare("SELECT episode_id,kind,state,progress,error FROM workflow_jobs WHERE id=?").get(url.searchParams.get("compare")) as
+        | { episode_id: string; kind: string; state: string; progress: string; error: string | null }
+        | undefined;
+      if (!job || job.episode_id !== episode.id || job.kind !== "clean-compare") return fail(404, "Comparison not found");
+      return json({ state: job.state, error: job.error, ...JSON.parse(job.progress || "{}") });
+    }
     if (url.searchParams.has("backend")) {
       const [backend, codex, ...editors] = await Promise.all([
         probeBackend(), probeCodexCleaning(),
@@ -705,6 +716,47 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       }
       return json({ removed: ids.length, ids });
     }
+    if (action === "compare-clean") {
+      requireClean(user);
+      assertEpisodeIdle(episode.id);
+      const page = (await listImages(episode.id)).find((p) => p.id === b.imageId);
+      if (!page) throw new WorkflowError("Page not found", 404);
+      const line = (await listLines(episode.id)).find((l) => l.id === b.lineId && l.imageId === page.id);
+      if (!line) throw new WorkflowError("Select a region on this page");
+      if (!Array.isArray(b.methods) || !b.methods.length || b.methods.length > 12 || b.methods.some((m: unknown) => typeof m !== "string"))
+        throw new WorkflowError("Choose 1–12 cleaning methods");
+      const labels = b.labels && typeof b.labels === "object" ? Object.fromEntries(Object.entries(b.labels).filter(([, v]) => typeof v === "string")) as Record<string, string> : {};
+      const jobId = await startCleanComparison({ episode, page, line, methods: b.methods, labels, prompt: b.prompt ? normalizeImageEditPrompt(b.prompt) : undefined });
+      return json({ jobId });
+    }
+    if (action === "apply-compare-clean") {
+      requireClean(user);
+      assertEpisodeIdle(episode.id);
+      const job = sqlite.prepare("SELECT episode_id,kind,state,progress FROM workflow_jobs WHERE id=?").get(String(b.jobId || "")) as
+        | { episode_id: string; kind: string; state: string; progress: string }
+        | undefined;
+      if (!job || job.episode_id !== episode.id || job.kind !== "clean-compare") throw new WorkflowError("Comparison not found", 404);
+      const progress = JSON.parse(job.progress || "{}");
+      const chosen = (progress.results ?? []).find((r: { method: string; asset?: string }) => r.method === b.method && r.asset);
+      if (!chosen) throw new WorkflowError("That method has no result to apply");
+      const page = (await listImages(episode.id)).find((p) => p.id === progress.imageId);
+      if (!page) throw new WorkflowError("Page not found", 404);
+      const doc = await applyCleanComparison({
+        episodeId: episode.id, page, artwork: progress.artwork, result: chosen.asset, mask: progress.mask, box: progress.box, method: chosen.method,
+      });
+      return json({ doc });
+    }
+    if (action === "restore-deleted-regions") {
+      requireEdit(user);
+      assertEpisodeIdle(episode.id);
+      const restored = await restoreDeletion(episode.id, typeof b.batchId === "string" ? b.batchId : undefined);
+      const entry = await logActivity({
+        seriesId: series.id, episodeId: episode.id, userId: user.id,
+        action: "restored_regions", payload: { ids: restored.ids },
+      });
+      broadcast(episode.id, { type: "activity", entry });
+      return json(restored);
+    }
     if (action === "remove-blank-regions") {
       requireEdit(user);
       assertEpisodeIdle(episode.id);
@@ -751,7 +803,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         throw new WorkflowError("Invalid decision");
       const model = b.translationModel === undefined ? undefined : validateModel(b.translationModel);
       const result = acceptRegionSuggestion({ series, episode, user, id: b.id,
-        decision: b.decision, force: !!b.force, engine: model?.engine, model: model?.model });
+        decision: b.decision, force: !!b.force, engine: model?.engine, model: model?.model,
+        ...(typeof b.english === "string" ? { english: b.english } : {}) });
       return json({ ok: true, ...result });
     }
     if (action === 'assign-character') {
@@ -938,7 +991,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       const doc = getDoc<RegionData>(`region:${line.id}`, {});
       if (action === "region") {
         let data: RegionData = { ...doc.data };
-        if ("polygon" in b.data) data.polygon = points(b.data.polygon, true);
+        if ("polygon" in b.data) {
+          data.polygon = points(b.data.polygon, true);
+          // Dragging the whole polygon carries its text path along.
+          const before = doc.data.polygon, after = data.polygon;
+          if (!("textPaths" in b.data) && before?.length && before.length === after.length) {
+            const dx = after[0].x - before[0].x, dy = after[0].y - before[0].y;
+            if ((dx || dy) && after.every((p, i) => Math.abs(p.x - before[i].x - dx) < 1e-6 && Math.abs(p.y - before[i].y - dy) < 1e-6))
+              Object.assign(data, mapTextPaths(data, (p) => ({ x: p.x + dx, y: p.y + dy })));
+          }
+        }
         if ("geometryRotation" in b.data) {
           if (!Number.isFinite(b.data.geometryRotation) || Math.abs(b.data.geometryRotation) > 180)
             throw new WorkflowError("Invalid geometry rotation");
@@ -960,6 +1022,37 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         }
         if(b.data.renderReviewConfirmed===true && data.directorRenderingReview && data.renderEnabled===false)
           data.directorRenderingReview={...data.directorRenderingReview,reviewed:true};
+        if ("charRuns" in b.data) {
+          if (doc.data.locked) throw new WorkflowError("Unlock this layout before changing character styles");
+          const body = typeof b.data.charRunsBody === "string" ? b.data.charRunsBody : line.body;
+          const runs = normalizeCharRuns(b.data.charRuns, body.length);
+          if (runs.length) {
+            data.charRuns = runs;
+            data.charRunsBody = body;
+          } else {
+            delete data.charRuns;
+            delete data.charRunsBody;
+          }
+        }
+        if ("textPaths" in b.data) {
+          if (doc.data.locked) throw new WorkflowError("Unlock this layout before changing its text paths");
+          const list = b.data.textPaths;
+          delete data.textPath;
+          if (!list || (Array.isArray(list) && !list.length)) delete data.textPaths;
+          else {
+            if (!Array.isArray(list) || list.length > 64) throw new WorkflowError("A region holds up to 64 text paths");
+            data.textPaths = list.map((path: { points?: unknown; offset?: unknown; flip?: unknown }) => {
+              const pts = points(path?.points, true);
+              if (pts.length < 2 || pts.length > 64) throw new WorkflowError("A text path needs 2 to 64 points");
+              const offset = Number(path.offset ?? 0);
+              return {
+                points: pts,
+                ...(Number.isFinite(offset) && offset > 0 ? { offset: Math.min(0.95, offset) } : {}),
+                ...(path.flip ? { flip: true } : {}),
+              };
+            });
+          }
+        }
         if ("locked" in b.data) data.locked = !!b.data.locked;
         if ("geometryApproved" in b.data)
           data.geometryApproved = !!b.data.geometryApproved;
@@ -971,7 +1064,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           b.history || "save",
         );
         if (
-          ("polygon" in b.data || "geometryRotation" in b.data) &&
+          ("polygon" in b.data || "geometryRotation" in b.data || "charRuns" in b.data || "textPaths" in b.data) &&
           !saved.data.locked &&
           line.body?.trim() &&
           (doc.data.layout || b.data.geometryApproved)

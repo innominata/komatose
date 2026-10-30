@@ -79,7 +79,7 @@
 			</button>
 		{/if}
 		{#if onreplace}
-			<button class="ed-btn mt-2" type="button" data-find="replace-file" onclick={() => onreplace?.()}>Replace from image / PSD</button>
+			<button class="ed-btn mt-2" type="button" data-find="replace-file" title="Overwrite the page pixels. A PSD is flattened; one exported from this page is offered as an import of its edits instead" onclick={() => onreplace?.()}>Replace from image / PSD</button>
 		{/if}
 		{#if onimportpsd}
 			<button class="ed-btn mt-2" type="button" data-find="import-psd" title="Bring back text, lettering and artwork edits from a PSD exported from this page, keeping layers editable" onclick={() => onimportpsd?.()}>Import edits from PSD</button>

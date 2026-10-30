@@ -340,6 +340,20 @@ test('plurality: two-agree, 2-vs-1, n=1, tie, all fail', () => {
 		{ model: 'b', source: '', error: 'down' },
 	]);
 	assert.equal(failed.agreed, false);
+	// One model reading the crop and its silhouette alike is still one vote.
+	const views = compareOcrReadings([
+		{ model: 'a', source: 'ゴン' },
+		{ model: 'a', source: 'ゴン', view: 'silhouette' },
+		{ model: 'b', source: 'コン' },
+	]);
+	assert.equal(views.agreed, false);
+	const settled = compareOcrReadings([
+		{ model: 'a', source: 'ゴン' },
+		{ model: 'b', source: 'コンコン' },
+		{ model: 'a', source: 'コンコン', view: 'silhouette' },
+	]);
+	assert.equal(settled.agreed, true, 'a silhouette reading can settle a disagreement between models');
+	assert.equal(settled.source, 'コンコン');
 });
 
 test('estimate math: vision serial, batched translate, Hy-MT serial, parallel transcribe set', () => {

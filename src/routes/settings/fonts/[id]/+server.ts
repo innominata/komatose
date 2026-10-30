@@ -7,19 +7,16 @@ import {
   statusOf,
 } from "$lib/server/http";
 import { deleteFont, listFonts } from "$lib/server/typesetting";
-import { readAsset, WorkflowError } from "$lib/server/workflowStore";
+import { WorkflowError } from "$lib/server/workflowStore";
+import { fontFileResponse } from "$lib/server/fontDownloads";
 import type { RequestHandler } from "./$types";
 
-export const GET: RequestHandler = async ({ locals, params }) => {
+/** `?download=1` saves the file under its uploaded name. */
+export const GET: RequestHandler = async ({ locals, params, url }) => {
   requireUser(locals.user);
   const font = listFonts(null).find((f) => f.id === params.id);
   if (!font) return fail(404, "Font not found");
-  return new Response(new Uint8Array(await readAsset(font.hash)), {
-    headers: {
-      "content-type": font.format === "OTF" ? "font/otf" : "font/ttf",
-      "cache-control": "private, max-age=31536000, immutable",
-    },
-  });
+  return fontFileResponse(font, url.searchParams.get("download") === "1");
 };
 
 /** `?force=1` also clears the font from styles that still use it. */

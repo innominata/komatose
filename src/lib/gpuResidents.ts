@@ -16,6 +16,7 @@ export type GpuCommandInfo = {
 const SCRIPT_LABELS: Record<string, string> = {
 	'hayai_review.py': 'Hayai OCR',
 	'manga_ocr_review.py': 'Manga OCR',
+	'manga_ocr_nar_review.py': 'Manga OCR NAR Small',
 	'workflow.py': 'Cleaning worker',
 	'worker.py': 'OCR worker',
 };

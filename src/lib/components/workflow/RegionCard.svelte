@@ -8,6 +8,7 @@
   import { compactSuggestionReason } from "$lib/suggestionReason";
   import SourceRomanization from "../SourceRomanization.svelte";
   import SfxHints from "../SfxHints.svelte";
+  import { sfxEnglishChoices } from "$lib/sfx";
   import GlossaryChips from "../GlossaryChips.svelte";
   import CharacterEntryPanel from "../CharacterEntryPanel.svelte";
   import {
@@ -94,6 +95,7 @@
       id: string,
       decision: "accept" | "reject",
       force?: boolean,
+      english?: string,
     ) => void;
     onreaddrawing?: (
       line: LineRow,
@@ -103,11 +105,18 @@
     children?: Snippet<[Snippet]>;
   } = $props();
   const shown = $derived(collapseSuggestions(suggestions));
+  /** Sound-effect English like "soft/float" is offered one alternative per button. */
+  function englishChoices(suggestion: (typeof shown)[number]) {
+    if (suggestion.kind === "source-review") return sfxEnglishChoices(suggestion.body, suggestion.translation ?? "", line.lineType);
+    if (isSourceSuggestion(suggestion.kind)) return [];
+    return sfxEnglishChoices(line.source ?? "", suggestion.body, line.lineType);
+  }
   const distinctSourceReadings = $derived(shown.filter((item) => isSourceSuggestion(item.kind)).length);
 </script>
 
 {#snippet suggestionList()}
   {#each shown as suggestion}
+    {@const choices = englishChoices(suggestion)}
     <div class="sugg suggestion">
       <div class="sugg-head">
         <strong
@@ -132,12 +141,20 @@
         <p class="warning">The region changed since this suggestion. Accepting replaces the current draft.</p>
       {/if}
       <div class="btn-row">
-        <button
+        {#if choices.length}
+          {#each choices as choice (choice)}<button
+              class="small accent"
+              disabled={!canEdit || !suggestion.body.trim()}
+              title={isSourceSuggestion(suggestion.kind) ? `Use source & “${choice}”` : `Use “${choice}”`}
+              onclick={() => ondecide(suggestion.mergedIds[0], "accept", false, choice)}
+              >Use {choice}</button
+            >{/each}
+        {:else}<button
           class="small accent"
           disabled={!canEdit || !suggestion.body.trim()}
           onclick={() => ondecide(suggestion.mergedIds[0], "accept")}
           >{suggestion.translation ? "Use source & English" : "Use this version"}</button
-        ><button class="small ghost" disabled={!canEdit} onclick={() => { for (const id of suggestion.mergedIds) ondecide(id, "reject"); }}>Reject</button>
+        >{/if}<button class="small ghost" disabled={!canEdit} onclick={() => { for (const id of suggestion.mergedIds) ondecide(id, "reject"); }}>Reject</button>
       </div>
     </div>
   {/each}

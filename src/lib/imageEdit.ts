@@ -88,7 +88,6 @@ export const IMAGE_EDIT_MODELS: ImageEditModel[] = [
   },
 ];
 
-export const DEFAULT_IMAGE_EDIT_MODEL_ID: ImageEditModelId = 'qwen-image-edit-2511';
 
 /** The editor that serves a clean-method id, or undefined for any other method. */
 export function imageEditModelForMethod(method: unknown): ImageEditModel | undefined {

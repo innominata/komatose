@@ -33,6 +33,9 @@ def main():
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
         os.environ["HIP_VISIBLE_DEVICES"] = ""
+    else:
+        from rocm_idle import arm_rocm_blocking_sync
+        arm_rocm_blocking_sync()
     import torch
     from PIL import Image
     from transformers import AutoImageProcessor, AutoTokenizer, VisionEncoderDecoderModel

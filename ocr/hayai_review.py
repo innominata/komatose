@@ -9,11 +9,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
-def _to_device(value, device):
+def _to_device(value, device, dtype):
+    if hasattr(value, "is_floating_point"):
+        return value.to(device, dtype) if value.is_floating_point() else value.to(device)
     if hasattr(value, "to"):
-        return value.to(device)
+        # BatchFeature casts only its floating-point tensors.
+        return value.to(device, dtype)
     if isinstance(value, dict):
-        return {key: _to_device(item, device) for key, item in value.items()}
+        return {key: _to_device(item, device, dtype) for key, item in value.items()}
     return value
 
 
@@ -34,6 +37,9 @@ def main():
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
         os.environ["HIP_VISIBLE_DEVICES"] = ""
+    else:
+        from rocm_idle import arm_rocm_blocking_sync
+        arm_rocm_blocking_sync()
     import torch
     from PIL import Image
     from transformers import AutoModel, AutoProcessor, PreTrainedTokenizerFast
@@ -41,16 +47,18 @@ def main():
     device = args.device
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
+    # fp16 halves VRAM and matched fp32 output on every Black Jack crop; CPU fp16 is slow.
+    dtype = torch.float32 if device == "cpu" else torch.float16
     if args.model_id.endswith("nova"):
         model, loading = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
-                                                   local_files_only=True, output_loading_info=True)
+                                                   local_files_only=True, output_loading_info=True, dtype=dtype)
         missing = [key for key in loading.get("missing_keys", []) if key.startswith("vision_encoder.")]
         if missing:
             raise RuntimeError("Nova vision weights did not load; check Transformers/checkpoint compatibility: " + ", ".join(missing[:5]))
         model = model.to(device).eval()
     else:
         model = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
-                                          local_files_only=True).to(device).eval()
+                                          local_files_only=True, dtype=dtype).to(device).eval()
     tokenizer = PreTrainedTokenizerFast.from_pretrained(model_dir, local_files_only=True)
     processor = AutoProcessor.from_pretrained("google/siglip2-base-patch16-naflex",
                                               local_files_only=True)
@@ -87,7 +95,7 @@ def main():
                 image = Image.open(io.BytesIO(base64.b64decode(req["image"], validate=True))).convert("RGB")
                 if image.width * image.height > 20_000_000:
                     raise ValueError("Crop exceeds 20 megapixels")
-                inputs = _to_device(processor(images=[image], max_num_patches=512, return_tensors="pt"), device)
+                inputs = _to_device(processor(images=[image], max_num_patches=512, return_tensors="pt"), device, dtype)
                 with torch.inference_mode():
                     output = model.generate(**inputs, tokenizer=tokenizer,
                                             max_new_tokens=512, num_beams=1,

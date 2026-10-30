@@ -51,6 +51,14 @@ MODELS = {
         ["*.json", "*.safetensors", "*.txt", "README.md"],
         1,
     ),
+    # Weights are CC BY-NC-SA 4.0; the bundled package runs on the review env's torch.
+    "manga-ocr-nar-small": (
+        "muscgab/manga-ocr-nar-small",
+        "81ff4f3313263d1da349946a9dd20d14e0fb0e66",
+        ["config.json", "model.safetensors", "nar_vocabulary_6817.json", "manga_ocr_nar_small/*",
+         "LICENSE*", "NOTICE.md", "THIRD_PARTY_LICENSE_*", "SHA256SUMS", "README.md"],
+        1,
+    ),
 }
 DEFAULT_MODELS = ("hayai-ocr-v2", "paddleocr-vl-1.6", "qwen3-vl-8b")
 PPOCR_DETECTOR = ("PaddlePaddle/PP-OCRv5_server_det", "ca867c897ecbca8873081573a802ad70d499cb94")
@@ -153,6 +161,13 @@ def install_one(name, repo, revision, patterns):
         if f.lfs and digest != f.lfs.sha256:
             raise RuntimeError(f"SHA256 mismatch: {path}")
         files[f.rfilename] = {"bytes": path.stat().st_size, "sha256": digest}
+    sums = DEST / name / "SHA256SUMS"
+    if sums.is_file():
+        # Also covers the bundled code, which is not in LFS.
+        for line in sums.read_text().splitlines():
+            digest, _, rfilename = line.partition("  ")
+            if rfilename in files and files[rfilename]["sha256"] != digest:
+                raise RuntimeError(f"SHA256SUMS mismatch: {DEST / name / rfilename}")
     print(f"Verified {name}", flush=True)
     return {"repo": repo, "revision": revision, "files": files}
 

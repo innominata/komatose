@@ -1,4 +1,7 @@
+import { charRunFonts } from "../charStyles";
+import { deleteRegions, lastDeletion } from "./regionTrash";
 import { maskInputs, currentMaskDiagnostics } from "../maskDiagnostics";
+import { sfxEnglishChoices } from "../sfx";
 import { isSourceSuggestion } from "../regionAi";
 import { automaticRegionPolygon, bubbleFitPoints } from "../regionGeometry";
 import { contrastingText } from "./textContrast";
@@ -63,17 +66,9 @@ export function approveEverything(episodeId: string, userId: string) {
 
 export function removePageRegions(episodeId: string, imageId: string | string[]): string[] {
   const imageIds = [...new Set(Array.isArray(imageId) ? imageId : [imageId])];
-  const ids = sqlite.transaction(() => {
-    const select = sqlite.prepare("SELECT id FROM lines WHERE episode_id=? AND image_id=?");
-    const remove = sqlite.prepare("DELETE FROM lines WHERE episode_id=? AND image_id=?");
-    return imageIds.flatMap(id => {
-      const rows = select.all(episodeId, id) as { id: string }[];
-      if (rows.length) remove.run(episodeId, id);
-      return rows.map(row => row.id);
-    });
-  })();
-  for (const id of ids) broadcast(episodeId, { type: "line:delete", id });
-  return ids;
+  const select = sqlite.prepare("SELECT id FROM lines WHERE episode_id=? AND image_id=?");
+  const ids = imageIds.flatMap(id => (select.all(episodeId, id) as { id: string }[]).map(row => row.id));
+  return deleteRegions(episodeId, ids, imageIds.length === 1 ? "Remove page regions" : "Remove regions on selected pages");
 }
 
 export function removeBlankRegions(episodeId: string): string[] {
@@ -81,13 +76,9 @@ export function removeBlankRegions(episodeId: string): string[] {
     const candidates = db.select().from(lines).where(eq(lines.episodeId, episodeId)).all();
     const pendingSource = new Set((sqlite.prepare("SELECT DISTINCT line_id FROM suggestions WHERE episode_id=? AND state='pending' AND kind IN ('source-review','source-enquiry')")
       .all(episodeId) as { line_id: string }[]).map(s => s.line_id));
-    const blank = candidates.filter(line => isBlankRegion(line) && !pendingSource.has(line.id));
-    const remove = sqlite.prepare("DELETE FROM lines WHERE id=? AND episode_id=?");
-    for (const line of blank) remove.run(line.id, episodeId);
-    return blank.map((line) => line.id);
+    return candidates.filter(line => isBlankRegion(line) && !pendingSource.has(line.id)).map((line) => line.id);
   })();
-  for (const id of ids) broadcast(episodeId, { type: "line:delete", id });
-  return ids;
+  return deleteRegions(episodeId, ids, "Remove blank regions");
 }
 
 export function approveAllGeometry(episodeId: string): number {
@@ -278,7 +269,7 @@ export function saveStyleAsRegionType(
 }
 
 function sameStyle(a: Partial<TextStyle>, b: Partial<TextStyle>) {
-  return STYLE_KEYS.every((key) => a[key] === b[key]);
+  return STYLE_KEYS.every((key) => a[key] === b[key] || JSON.stringify(a[key] ?? null) === JSON.stringify(b[key] ?? null));
 }
 
 /** Keep the look already on each region of this type. A series-style save must not rewrite their panels. */
@@ -335,8 +326,11 @@ export function restyleForType(
   return pickStyle(next);
 }
 
+/** Keys a complete saved style may leave out: absent means "none" (no layer style). */
+const OPTIONAL_STYLE_KEYS = new Set<string>(["effects"]);
+
 function styleIsOwned(style: Partial<TextStyle> | undefined) {
-  return !!style && STYLE_KEYS.every((key) => style[key] !== undefined);
+  return !!style && STYLE_KEYS.every((key) => OPTIONAL_STYLE_KEYS.has(key) || style[key] !== undefined);
 }
 
 /** Copy the series default onto regions that do not yet have their own saved style. */
@@ -831,6 +825,8 @@ export async function workflowState(series: Series, episode: Episode) {
       .all(episode.id),
     issues: await readiness(series, episode, imgs, lns),
     previewToken: await getEpisodePreviewToken(episode.id),
+    /** The newest region deletion Undo can restore. */
+    deletion: lastDeletion(episode.id),
     gpu: presentGpuStatus(gpuClientStatus(cleaningDeviceLabel())),
     credits: series.credits ?? {},
     /** What "use the default" means in Chapter Settings, and which setups can run here. */
@@ -873,8 +869,11 @@ export async function fitRegion(
     style.outline = style.fill === "#000000" ? "#ffffff" : "#000000";
   }
   if (!opts.preserveStyle) data = { ...data, style: opts.inheritStyle ? pickStyle(opts.style) : pickStyle(style) };
-  if (!listFonts(series.id).some((f) => f.id === style.fontId))
+  const seriesFonts = listFonts(series.id);
+  if (!seriesFonts.some((f) => f.id === style.fontId))
     throw new WorkflowError("Font does not belong to this series");
+  if (charRunFonts(data.charRuns).some((id) => !seriesFonts.some((f) => f.id === id)))
+    throw new WorkflowError("A character style uses a font that does not belong to this series");
   const layout = await fitText(
     line,
     data,
@@ -917,6 +916,8 @@ export function acceptSuggestion(
   userId: string,
   decision: string,
   _force = false,
+  /** One of a sound-effect suggestion's English alternatives, applied instead of all of them. */
+  english?: string,
 ) {
   return sqlite.transaction(() => {
     const suggestion = sqlite
@@ -935,7 +936,15 @@ export function acceptSuggestion(
     const assignment = source
       ? `source=?,source_state='read',ocr_confidence=NULL${applyPairedEnglish ? ",body=?" : ""}`
       : "body=?";
-    const textValues = applyPairedEnglish ? [suggestion.body, suggestion.translation] : [suggestion.body];
+    let textValues = applyPairedEnglish ? [suggestion.body, suggestion.translation] : [suggestion.body];
+    if (english !== undefined && decision === "accept") {
+      const choices = source
+        ? sfxEnglishChoices(suggestion.body, suggestion.translation, previous.lineType)
+        : sfxEnglishChoices(previous.source ?? "", suggestion.body, previous.lineType);
+      if (!choices.includes(english) || (source && !applyPairedEnglish))
+        throw new WorkflowError("Choose one of this suggestion's English alternatives");
+      textValues = source ? [suggestion.body, english] : [english];
+    }
     if (decision === "accept") {
       sqlite
         .prepare(
@@ -1049,7 +1058,7 @@ export async function typesetRegions(
           // Replace appearance overrides with series defaults, retaining each
           // region's placement transforms and all saved geometry/masks.
           const style: Partial<TextStyle> = {};
-          for (const key of ['rotation', 'skewX', 'skewY', 'warpStyle', 'warpBend'] as const) {
+          for (const key of ['rotation', 'skewX', 'skewY', 'warpStyle', 'warpBend', 'warpHorizontal', 'warpVertical', 'warpOrientation'] as const) {
             const value = region.data.style?.[key];
             if (value !== undefined) Object.assign(style, { [key]: value });
           }

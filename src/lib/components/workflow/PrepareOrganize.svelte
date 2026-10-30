@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PAGE_FILE_ACCEPT, isPageFile } from "$lib/pageFiles";
   import type { ImageRow } from "$lib/types";
   import type { CreditKind, SeriesCredits } from "$lib/credits";
 
@@ -60,7 +61,7 @@
     e.preventDefault();
     e.stopPropagation();
     fileDrag = false;
-    const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    const files = [...(e.dataTransfer?.files ?? [])].filter(isPageFile);
     if (canUpload && files.length) onaddfiles(files);
   }
 
@@ -221,7 +222,7 @@
           <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
           <strong>Add images</strong>
           <small>Drop, choose, or paste · order is previewed before upload</small>
-          <input type="file" accept="image/*" multiple onchange={(e) => onaddfiles([...(e.currentTarget.files ?? [])])} />
+          <input type="file" accept={PAGE_FILE_ACCEPT} multiple onchange={(e) => onaddfiles([...(e.currentTarget.files ?? [])])} />
         </div>
       </label>
     {/if}

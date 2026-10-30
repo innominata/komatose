@@ -225,6 +225,16 @@ export async function maskedBubbleCrop(
   return masked;
 }
 
+/** The region's share of a page mask as a silhouette; undefined when the mask is empty there. */
+export async function bubbleSilhouette(pageMask: Buffer, bubble: SpeechBubble) {
+  try {
+    return await maskSilhouette(await cropLetteringMask(pageMask, bubble));
+  } catch (e) {
+    if (e instanceof WorkflowError) return undefined;
+    throw e;
+  }
+}
+
 /** Chapter transcribe crop: a failed or empty lettering mask still yields a region image. */
 export async function transcribeBubbleCrop(
   raw: Buffer,
@@ -243,21 +253,61 @@ export async function transcribeBubbleCrop(
   return cropBubble(raw, bubble);
 }
 
+/**
+ * The lettering mask drawn as black shapes on white. Stylized SFX with screentone
+ * fills or outlines often read better as plain silhouettes than as masked pixels.
+ */
+export async function maskSilhouette(maskPng: Buffer) {
+  const mask = await sharp(maskPng).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
+  const pixels = Buffer.alloc(mask.data.length);
+  let kept = 0;
+  for (let i = 0; i < mask.data.length; i++) {
+    const inside = mask.data[i] > 127;
+    if (inside) kept++;
+    pixels[i] = inside ? 0 : 255;
+  }
+  if (!kept) throw new WorkflowError("Paint or detect lettering before sending a silhouette");
+  return sharp(pixels, { raw: { width: mask.info.width, height: mask.info.height, channels: 1 } })
+    .jpeg({ quality: 95 }).toBuffer();
+}
+
+/** Strokes a person traced over the crop, flattened to dark ink on white at crop size. */
+export async function traceCrop(tracePng: Buffer, width: number, height: number) {
+  const { data, info } = await sharp(tracePng).flatten({ background: "#ffffff" }).greyscale()
+    .resize(width, height, { fit: "fill" }).raw().toBuffer({ resolveWithObject: true });
+  if (data.every((value) => value > 250)) throw new WorkflowError("Trace the text before sending it");
+  return sharp(data, { raw: { width: info.width, height: info.height, channels: 1 } })
+    .jpeg({ quality: 95 }).toBuffer();
+}
+
+export type ReviewCropView =
+  | { kind: "crop" }
+  | { kind: "mask"; mask: Buffer; silhouette?: boolean }
+  | { kind: "trace"; trace: Buffer };
+
 export async function regionReviewCrop(
   series: Series,
   episode: Episode,
   line: LineRow,
   page: ImageRow | undefined,
-  maskPng?: Buffer,
+  view: ReviewCropView = { kind: "crop" },
   scale: ReviewCropZoom = 1,
 ) {
   const { raw, bubble } = await regionSource(series, episode, line, page);
-  const crop = await cropBubble(raw, bubble);
-  // Apply the native-size mask before resizing so brush coordinates stay exact.
-  const masked = maskPng ? await applyLetteringMask(crop, maskPng) : crop;
-  if (scale === 1) return masked;
-  return sharp(masked)
+  // Build the native-size image before resizing so brush coordinates stay exact.
+  const image = view.kind === "trace" ? await traceCrop(view.trace, bubble.width, bubble.height)
+    : view.kind === "mask" && view.silhouette ? await maskSilhouette(view.mask)
+    : view.kind === "mask" ? await applyLetteringMask(await cropBubble(raw, bubble), view.mask)
+    : await cropBubble(raw, bubble);
+  if (scale === 1) return image;
+  return sharp(image)
     .resize(bubble.width * scale, bubble.height * scale, { kernel: sharp.kernel.lanczos3 })
     .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
     .toBuffer();
+}
+
+export function parseReviewView(value: unknown): "crop" | "mask" | "trace" | undefined {
+  if (value == null) return undefined;
+  if (value === "crop" || value === "mask" || value === "trace") return value;
+  throw new WorkflowError("Review view must be crop, mask, or trace");
 }

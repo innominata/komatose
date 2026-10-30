@@ -130,6 +130,7 @@ export function reviewListenPort(id: LocalReviewModelId) {
     'hayai-ocr-v2.5-nova': 18086,
     'pp-ocrv5-korean': 18087,
     'manga-ocr': 18085,
+    'manga-ocr-nar-small': 18094,
     'paddleocr-vl-1.6': 18081,
     'qwen3-vl-8b': 18082,
   };
@@ -138,6 +139,7 @@ export function reviewListenPort(id: LocalReviewModelId) {
     'hayai-ocr-v2.5-nova': 'SCAN_REVIEW_NOVA_PORT',
     'pp-ocrv5-korean': 'SCAN_REVIEW_PPOCR_KOREAN_PORT',
     'manga-ocr': 'SCAN_REVIEW_MANGA_PORT',
+    'manga-ocr-nar-small': 'SCAN_REVIEW_MANGA_NAR_PORT',
     'paddleocr-vl-1.6': 'SCAN_REVIEW_PADDLE_PORT',
     'qwen3-vl-8b': 'SCAN_REVIEW_QWEN_PORT',
   };

@@ -6,6 +6,7 @@
   import { polygonEdgeHandle, rotateNormalizedPoints } from "$lib/textTransform";
   import { interpolateBrushPixels } from "$lib/cloneStamp";
   import { blurSigma } from "$lib/blurBrush";
+  import { regionTextPaths, smoothPath } from "$lib/textPath";
   import type {
     FittedLayout,
     MaskStroke,
@@ -108,6 +109,8 @@
     oncompletepolygon,
     onact,
     onnotify,
+    drawTextPath = false,
+    ondrawtextpath,
   }: {
     page: ImageRow | undefined;
     step: string;
@@ -192,6 +195,9 @@
     oncompletepolygon: () => void;
     onact: (body: Record<string, unknown>) => unknown;
     onnotify: (text: string) => void;
+    /** Drawing a new text path for the selected region: clicks place its points. */
+    drawTextPath?: boolean;
+    ondrawtextpath?: (on: boolean) => void;
   } = $props();
 
   let brushHover = $state<{ x: number; y: number } | null>(null);
@@ -210,6 +216,108 @@
   let featherStamp: HTMLCanvasElement | null = null;
   let featherStampKey = "";
   let ovalHover = $state<Point | null>(null);
+
+  // ── Type on paths ────────────────────────────────────────────────────
+  let pathDrag = $state<{ path: number; index: number; points: Point[] } | null>(null);
+  let pathDraft = $state<Point[]>([]);
+  let draftHover = $state<Point | null>(null);
+  const textPaths = $derived(step === "Typeset" && showRegions && selected && regionDoc ? regionTextPaths(regionDoc.data) : []);
+  const livePaths = $derived(textPaths.map((p, i) => (pathDrag?.path === i ? pathDrag.points : p.points)));
+  const pathEditable = $derived(!!(textPaths.length && canClean && !busy && !regionDoc?.data.locked && tool === "select" && !drawTextPath));
+  $effect(() => {
+    if (!drawTextPath) {
+      pathDraft = [];
+      draftHover = null;
+    }
+  });
+  function savePaths(paths: Point[][]) {
+    if (!selected || !regionDoc) return;
+    void onact({
+      action: "region", id: selected.id, expectedRevision: regionDoc.revision,
+      data: { textPaths: paths.map((points, i) => ({ ...(textPaths[i] ?? {}), points })) },
+    });
+  }
+  function withPath(i: number, points: Point[]) {
+    return livePaths.map((p, k) => (k === i ? points : p));
+  }
+  function pathHandleDown(e: PointerEvent, path: number, i: number) {
+    e.stopPropagation();
+    if (!pathEditable) return;
+    const pts = livePaths[path];
+    if (e.shiftKey) {
+      if (pts.length > 2) savePaths(withPath(path, pts.filter((_, n) => n !== i)));
+      else onnotify("A text path needs at least two points. Remove the line in the Shape tab instead.");
+      return;
+    }
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    pathDrag = { path, index: i, points: pts.map((p) => ({ ...p })) };
+  }
+  function pathHandleMove(e: PointerEvent) {
+    if (!pathDrag) return;
+    const p = pagePointFromEvent(e);
+    if (p) pathDrag.points[pathDrag.index] = p;
+  }
+  function pathHandleUp() {
+    if (!pathDrag) return;
+    const { path, points } = pathDrag;
+    const before = textPaths[path]?.points ?? [];
+    const moved = points.some((p, n) => p.x !== before[n]?.x || p.y !== before[n]?.y);
+    pathDrag = null;
+    if (moved) savePaths(withPath(path, points));
+  }
+  function pathHandleKey(e: KeyboardEvent, path: number, i: number) {
+    const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!step || !pathEditable || !page) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const n = e.shiftKey ? 10 : 1;
+    savePaths(withPath(path, livePaths[path].map((p, k) => (k === i ? { x: p.x + (step[0] * n) / page!.width, y: p.y + (step[1] * n) / page!.height } : p))));
+  }
+  /** Double-click on a line: a new point on the nearest stretch between two of its handles. */
+  function insertPathPoint(e: MouseEvent, path: number) {
+    e.stopPropagation();
+    const p = pagePointFromEvent(e);
+    const pts = livePaths[path];
+    if (!pathEditable || !p || !page || pts.length >= 64) return;
+    const w = page.width, h = page.height;
+    let best = 0, bestDist = Infinity;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = (b.x - a.x) * w, dy = (b.y - a.y) * h;
+      const t = Math.max(0, Math.min(1, (((p.x - a.x) * w) * dx + ((p.y - a.y) * h) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot((a.x - p.x) * w + t * dx, (a.y - p.y) * h + t * dy);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    savePaths(withPath(path, [...pts.slice(0, best + 1), p, ...pts.slice(best + 1)]));
+  }
+  // Drawing a new line: each click places a point; double-click or Enter finishes.
+  function draftDown(e: PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    const p = pagePointFromEvent(e);
+    if (!p) return;
+    pathDraft = [...pathDraft, p];
+  }
+  function finishDraft() {
+    // The double-click that finishes also placed its point twice; keep it once.
+    const pts = pathDraft.filter((p, i, all) => i === 0 || Math.hypot(p.x - all[i - 1].x, p.y - all[i - 1].y) > 2e-3);
+    if (pts.length < 2) {
+      onnotify("Click at least two points along the art to draw a line.");
+      return;
+    }
+    if (!selected || !regionDoc) return;
+    void onact({
+      action: "region", id: selected.id, expectedRevision: regionDoc.revision,
+      data: { textPaths: [...textPaths, { points: pts.slice(0, 64) }] },
+    });
+    ondrawtextpath?.(false);
+  }
+  function draftKey(e: KeyboardEvent) {
+    if (!drawTextPath) return;
+    if (e.key === "Escape") { e.preventDefault(); ondrawtextpath?.(false); }
+    else if (e.key === "Enter") { e.preventDefault(); finishDraft(); }
+    else if (e.key === "Backspace" && pathDraft.length) { e.preventDefault(); pathDraft = pathDraft.slice(0, -1); }
+  }
   function livePolygon(points: Point[]): Point[] {
     const drag = drawing;
     if (drag?.polygonDrag)
@@ -604,15 +712,41 @@
     const pull = Math.min(48, len * 0.22);
     return `M ${x1} ${y1} Q ${(x1 + x2) / 2 - (dy / len) * pull} ${(y1 + y2) / 2 + (dx / len) * pull} ${x2} ${y2}`;
   }
+  // The page sits in a gutter of empty canvas so its edges and corners can be scrolled clear
+  // of the floating toolbars. Not for side-by-side review (two pages share the row) or the
+  // reslice preview (a stitched strip scrolled to exact page tops). Entering a view or
+  // changing page centres the view back on the page.
+  const gutter = $derived(step === "Prepare" ? pageTool !== "reslice" : !reviewSideBySide);
+  let overscrollFor = "";
+  $effect(() => {
+    const key = gutter && page ? `${step}:${page.id}` : "";
+    if (key === overscrollFor) return;
+    overscrollFor = key;
+    if (!key) return;
+    requestAnimationFrame(() => {
+      const scroller = canvasScrollEl;
+      const canvas = scroller?.querySelector(".canvas-page.overscroll");
+      if (!scroller || !(canvas instanceof HTMLElement)) return;
+      const s = scroller.getBoundingClientRect();
+      const c = canvas.getBoundingClientRect();
+      scroller.scrollTo({
+        left: scroller.scrollLeft + c.left - s.left - Math.max(0, (scroller.clientWidth - c.width) / 2),
+        top: scroller.scrollTop + c.top - s.top - 18,
+      });
+    });
+  });
 </script>
+
+<svelte:window onkeydown={draftKey} />
 
 <div class="canvas-scroll" class:zoom-mode={zooming} bind:this={canvasScrollEl} use:scrollAction>
   {#if page && step === "Prepare"}
     <div
       bind:this={prepElement}
       class="canvas-page prepare-page"
+      class:overscroll={gutter}
       class:zoom-tool={zooming}
-      style={pageTool === "reslice" && reslicePreview ? `aspect-ratio:${reslicePreview.width}/${reslicePreview.height};width:${zoom}%` : `aspect-ratio:${page.width}/${page.height};width:${zoom}%`}
+      style={pageTool === "reslice" && reslicePreview ? `aspect-ratio:${reslicePreview.width}/${reslicePreview.height};width:${zoom}%` : `aspect-ratio:${page.width}/${page.height};--page-w:${zoom}%;width:var(--page-w)`}
       role="application"
       aria-label="Page preparation canvas"
       oncontextmenu={(e) => openActions(e, page.id)}
@@ -679,12 +813,13 @@
     {/if}
     <div
       class="canvas-page"
+      class:overscroll={gutter}
       bind:clientWidth={canvasWidth}
       class:zoom-tool={zooming}
       class:brush-tool={!zooming && (tool === "brush" || tool === "erase" || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
       class:click-tool={!zooming && (tool === "bubble-fill" || tool === "mask-grow")}
       class:style-brush-tool={tool === "style-brush"}
-      style={`aspect-ratio:${page.width}/${page.height};width:${reviewSideBySide ? `calc(${zoom / 2}% - 8px)` : `${zoom}%`}`}
+      style={`aspect-ratio:${page.width}/${page.height};--page-w:${reviewSideBySide ? `calc(${zoom / 2}% - 8px)` : `${zoom}%`};width:var(--page-w)`}
       oncontextmenu={handleContext}
       role="group"
     >
@@ -1114,6 +1249,59 @@
                 };
               }}
             />{/each}{/if}
+        {#each livePaths as pathPoints, pi}
+          {#if page && pathPoints.length >= 2}
+            {@const curve = smoothPath(pathPoints.map((p) => ({ x: p.x * page!.width, y: p.y * page!.height })))}
+            {@const used = !regionDoc?.data.layout?.onPath || regionDoc.data.layout.rows.some((r) => (r.path ?? 0) === pi)}
+            <g class="text-path-edit">
+              <polyline points={pathPoints.map((p) => `${p.x * page!.width},${p.y * page!.height}`).join(" ")}
+                fill="none" stroke="#ff9f43" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 4"
+                vector-effect="non-scaling-stroke" pointer-events="none" />
+              <polyline points={curve.map((p) => `${p.x},${p.y}`).join(" ")}
+                fill="none" stroke="#ff9f43" stroke-width="2" stroke-opacity={used ? 1 : 0.5} stroke-dasharray={used ? undefined : "6 4"}
+                vector-effect="non-scaling-stroke"
+                pointer-events={pathEditable ? "stroke" : "none"}
+                role="button" tabindex="-1" aria-label={`Text line ${pi + 1}; double-click to add a point`}
+                style={pathEditable ? "cursor: copy" : undefined}
+                ondblclick={(e) => insertPathPoint(e, pi)} />
+              <text x={pathPoints[0].x * page.width - 10} y={pathPoints[0].y * page.height - 8} fill="#ff9f43" font-size="12" font-weight="700"
+                text-anchor="end" pointer-events="none" style="paint-order: stroke" stroke="#2b1600" stroke-width="3">{pi + 1}</text>
+              {#each pathPoints as p, i}
+                <circle cx={p.x * page.width} cy={p.y * page.height} r={i === 0 ? 7 : 6}
+                  fill={i === 0 ? "#ff9f43" : "#ffd3a8"} stroke="#5a2d00" stroke-width="1.5"
+                  vector-effect="non-scaling-stroke"
+                  pointer-events={pathEditable ? undefined : "none"}
+                  style={pathEditable ? "cursor: move" : undefined}
+                  role="button" tabindex="0"
+                  aria-label={i === 0 ? `Text line ${pi + 1} start` : `Text line ${pi + 1} point ${i + 1}`}
+                  onpointerdown={(e) => pathHandleDown(e, pi, i)}
+                  onpointermove={pathHandleMove}
+                  onpointerup={pathHandleUp}
+                  onpointercancel={() => (pathDrag = null)}
+                  onkeydown={(e) => pathHandleKey(e, pi, i)}
+                  onclick={(e) => e.stopPropagation()}>
+                  <title>{i === 0 ? `Line ${pi + 1} start. ` : ""}Drag to shape the text line; arrow keys nudge it (Shift for 10 px); Shift-click to remove.</title>
+                </circle>
+              {/each}
+            </g>
+          {/if}
+        {/each}
+        {#if drawTextPath && page && selected}
+          <rect x="0" y="0" width={page.width} height={page.height} fill="transparent" style="cursor: crosshair"
+            role="button" tabindex="0" aria-label="Draw a text line: click to place points, double-click or Enter to finish, Esc to cancel"
+            onpointerdown={draftDown}
+            onpointermove={(e) => (draftHover = pagePointFromEvent(e))}
+            ondblclick={(e) => { e.stopPropagation(); finishDraft(); }}
+            onkeydown={(e) => e.key === "Enter" && e.stopPropagation()} />
+          {#if pathDraft.length}
+            {@const pts = draftHover ? [...pathDraft, draftHover] : pathDraft}
+            <polyline points={smoothPath(pts.map((p) => ({ x: p.x * page!.width, y: p.y * page!.height }))).map((p) => `${p.x},${p.y}`).join(" ")}
+              fill="none" stroke="#ff9f43" stroke-width="2" stroke-dasharray="5 3" vector-effect="non-scaling-stroke" pointer-events="none" />
+            {#each pathDraft as p}
+              <circle cx={p.x * page.width} cy={p.y * page.height} r="5" fill="#ff9f43" stroke="#5a2d00" stroke-width="1.5" vector-effect="non-scaling-stroke" pointer-events="none" />
+            {/each}
+          {/if}
+        {/if}
         {#if showRegions && selected && regionDoc && canClean && !regionDoc.data.locked && tool === "select" && step === "Typeset"}
           {@const rotating = drawing?.rotation && drawing.regionId === selected.id ? drawing : null}
           {@const center = rotationCenter(selected)}
@@ -1239,6 +1427,11 @@
     line-height: 0;
     -webkit-user-select: none;
     user-select: none;
+  }
+  .canvas-page.overscroll {
+    margin: 45vh max(45%, calc((100% - var(--page-w)) / 2));
+    /* Without auto margins the flex row would stretch the height and override aspect-ratio. */
+    align-self: flex-start;
   }
   .artwork {
     width: 100%;

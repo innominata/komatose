@@ -11,6 +11,7 @@ import { deleteRegionNeedsConfirm } from "../src/lib/workflow";
 import { orderRegions, placeRegionAfter } from "../src/lib/readingOrder";
 import { SaveQueue } from "../src/lib/saveQueue";
 import { DEFAULT_STYLE, type FittedLayout } from "../src/lib/workflow";
+import { get as engineGet, parseEngineData } from "../src/lib/server/engineData";
 import type { ImageRow, LineRow } from "../src/lib/types";
 import { copiesBox, maskRegion } from "../src/lib/maskRegions";
 import { automaticRegionPolygon, bubbleFitPoints, regionOval, regionRectangle } from "../src/lib/regionGeometry";
@@ -689,6 +690,22 @@ test("source advisory acceptance preserves original punctuation and English unti
   const final = (await listLines('e')).find(l => l.id === line.id)!;
   assert.equal(final.body, 'Really?');
   assert.equal(final.source, 'えーっ——？');
+  sqlite.prepare('DELETE FROM lines WHERE id=?').run(line.id);
+});
+
+test("a sound-effect suggestion applies one chosen English alternative", async () => {
+  await db.insert(schema.lines).values({ id: 'sfx-choice', episodeId: 'e', imageId: 'p',
+    source: '', sourceState: 'unreadable', body: '', lineType: '::', sortOrder: 999, updatedAt: 1 });
+  const line = (await listLines('e')).find(l => l.id === 'sfx-choice')!;
+  const id = suggest('e', line.id, line.revision!, 'ふわ', 'Reviewer', 'source-review', 'soft/float');
+  assert.throws(() => acceptSuggestion('e', id, 'u', 'accept', false, 'drift'), /English alternatives/);
+  acceptSuggestion('e', id, 'u', 'accept', false, 'float');
+  const updated = (await listLines('e')).find(l => l.id === line.id)!;
+  assert.equal(updated.source, 'ふわ');
+  assert.equal(updated.body, 'float');
+  const revise = suggest('e', line.id, updated.revision!, 'airy/light', 'Reviser', 'revise');
+  acceptSuggestion('e', revise, 'u', 'accept', false, 'light');
+  assert.equal((await listLines('e')).find(l => l.id === line.id)!.body, 'light');
   sqlite.prepare('DELETE FROM lines WHERE id=?').run(line.id);
 });
 
@@ -1930,7 +1947,7 @@ test("PNG and PSD composites agree, PSD retains editable text and explicit break
   });
   const png = await sharp(rendered.composite).ensureAlpha().raw().toBuffer();
   assert.deepEqual(Buffer.from(psd.imageData!.data), png);
-  const textLayers = psd.children!.filter((l) => l.text);
+  const textLayers = psd.children!.filter((l) => l.text && !l.name?.startsWith("Komatose export data"));
   assert.equal(textLayers.length, 1);
   assert.equal(
     textLayers[0].text!.text,
@@ -2039,6 +2056,307 @@ test("PSD import brings back Photoshop text, transform, colour and artwork edits
   assert.equal(restored.body, before.body);
   assert.equal(restored.x, before.x);
   assert.deepEqual(getDoc<any>("region:l", {}).data.style, regionBefore.style);
+});
+
+test("PSD import reads path text lines back: edited words and a reshaped path, untouched lines ignored", async () => {
+  const { writePsdBuffer } = await import("ag-psd");
+  const { planPsdImport, applyPsdImport } = await import("../src/lib/server/psdImport");
+  const { fitRegion } = await import("../src/lib/server/workflowService");
+  const { putDoc } = await import("../src/lib/server/workflowStore");
+  const { serializeEngineData, get: eget } = await import("../src/lib/server/engineData");
+  const user = { id: "u", username: "test", role: "admin" as const };
+  const page = (await listImages("e"))[0];
+  const line = (await listLines("e")).find((l) => l.id === "l")!;
+  const doc = getDoc<any>("region:l", {});
+  const ruled = [0.3, 0.42, 0.54].map((y) => ({ points: [{ x: 0.1, y }, { x: 0.5, y: y + 0.01 }, { x: 0.9, y }] }));
+  putDoc("e", doc.id, { ...doc.data, locked: false, textPaths: ruled }, doc.revision);
+  await fitRegion(series, episode, "l", getDoc<any>("region:l", {}).revision, { preserveStyle: true });
+  const fitted = getDoc<any>("region:l", {}).data.layout;
+  assert.equal(fitted.onPath, true);
+  const exported = async () => {
+    const snap = await captureExport(series, episode, "psd", true);
+    const one = snap.pages.find((p) => p.image.id === page.id)!;
+    return finishedPsd(one, await renderPage(one));
+  };
+  const untouched = await planPsdImport(series, episode, page.id, await exported());
+  assert.deepEqual(untouched.regions.filter((r) => r.lineId === "l"), [], JSON.stringify(untouched));
+
+  const psd = readPsd(await exported(), { useImageData: true });
+  const lineLayers = psd.children!.filter((c) => c.text && c.name!.includes("· l"));
+  assert.equal(lineLayers.length, fitted.rows.length);
+  lineLayers[0].text!.text = "Rewritten";
+  lineLayers[0].text!.styleRuns = undefined;
+  const txt2 = parseEngineData(Buffer.from(psd.engineData!, "base64"));
+  const frameNo = (eget(txt2, "1", "1", String(lineLayers[0].text!.index), "1", "0", "0", "0") as { v: number }).v;
+  const segs = eget(txt2, "0", "8", "0", String(frameNo), "0", "1", "0") as { v: { t: string; v: number }[] };
+  segs.v.forEach((n, i) => { if (i % 2) n.v += 20; });
+  psd.engineData = Buffer.from(serializeEngineData(txt2)).toString("base64");
+  const plan = await planPsdImport(series, episode, page.id, Buffer.from(writePsdBuffer(psd)));
+  const change = plan.regions.find((r) => r.lineId === "l")!;
+  assert.ok(change, plan.warnings.join("; "));
+  assert.ok(change.body!.startsWith("Rewritten"), change.body);
+  assert.ok(change.describe.includes("path of line 1"), change.describe.join(", "));
+  // The exported path starts where the text does; its far end is the original point.
+  const moved = change.textPaths![0].points.at(-1)!.y * page.height - ruled[0].points.at(-1)!.y * page.height;
+  assert.ok(Math.abs(moved - 20 * (fitted.dpi / 72)) < 1.5, String(moved));
+  assert.deepEqual(change.textPaths![1], ruled[1], "an untouched line keeps its own points");
+  await applyPsdImport(series, episode, user.id, plan);
+  const after = getDoc<any>("region:l", {}).data;
+  assert.equal(after.textPaths.length, 3);
+  assert.ok((await listLines("e")).find((l) => l.id === "l")!.body.startsWith("Rewritten"));
+  void line;
+});
+
+test("a PSD uploaded as a page becomes a PNG of its visible image", async () => {
+  const { psdToPng, isPsd } = await import("../src/lib/server/replaceImage");
+  const snap = await captureExport(series, episode, "psd", true);
+  const one = snap.pages[0];
+  const psd = await finishedPsd(one, await renderPage(one));
+  assert.ok(isPsd(psd, "page.psd"));
+  const png = await psdToPng(psd);
+  const meta = await sharp(png).metadata();
+  assert.equal(meta.format, "png");
+  assert.deepEqual([meta.width, meta.height], [one.image.width, one.image.height]);
+});
+
+test("text layers that match no region are added as Imported regions, and undo removes them", async () => {
+  const { writePsdBuffer } = await import("ag-psd");
+  const { planPsdImport, applyPsdImport } = await import("../src/lib/server/psdImport");
+  const { undoPageOp } = await import("../src/lib/server/pageEdit");
+  const user = { id: "u", username: "test", role: "admin" as const };
+  const page = (await listImages("e"))[0];
+  const snap = await captureExport(series, episode, "psd", true);
+  const one = snap.pages.find((p) => p.image.id === page.id)!;
+  const psd = readPsd(await finishedPsd(one, await renderPage(one)), { useImageData: true });
+  psd.children!.push({
+    name: "Added in Photoshop",
+    text: {
+      text: "Hello from Photoshop",
+      index: 99,
+      transform: [1, 0, 0, 1, 40, 50],
+      shapeType: "box",
+      boxBounds: [0, 0, 160, 40],
+      style: { font: { name: ttf.font.postscriptName }, fontSize: 18, fillColor: { r: 10, g: 120, b: 200 } },
+      styleRuns: [
+        { length: 6, style: { font: { name: ttf.font.postscriptName }, fontSize: 18, fillColor: { r: 10, g: 120, b: 200 } } },
+        { length: 14, style: { font: { name: ttf.font.postscriptName }, fontSize: 27, fillColor: { r: 10, g: 120, b: 200 } } },
+      ],
+    },
+  });
+  const before = (await listLines("e")).filter((l) => l.imageId === page.id).length;
+  const plan = await planPsdImport(series, episode, page.id, Buffer.from(writePsdBuffer(psd)));
+  assert.equal(plan.created.length, 1, plan.warnings.join("; "));
+  const made = plan.created[0];
+  assert.equal(made.body, "Hello from Photoshop");
+  assert.equal(made.style.fill, "#0a78c8");
+  assert.equal(made.style.fontId, ttf.font.id);
+  assert.deepEqual(made.charRuns, [{ start: 6, end: 20, style: { size: 150 } }], JSON.stringify(made.charRuns));
+  assert.ok(Math.abs(made.bounds.x * page.width - 40) < 0.5 && Math.abs(made.bounds.w * page.width - 160) < 0.5);
+  const result = await applyPsdImport(series, episode, user.id, plan);
+  assert.deepEqual(result.failed, []);
+  const pageLines = (await listLines("e")).filter((l) => l.imageId === page.id);
+  assert.equal(pageLines.length, before + 1);
+  const added = pageLines.find((l) => l.body === "Hello from Photoshop")!;
+  assert.equal(added.lineType, "imported");
+  assert.ok(getDoc<any>(`region:${added.id}`, {}).data.layout, "the new region is fitted");
+  assert.ok(getDoc<any>("series:s", {}).data.regionKinds.some((k: { id: string }) => k.id === "imported"));
+  await undoPageOp({ series, episode, user });
+  assert.equal((await listLines("e")).filter((l) => l.imageId === page.id).length, before);
+});
+
+test("a PSD uploaded as a page keeps its raw layer, cleaned artwork and text", async () => {
+  const { POST } = await import("../src/routes/api/episodes/[eid]/images/+server");
+  const { readAsset } = await import("../src/lib/server/workflowStore");
+  const user = { id: "u", username: "test", role: "admin" as const };
+  const page = (await listImages("e"))[0];
+  const snap = await captureExport(series, episode, "psd", true);
+  const one = snap.pages.find((p) => p.image.id === page.id)!;
+  const bytes = await finishedPsd(one, await renderPage(one));
+  const textLayers = readPsd(bytes, { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true }).children!.filter((c) => c.text && !c.name?.startsWith("Komatose export data")).length;
+  const form = new FormData();
+  form.set("files", new File([new Uint8Array(bytes)], "from-photoshop.psd", { type: "image/vnd.adobe.photoshop" }));
+  const res = await POST({ locals: { user }, params: { eid: "e" }, request: new Request("http://test/images", { method: "POST", body: form }) } as any);
+  assert.equal(res.status, 200, await res.clone().text());
+  const body = await res.json();
+  const image = body.images[0];
+  assert.equal(image.originalName, "from-photoshop.png");
+  const doc = getDoc<any>(`page:${image.id}`, {}).data;
+  const pixels = async (hash: string) => sharp(await readAsset(hash)).flatten({ background: "#ffffff" }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const raw = await pixels(doc.prepared);
+  const original = await pixels(one.source.original!);
+  // The original upload is the raw page when it is page-sized; otherwise the prepared source.
+  const expected = original.info.width === one.image.width && original.info.height === one.image.height ? original : await pixels(one.source.prepared!);
+  assert.deepEqual([raw.info.width, raw.info.height], [expected.info.width, expected.info.height]);
+  assert.ok(raw.data.equals(expected.data), "the raw page is the PSD's original upload");
+  assert.ok(doc.cleanBase, "the cleaned artwork is the working image");
+  assert.equal(doc.cleanMethod, "psd-import");
+  const regions = (await listLines("e")).filter((l) => l.imageId === image.id);
+  assert.ok(regions.length >= 1 && regions.length <= textLayers, `${regions.length} of ${textLayers}`);
+  assert.ok(regions.every((l) => (l.lineType as string) === "imported"));
+  assert.ok(regions.some((l) => getDoc<any>(`region:${l.id}`, {}).data.layout));
+  // Later tests count this chapter's pages and regions.
+  sqlite.prepare("DELETE FROM lines WHERE image_id=?").run(image.id);
+  sqlite.prepare("DELETE FROM images WHERE id=?").run(image.id);
+});
+
+test("layer styles render around the lettering and export as editable Photoshop effects", async () => {
+  const { EFFECT_DEFAULTS } = await import("../src/lib/textEffects");
+  const img = (await listImages("e"))[0];
+  const original = (await listLines("e"))[0];
+  const sourceDoc = await preparePage(series, episode, img);
+  const line = { ...original, body: "SHADOW", x: 0.1, y: 0.1, w: 0.7, h: 0.3 };
+  const base = { ...DEFAULT_STYLE, fontId: ttf.font.id, size: 30, outlineWidth: 1, fill: "#2255aa", outline: "#ffffff" };
+  const style = { ...base, effects: { dropShadow: { ...EFFECT_DEFAULTS.dropShadow, distance: 6 }, bevel: EFFECT_DEFAULTS.bevel } };
+  const plain = await fitText(line, { style: base }, img, base, 72);
+  const styled = await fitText(line, { style }, img, style, 72);
+  assert.notEqual(plain.key, styled.key);
+  assert.match(styled.svg, /filter="url\(#fx-ext\)"/);
+  assert.match(styled.svg, /<!--outline-->/);
+  const page = (data: RegionData, layout: FittedLayout) => ({
+    image: img, source: sourceDoc.data, sourceRevision: sourceDoc.revision, dpi: 72,
+    regions: [{ line, data: { ...data, layout }, revision: 1 }],
+  });
+  const rendered = await renderPage(page({ style }, styled));
+  const flat = await renderPage(page({ style: base }, plain));
+  assert.ok(!rendered.composite.equals(flat.composite), "the shadow and bevel change the page");
+  const psd = readPsd(await finishedPsd(page({ style }, styled), rendered), { useImageData: true });
+  const layer = psd.children!.find((c) => c.text)!;
+  assert.equal(layer.effects!.dropShadow![0].distance!.value, 6);
+  assert.equal(layer.effects!.bevel!.style, "inner bevel");
+  assert.ok(layer.effects!.stroke, "the outline is still the Stroke");
+  // The layer's own pixels are the glyphs alone: no white outline, which Photoshop draws.
+  const d = layer.imageData!.data;
+  let white = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240) white++;
+  assert.equal(white, 0);
+});
+
+test("PSD export records its layers, so an import applies only what changed in Photoshop", async () => {
+  const { writePsdBuffer } = await import("ag-psd");
+  const { planPsdImport } = await import("../src/lib/server/psdImport");
+  const { readMeta, META_LAYER } = await import("../src/lib/server/psdMeta");
+  const { putDoc } = await import("../src/lib/server/workflowStore");
+  const page = (await listImages("e"))[0];
+  const exported = async () => {
+    const snap = await captureExport(series, episode, "psd", true);
+    const one = snap.pages.find((p) => p.image.id === page.id)!;
+    return finishedPsd(one, await renderPage(one));
+  };
+  const bytes = await exported();
+  const psd = readPsd(bytes, { useImageData: true });
+  const meta = readMeta(psd)!;
+  assert.equal(meta.page, page.id);
+  const textLayers = psd.children!.filter((c) => c.text && c.name !== META_LAYER);
+  assert.ok(textLayers.length >= 1);
+  for (const l of textLayers) assert.ok(meta.layers[String(l.id)], `layer ${l.name} is recorded`);
+  assert.ok(psd.children!.some((c) => c.name === META_LAYER && c.hidden), "the hidden copy is there too");
+
+  // In Komatose after the export: the region's colour changes.
+  const target = textLayers[0];
+  const regionId = meta.layers[String(target.id)];
+  const doc = getDoc<any>(`region:${regionId}`, {});
+  putDoc("e", doc.id, { ...doc.data, style: { ...doc.data.style, fill: "#00aa44" } }, doc.revision);
+
+  // In Photoshop: the text is edited, which renames the layer to its text.
+  target.text!.text = "Edited in Photoshop";
+  target.text!.styleRuns = undefined;
+  target.name = "Edited in Photoshop";
+  const plan = await planPsdImport(series, episode, page.id, Buffer.from(writePsdBuffer(psd)));
+  assert.equal(plan.created.length, 0, "the renamed layer still matches its region");
+  const change = plan.regions.find((r) => r.lineId === regionId)!;
+  assert.ok(change, plan.warnings.join("; "));
+  assert.equal(change.body, "Edited in Photoshop");
+  assert.equal(change.style.fill, undefined, "the colour changed in Komatose is not reverted");
+  assert.equal(plan.regions.length, 1, "untouched layers change nothing");
+  assert.equal(plan.artwork, undefined, "the artwork was not changed in Photoshop");
+
+  // XMP stripped: the hidden layer still carries the record.
+  delete psd.imageResources!.xmpMetadata;
+  const fallback = readMeta(readPsd(Buffer.from(writePsdBuffer(psd)), { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true }));
+  assert.equal(fallback?.page, page.id);
+});
+
+test("deleted regions come back with their comments and layout on undo", async () => {
+  const { deleteRegions, restoreDeletion, lastDeletion } = await import("../src/lib/server/regionTrash");
+  const { removePageRegions } = await import("../src/lib/server/workflowService");
+  const page = (await listImages("e"))[0];
+  const line = (await listLines("e")).find((l) => l.imageId === page.id)!;
+  const before = getDoc<any>(`region:${line.id}`, {}).data;
+  sqlite.prepare("INSERT INTO comments(id,line_id,user_id,body,correction,created_at) VALUES('c-trash',?,?,?,0,1)").run(line.id, "u", "keep me");
+  assert.deepEqual(deleteRegions("e", [line.id], "Delete region"), [line.id]);
+  assert.equal((await listLines("e")).some((l) => l.id === line.id), false);
+  assert.equal((sqlite.prepare("SELECT count(*) AS n FROM comments WHERE id='c-trash'").get() as { n: number }).n, 0, "the comment went with it");
+  assert.equal(lastDeletion("e")!.count, 1);
+  const restored = await restoreDeletion("e");
+  assert.deepEqual(restored.ids, [line.id]);
+  const back = (await listLines("e")).find((l) => l.id === line.id)!;
+  assert.equal(back.body, line.body);
+  assert.equal(back.x, line.x);
+  assert.equal((sqlite.prepare("SELECT body FROM comments WHERE id='c-trash'").get() as { body: string }).body, "keep me");
+  assert.deepEqual(getDoc<any>(`region:${line.id}`, {}).data, before, "the layout and style were never removed");
+
+  const count = (await listLines("e")).filter((l) => l.imageId === page.id).length;
+  assert.equal(removePageRegions("e", page.id).length, count);
+  await restoreDeletion("e");
+  assert.equal((await listLines("e")).filter((l) => l.imageId === page.id).length, count, "a page's regions come back together");
+  sqlite.prepare("DELETE FROM comments WHERE id='c-trash'").run();
+  await assert.rejects(restoreDeletion("e"), /Nothing deleted/);
+});
+
+test("comparing cleaning methods runs each on the region's crop and applies only the chosen one", async () => {
+  const { startCleanComparison } = await import("../src/lib/server/cleanCompare");
+  const { readJobProgress } = await import("../src/lib/server/jobs");
+  const { POST } = await import("../src/routes/api/episodes/[eid]/workflow/+server");
+  const { putDoc, storeAsset, readAsset } = await import("../src/lib/server/workflowStore");
+  const user = { id: "u", username: "test", role: "admin" as const };
+  const page = (await listImages("e"))[0];
+  const line = (await listLines("e")).find((l) => l.imageId === page.id)!;
+  const doc = getDoc<any>(`page:${page.id}`, {});
+  const box = { x: Math.round((line.x ?? 0) * page.width), y: Math.round((line.y ?? 0) * page.height), w: Math.max(4, Math.round((line.w ?? 0.1) * page.width)), h: Math.max(4, Math.round((line.h ?? 0.1) * page.height)) };
+  const mask = await sharp({ create: { width: page.width, height: page.height, channels: 3, background: "#000" } })
+    .composite([{ input: { create: { width: box.w, height: box.h, channels: 3, background: "#fff" } }, left: box.x, top: box.y }]).png().toBuffer();
+  putDoc("e", doc.id, { ...doc.data, mask: await storeAsset(mask), maskApproved: true, cleaned: undefined }, doc.revision);
+  const before = getDoc<any>(`page:${page.id}`, {}).data;
+  const artworkBefore = before.cleanBase || before.prepared;
+
+  const jobId = await startCleanComparison({ episode, page, line, methods: ["flat", "telea", "clone", "bogus"], labels: {} });
+  let progress: any;
+  for (let i = 0; i < 300; i++) {
+    const state = (sqlite.prepare("SELECT state FROM workflow_jobs WHERE id=?").get(jobId) as { state: string }).state;
+    progress = readJobProgress(jobId);
+    if (state !== "running") break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.deepEqual(progress.results.map((r: any) => r.method), ["flat", "telea"], "clone and unknown methods are left out");
+  assert.ok(progress.results.every((r: any) => r.asset || r.error), JSON.stringify(progress.results));
+  // Tests have no Python cleaning worker: each method then fails on its own, and the job
+  // still finishes. Stand in a result so applying can be checked.
+  if (!progress.results.some((r: any) => r.asset)) {
+    const { updateJob } = await import("../src/lib/server/jobs");
+    const fake = await sharp({ create: { width: progress.box.width, height: progress.box.height, channels: 3, background: "#ff00ff" } }).png().toBuffer();
+    progress.results[0] = { ...progress.results[0], asset: await storeAsset(fake), error: undefined };
+    updateJob(jobId, "completed", { results: progress.results });
+  }
+  const ok = progress.results.find((r: any) => r.asset);
+  assert.equal(getDoc<any>(`page:${page.id}`, {}).data.cleaned, undefined, "results don't touch the page");
+
+  const res = await POST({ locals: { user }, params: { eid: "e" }, request: new Request("http://test/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "apply-compare-clean", jobId, method: ok.method }) }) } as any);
+  assert.equal(res.status, 200, await res.clone().text());
+  const after = getDoc<any>(`page:${page.id}`, {}).data;
+  assert.ok(after.cleaned);
+  assert.equal(after.cleanMethod, ok.method);
+  // Outside the compared crop the artwork is untouched.
+  const a = await sharp(await readAsset(artworkBefore)).removeAlpha().raw().toBuffer();
+  const b = await sharp(await readAsset(after.cleaned)).removeAlpha().raw().toBuffer();
+  const p = progress.box;
+  let outside = 0;
+  for (let y = 0; y < page.height; y += 3) for (let x = 0; x < page.width; x += 3) {
+    if (x >= p.left && x < p.left + p.width && y >= p.top && y < p.top + p.height) continue;
+    const i = (y * page.width + x) * 3;
+    if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) outside++;
+  }
+  assert.equal(outside, 0);
+  putDoc("e", `page:${page.id}`, before, getDoc<any>(`page:${page.id}`, {}).revision);
 });
 
 test("placing a later region immediately after an earlier one shifts the in-between slots up", () => {
@@ -2326,6 +2644,116 @@ test("Arc warp preview moves glyphs and PSD stores Warp Text", async () => {
   assert.equal(layer.text!.warp!.style, "arc");
   assert.equal(layer.text!.warp!.value, 40);
   assert.equal(layer.text!.warp!.rotate, "horizontal");
+});
+
+test("character styles paint per glyph and become PSD style runs; path text exports as Photoshop type on a path", async () => {
+  const img = (await listImages("e"))[0];
+  const original = (await listLines("e"))[0];
+  const sourceDoc = await preparePage(series, episode, img);
+  const line = { ...original, body: "BIG small", x: 0.05, y: 0.1, w: 0.8, h: 0.4 };
+  const style = { ...DEFAULT_STYLE, fontId: ttf.font.id, size: 22, fill: "#112233" };
+  const runs = [{ start: 0, end: 3, style: { fill: "#ff0000", size: 150, tracking: 50 } }];
+  const plain = await fitText(line, { style }, img, style, 72);
+  const styled = await fitText(line, { style, charRuns: runs, charRunsBody: line.body }, img, style, 72);
+  assert.match(styled.svg, /fill="#ff0000"/);
+  assert.match(styled.svg, /fill="#112233"/);
+  assert.ok(styled.size <= plain.size, "bigger characters can only shrink the fit");
+  assert.ok(styled.rows.some((r) => r.pieces && r.pieces.length > 1) || styled.rows.length > 1);
+  // Text typed later keeps the runs on the right characters.
+  const edited = await fitText({ ...line, body: "THE BIG small" }, { style, charRuns: runs, charRunsBody: line.body }, img, style, 72);
+  assert.equal(edited.charStyles?.length, 2);
+  const page = (data: RegionData, layout: FittedLayout) => ({
+    image: img,
+    source: sourceDoc.data,
+    sourceRevision: sourceDoc.revision,
+    dpi: 72,
+    regions: [{ line, data: { ...data, layout }, revision: 1 }],
+  });
+  const boxPage = page({ style, charRuns: runs, charRunsBody: line.body }, styled);
+  const psd = readPsd(await finishedPsd(boxPage, await renderPage(boxPage)), { useImageData: true });
+  const text = psd.children!.find((c) => c.text)!.text!;
+  assert.ok(text.styleRuns!.length >= 2);
+  assert.equal((text.styleRuns![0].style.fillColor as { r: number }).r, 255);
+
+  const textPath = { points: [{ x: 0.1, y: 0.4 }, { x: 0.45, y: 0.2 }, { x: 0.8, y: 0.4 }] };
+  // A region saved with one path before regions held several still reads it.
+  const onPath = await fitText(line, { style, textPath }, img, style, 72);
+  assert.equal(onPath.onPath, true);
+  assert.equal(onPath.rows.length, 1);
+  assert.match(onPath.svg, /matrix\(/);
+  const pathPage = page({ style, textPath }, onPath);
+  const pathBytes = await finishedPsd(pathPage, await renderPage(pathPage));
+  await writeFile(join(exportFixtures, "text-on-path.psd"), pathBytes);
+  const pathPsd = readPsd(pathBytes, { useImageData: true });
+  const pathLayer = pathPsd.children!.find((c) => c.text)!;
+  assert.equal(pathLayer.text!.text, "BIG small");
+  assert.equal(pathLayer.text!.index, 0);
+  // The path lives in the document Txt2 block: a path frame (kind 2) and the layer's object.
+  const txt2 = parseEngineData(Buffer.from(pathPsd.engineData!, "base64"));
+  assert.equal((engineGet(txt2, "0", "8", "0", "0", "0", "2", "0") as { v: number }).v, 2);
+  const segs = engineGet(txt2, "0", "8", "0", "0", "0", "1", "0") as { v: unknown[] };
+  assert.ok(segs.v.length >= 8 && segs.v.length % 8 === 0);
+  assert.equal((engineGet(txt2, "1", "1", "0", "0", "0") as { v: string }).v, "BIG small\r");
+  const runLengths = (engineGet(txt2, "1", "1", "0", "0", "6", "0") as { v: unknown[] }).v.map((r) => (engineGet(r as never, "1") as { v: number }).v);
+  assert.equal(runLengths.reduce((a, b) => a + b, 0), "BIG small\r".length);
+
+  // A 300 dpi page mixing box text (with character styles) and path text: every type layer
+  // gets a Txt2 object, numbered in layer order.
+  const boxLine = { ...line, id: `${line.id}-box`, y: 0.55, h: 0.35 };
+  const boxData: RegionData = { style, charRuns: runs, charRunsBody: line.body };
+  const pathData: RegionData = { style, textPaths: [textPath] };
+  const mixed = {
+    image: img,
+    source: sourceDoc.data,
+    sourceRevision: sourceDoc.revision,
+    dpi: 300,
+    regions: [
+      { line, data: { ...pathData, layout: await fitText(line, pathData, img, style, 300) }, revision: 1 },
+      { line: boxLine, data: { ...boxData, layout: await fitText(boxLine, boxData, img, style, 300) }, revision: 1 },
+    ],
+  };
+  const mixedBytes = await finishedPsd(mixed, await renderPage(mixed));
+  await writeFile(join(exportFixtures, "text-on-path-300dpi-mixed.psd"), mixedBytes);
+  const mixedPsd = readPsd(mixedBytes, { useImageData: true });
+  assert.deepEqual(mixedPsd.children!.filter((c) => c.text && !c.name?.startsWith("Komatose export data")).map((c) => c.text!.index), [0, 1]);
+  const mixedTxt2 = parseEngineData(Buffer.from(mixedPsd.engineData!, "base64"));
+  assert.deepEqual(
+    [0, 1].map((n) => (engineGet(mixedTxt2, "0", "8", "0", String(n), "0", "2", "0") as { v: number }).v),
+    [2, 1],
+  );
+
+  // Ruled lines: the words fill each path in turn, and each line is its own PSD path layer.
+  const ruled = [0.3, 0.45, 0.6].map((y) => ({ points: [{ x: 0.1, y }, { x: 0.5, y: y + 0.01 }, { x: 0.9, y }] }));
+  const longLine = { ...line, body: "one two three four five six seven eight nine ten eleven twelve" };
+  const ruledData: RegionData = { style: { ...style, size: 30, minSize: 6 }, textPaths: ruled };
+  const ruledLayout = await fitText(longLine, ruledData, img, ruledData.style!, 72);
+  assert.equal(ruledLayout.overflow, false);
+  assert.ok(ruledLayout.rows.length >= 2, "the text spills onto a second line");
+  assert.deepEqual(ruledLayout.rows.map((r) => r.path), ruledLayout.rows.map((_, k) => k));
+  assert.equal(ruledLayout.rows.map((r) => r.text).join(" "), longLine.body);
+  const paragraphs = await fitText({ ...longLine, body: "first\n\nthird" }, ruledData, img, ruledData.style!, 72);
+  assert.deepEqual(paragraphs.rows.map((r) => [r.path, r.text]), [[0, "first"], [2, "third"]]);
+  const ruledPage = { ...page(ruledData, ruledLayout), regions: [{ line: longLine, data: { ...ruledData, layout: ruledLayout }, revision: 1 }] };
+  const ruledPsd = readPsd(await finishedPsd(ruledPage, await renderPage(ruledPage)), { useImageData: true });
+  const lineLayers = ruledPsd.children!.filter((c) => c.text && !c.name?.startsWith("Komatose export data"));
+  assert.equal(lineLayers.length, ruledLayout.rows.length);
+  assert.deepEqual(lineLayers.map((c) => c.text!.text), ruledLayout.rows.map((r) => r.text));
+  const ruledTxt2 = parseEngineData(Buffer.from(ruledPsd.engineData!, "base64"));
+  // One frame per line layer, and one for the hidden export-record layer.
+  assert.equal((engineGet(ruledTxt2, "0", "8", "0") as { v: unknown[] }).v.length, lineLayers.length + 1);
+
+  // Overflowing path text stays out of the composite but is kept in the PSD as type.
+  const tight: RegionData = { style: { ...style, size: 30, minSize: 30 }, textPaths: [ruled[0]] };
+  const tightLayout = await fitText(longLine, tight, img, tight.style!, 72);
+  assert.equal(tightLayout.overflow, true);
+  const tightPage = { ...page(tight, tightLayout), regions: [{ line: longLine, data: { ...tight, layout: tightLayout }, revision: 1 }] };
+  const tightRendered = await renderPage(tightPage);
+  assert.equal(tightRendered.layouts.length, 0);
+  const tightPsd = readPsd(await finishedPsd(tightPage, tightRendered), { useImageData: true });
+  const kept = tightPsd.children!.filter((c) => c.text && !c.name?.startsWith("Komatose export data"));
+  assert.equal(kept.length, 1);
+  assert.match(kept[0].name!, /overflows path/);
+  assert.equal(kept[0].text!.text, longLine.body);
 });
 
 console.log(`Export acceptance fixtures: ${exportFixtures}`);
@@ -3799,11 +4227,12 @@ for line in sys.stdin:
     const payload = JSON.parse(String(init?.body));
     if (String(_url).includes('ocr.fixture/hayai-ocr-v2')) {
       calls.push('hayai');
-      return Response.json({ source: ++hayaiCalls === 3 ? 'こんばんは' : 'こんにちは' });
+      // Calls 3-4 are the third region and its silhouette second opinion.
+      return Response.json({ source: ++hayaiCalls >= 3 ? 'こんばんは' : 'こんにちは' });
     }
     if (String(_url).includes('ocr.fixture/paddleocr-vl-1.6')) {
       calls.push('paddle');
-      return Response.json({ choices: [{ message: { content: ++paddleCalls === 3 ? 'こんばんわ' : 'こんにちは' } }] });
+      return Response.json({ choices: [{ message: { content: ++paddleCalls >= 3 ? 'こんばんわ' : 'こんにちは' } }] });
     }
     if (String(_url).includes('ocr.fixture/qwen3-vl-8b')) {
       throw new Error('Qwen3-VL-8B must not translate Hayai/Paddle readings');
@@ -3843,7 +4272,7 @@ for line in sys.stdin:
     while (jobSnapshot("auto-e")?.running && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(jobSnapshot("auto-e")?.running, false);
     assert.equal(jobSnapshot("auto-e")?.error, undefined);
-    assert.deepEqual(calls, ["hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "ocr-translate"]);
+    assert.deepEqual(calls, ["hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "hayai", "paddle", "hayai", "paddle", "ocr-translate", "ocr-translate"]);
     const commands = (await readFile(workerLog, "utf8")).trim().split("\n");
     assert.ok(commands.includes("detect 0.4"), "detector confidence is forwarded");
     assert.equal(commands.filter(cmd => cmd === "ocr").length, 0, "legacy Paddle recognizer is not used");
@@ -3865,7 +4294,7 @@ for line in sys.stdin:
     while (jobSnapshot("auto-e")?.running && Date.now() < translateDeadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(jobSnapshot("auto-e")?.running, false);
     assert.equal(jobSnapshot("auto-e")?.error, undefined);
-    assert.deepEqual(calls, ["hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "ocr-translate", "translate"]);
+    assert.deepEqual(calls, ["hayai", "paddle", "ocr-translate", "hayai", "paddle", "ocr-translate", "hayai", "paddle", "hayai", "paddle", "ocr-translate", "ocr-translate", "translate"]);
     const translated = await listLines("auto-e");
     assert.deepEqual(translated.map(l => l.body).sort(), ["", "EN こんにちは", "EN こんにちは"]);
     assert.ok(translated.every(l => l.status !== "approved"));
@@ -3886,7 +4315,7 @@ for line in sys.stdin:
     assert.equal(jobSnapshot("auto-e")?.error, undefined);
     const ocrAfterSkip = (await readFile(workerLog, "utf8")).trim().split("\n").filter(cmd => cmd === "ocr").length;
     assert.equal(ocrAfterSkip, 0);
-    assert.equal(hayaiCalls, 3, "chapter transcribe skips pages that already have regions");
+    assert.equal(hayaiCalls, 4, "chapter transcribe skips pages that already have regions");
 
     startAiTranslate({ series, episode: (await getEpisode("auto-e"))!, user: { id: "u", username: "test", role: "admin" },
       replace: false, lang: "japanese", imageIds: ["auto-p"] });
@@ -5635,4 +6064,24 @@ test("saving a cleaning sample writes incrementing raw and clean images", async 
   const current = getDoc("page:sample-p", {});
   putDoc("e", current.id, { prepared: rawHash, original: rawHash }, current.revision);
   await assert.rejects(() => saveCleaningSample(series as any, episode as any, image as any), /Clean the page/);
+});
+
+test("fonts download one at a time under their name, or together as a zip by category", async () => {
+  const { listFonts } = await import("../src/lib/server/typesetting");
+  const { fontFileResponse, fontsZipResponse } = await import("../src/lib/server/fontDownloads");
+  const fonts = listFonts("s");
+  const one = await fontFileResponse(ttf.font, true);
+  assert.match(one.headers.get("content-disposition")!, /attachment; filename="FreeSans\.ttf"/);
+  assert.equal((await one.arrayBuffer()).byteLength, (await readFile(fontFile)).byteLength);
+  assert.equal((await fontFileResponse(ttf.font, false)).headers.get("content-disposition"), null);
+  const zipped = await fontsZipResponse([...fonts, { ...ttf.font, id: "copy" }], null, "Série fonts");
+  assert.equal(zipped.headers.get("content-type"), "application/zip");
+  assert.match(zipped.headers.get("content-disposition")!, /filename\*=UTF-8''S%C3%A9rie%20fonts\.zip/);
+  const zip = await JSZip.loadAsync(await zipped.arrayBuffer());
+  const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
+  assert.ok(names.some((n) => /\/FreeSans\.ttf$/.test(n)));
+  assert.ok(names.some((n) => /\/FreeSans \(2\)\.ttf$/.test(n)), "a same-named file is kept, numbered");
+  const only = await JSZip.loadAsync(await (await fontsZipResponse(fonts, ttf.font.id, "x")).arrayBuffer());
+  assert.equal(Object.values(only.files).filter((f) => !f.dir).length, 1);
+  assert.equal((await fontsZipResponse(fonts, "missing", "x")).status, 404);
 });

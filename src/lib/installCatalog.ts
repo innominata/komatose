@@ -214,6 +214,16 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'transcription (Japanese)',
 	},
 	{
+		id: 'manga-ocr-nar-small',
+		group: 'ocr',
+		label: 'Manga OCR NAR Small',
+		summary: 'Fast Japanese manga text recognizer that reads a whole box in one pass. Transcription only; weights are non-commercial (CC BY-NC-SA 4.0).',
+		diskBytes: 220 * MB,
+		memoryBytes: 1 * GB,
+		requires: ['env-review'],
+		unlocks: 'transcription (Japanese)',
+	},
+	{
 		id: 'paddleocr-vl-1.6',
 		group: 'ocr',
 		label: 'PaddleOCR-VL-1.6',

@@ -11,7 +11,7 @@ import type { ImageRow } from '../types';
 export type PageUndoOp = { description?: string; undoId?: string } & (
 	| { type: 'combine'; originalId: string; removed: ImageRow; geometry: Record<string, GeometrySnapshot> }
 	| { type: 'pixels'; imageId: string; imageIds?: string[]; geometry?: Record<string, GeometrySnapshot> }
-	| { type: 'psd-import'; imageId: string; geometry: GeometrySnapshot; bodies: { id: string; body: string }[] }
+	| { type: 'psd-import'; imageId: string; geometry: GeometrySnapshot; bodies: { id: string; body: string }[]; created?: string[] }
 	| { type: 'reorder'; order: { id: string; sortOrder: number }[] }
 	| {
 			type: 'split';
@@ -84,7 +84,7 @@ export function pageUndoSummary(op: PageUndoOp | undefined, images: readonly Ima
 			ids = op.imageIds?.length ? op.imageIds : [op.imageId]; break;
 		case 'psd-import':
 			label = 'Import edits from PSD';
-			effect = 'Restore the artwork, region positions, lettering styles and English from before the import.';
+			effect = 'Restore the artwork, region positions, lettering styles and English from before the import, and remove regions it added.';
 			ids = [op.imageId]; break;
 	}
 	if (op.type !== 'pixels') label = op.description || label;

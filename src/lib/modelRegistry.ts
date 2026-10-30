@@ -331,6 +331,15 @@ export const SEED_ROWS: ModelRow[] = [
 		languages: ['japanese'],
 	}),
 	row({
+		id: 'manga-ocr-nar-small',
+		name: 'Manga OCR NAR Small',
+		slug: 'manga-ocr-nar-small',
+		access: 'local_http',
+		runtime: 'manga-ocr',
+		operations: [...CHAT_AND_CLI_OPERATIONS],
+		languages: ['japanese'],
+	}),
+	row({
 		id: 'paddleocr-vl-1.6',
 		name: 'PaddleOCR-VL-1.6',
 		slug: 'paddleocr-vl-1.6',

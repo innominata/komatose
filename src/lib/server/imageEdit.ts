@@ -3,7 +3,10 @@ import { existsSync, closeSync, mkdirSync, openSync, readFileSync, statSync } fr
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DEFAULT_IMAGE_EDIT_MODEL_ID, IMAGE_EDIT_MODELS, imageEditInstallArgs, imageEditLoraList, imageEditModelOf, imageEditWeightHost, type ImageEditModelId } from '../imageEdit';
+import { IMAGE_EDIT_MODELS, imageEditInstallArgs, imageEditLoraList, imageEditModelOf, imageEditWeightHost, type ImageEditModelId } from '../imageEdit';
+import { modelDefaultFor, noModelError } from './modelDefaultStore';
+import { listRegistryRows } from './modelRegistryStore';
+import { rowHasOperation } from '../modelRegistry';
 import {
   imageEditListenPort, imageEditLorasDir as lorasDir,
   imageEditVulkanDevice, komatoseGpuEnabled, sdServerBin, vulkanLlamaEnv,
@@ -96,7 +99,24 @@ function modelState(id: ImageEditModelId): ModelState {
 
 const root = () => process.env.SCAN_ROOT || ROOT;
 const port = (id: ImageEditModelId) => imageEditListenPort(id);
-const current = (id?: ImageEditModelId) => id ?? DEFAULT_IMAGE_EDIT_MODEL_ID;
+const isImageEditor = (id: string): id is ImageEditModelId => IMAGE_EDIT_MODELS.some((entry) => entry.id === id);
+
+/** The Cleaning default when it is an image editor, else the first editor whose Cleaning test passed. */
+export function defaultImageEditModel(): ImageEditModelId | undefined {
+  const stored = modelDefaultFor('cleaning');
+  if (stored && isImageEditor(stored)) return stored;
+  const row = listRegistryRows().find((item) => !item.disabled && isImageEditor(item.id) && rowHasOperation(item, 'cleaning'));
+  return row && isImageEditor(row.id) ? row.id : undefined;
+}
+
+/** defaultImageEditModel, or a logged error when no editor can clean. */
+export function requireImageEditModel(): ImageEditModelId {
+  const id = defaultImageEditModel();
+  if (!id) throw noModelError('cleaning');
+  return id;
+}
+
+const current = (id?: ImageEditModelId) => id ?? requireImageEditModel();
 
 /** Disk footprint a recipe will load; used for the VRAM fit checks. */
 function needMiBFor(recipe: Recipe | null, id: ImageEditModelId): number {
@@ -643,7 +663,7 @@ export async function releaseImageEditForDevice(claim: string): Promise<boolean>
 }
 
 /** One editor's service record: state, device, and what a start would displace. */
-export function imageEditStatus(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID): ImageEditStatus {
+export function imageEditStatus(id: ImageEditModelId = requireImageEditModel()): ImageEditStatus {
   const state = modelState(id);
   const models = imageEditModelStatuses();
   const recipe = installedImageEdit(id);
@@ -680,7 +700,7 @@ export function imageEditStatuses(): ImageEditStatus[] {
   return IMAGE_EDIT_MODELS.map((entry) => imageEditStatus(entry.id));
 }
 
-export async function stopImageEditServer(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID): Promise<void> {
+export async function stopImageEditServer(id: ImageEditModelId = requireImageEditModel()): Promise<void> {
   const instance = liveService(id);
   const listenPort = port(id);
   const occ = occupantOnPort(listenPort);
@@ -716,7 +736,7 @@ export async function stopAllImageEditServers(): Promise<void> {
  */
 export function operateImageEditServer(
   action: 'start' | 'stop' | 'restart',
-  id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID,
+  id: ImageEditModelId = requireImageEditModel(),
 ): ImageEditStatus {
   const state = modelState(id);
   if (action !== 'stop' && !installedImageEdit(id)) throw missingImageEditError(id);
@@ -751,7 +771,7 @@ export function operateImageEditServer(
   return imageEditStatus(id);
 }
 
-export async function waitImageEditOperation(id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID) {
+export async function waitImageEditOperation(id: ImageEditModelId = requireImageEditModel()) {
   await modelState(id).promise;
 }
 
@@ -790,7 +810,7 @@ export async function withImageEdit<T>(
  * anything; it reports what a run would do so the picker can warn about the card.
  */
 export async function probeImageEditCleaning(
-  id: ImageEditModelId = DEFAULT_IMAGE_EDIT_MODEL_ID,
+  id: ImageEditModelId = requireImageEditModel(),
 ): Promise<{ available: boolean; reason: string }> {
   const label = modelFiles(id).label;
   if (!installedImageEdit(id))

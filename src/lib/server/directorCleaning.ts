@@ -30,6 +30,7 @@ import { maskedCleaning, runWorkflowPng } from "./workflowImages";
 import { cachedMaskOperation, rejectedClean, rememberRejectedClean } from "./directorMaskCache";
 import { preferences } from "./workflowService";
 import { cleaningFallbackModel } from "./modelImageWorkflow";
+import { effectiveDefault, noModelError, requireDefault } from "./modelDefaultStore";
 import {
   cleaningResidueInspector,
   cleaningDetailCrop,
@@ -869,10 +870,10 @@ export async function cleanDirectorPage(
       const wider = await mask([line], false, GHOST_MASK_GROW, raw);
       if (maskPixels) {
         const input = await maskedCleaning(base, wider, raw);
-        emit("clean:request", { method: "lama-manga", regionIds: [line.id], scope: "touch-up", maskMode: "grown-lettering", from,
+        emit("clean:request", { method: effectiveDefault("inpaint"), regionIds: [line.id], scope: "touch-up", maskMode: "grown-lettering", from,
           reason: `Touch up ${from}: redo LaMa from the original lettering with the mask grown ${GHOST_MASK_GROW}px past its glow`, ...await cleanInputs(ctx.run.id, input, wider) });
         try {
-          const result = await operation({ cmd: "clean", path: assetPath(input), mask: assetPath(wider), method: "lama-manga" }, ctx.signal);
+          const result = await operation({ cmd: "clean", path: assetPath(input), mask: assetPath(wider), method: requireDefault("inpaint") }, ctx.signal);
           const limited = await maskedCleaning(input, wider, result.artifact);
           const review = await inspect(base, limited, "lama-wider", line);
           if (review.safe) {
@@ -898,10 +899,10 @@ export async function cleanDirectorPage(
       selected = await storeAsset(ghosts.png);
       how = `${ghosts.pixels} faint pixels left inside the original lettering`;
     }
-    emit("clean:request", { method: "lama-manga", regionIds: [line.id], scope: "touch-up", maskMode: "leftover-lettering", from, reason: `Touch up ${from}: inpaint only the ${how}`, ...await cleanInputs(ctx.run.id, candidate, selected) });
+    emit("clean:request", { method: effectiveDefault("inpaint"), regionIds: [line.id], scope: "touch-up", maskMode: "leftover-lettering", from, reason: `Touch up ${from}: inpaint only the ${how}`, ...await cleanInputs(ctx.run.id, candidate, selected) });
     try {
       const result = await operation(
-        { cmd: "clean", path: assetPath(candidate), mask: assetPath(selected), method: "lama-manga", touchUp: true },
+        { cmd: "clean", path: assetPath(candidate), mask: assetPath(selected), method: requireDefault("inpaint"), touchUp: true },
         ctx.signal,
       );
       const limited = await maskedCleaning(candidate, selected, result.artifact);
@@ -1220,15 +1221,18 @@ export async function cleanDirectorPage(
   await fillBubbles(remaining());
   // Detect once on remaining raw lettering, then try the configured LaMa/inpainter.
   const batches = new Map<string, LineRow[]>();
+  const inpaint = effectiveDefault("inpaint");
   for (const line of remaining().filter(
     (line) =>
       !regionDoc(line.id).data.locked &&
       !artworkRepairs.has(line.id) &&
       !deferred(line),
   )) {
-    const method = bubbleToolsOnly(line)
-      ? "lama-manga"
-      : policy.cleanMethod || "lama-manga";
+    const method = bubbleToolsOnly(line) ? inpaint : policy.cleanMethod || inpaint;
+    if (!method) {
+      failure("inpaint", [line], noModelError("inpaint"));
+      continue;
+    }
     batches.set(method, [...(batches.get(method) || []), line]);
   }
   for (const [method, batch] of batches) {
@@ -1302,7 +1306,9 @@ export async function cleanDirectorPage(
             "Selected cleaning editor is unavailable or has not passed its Cleaning task",
           ),
         );
-      methods.push({ id: "lama-manga", editor: false });
+      const inpaint = effectiveDefault("inpaint");
+      if (inpaint) methods.push({ id: inpaint, editor: false });
+      else failure("inpaint", [line], noModelError("inpaint"));
       let cleaned = false;
       for (const method of methods) {
         // Erasing the region erased artwork: it may be artwork boxed as text

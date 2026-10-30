@@ -20,7 +20,7 @@ export const POST: RequestHandler = async ({ locals,params,request }) => {
   const form=await request.formData();const file=form.get('file');
   if(!(file instanceof File)||!file.size)return fail(400,'No file');
   const plan=await planPsdImport(series,episode,params.imgid,Buffer.from(await file.arrayBuffer()));
-  const summary={regions:plan.regions.map(r=>({lineId:r.lineId,layer:r.layer,changes:r.describe})),artwork:!!plan.artwork,warnings:plan.warnings};
+  const summary={regions:plan.regions.map(r=>({lineId:r.lineId,layer:r.layer,changes:r.describe})),created:plan.created.map(r=>({layer:r.layer,text:r.body.slice(0,80)})),artwork:!!plan.artwork,warnings:plan.warnings,fromExport:plan.fromExport};
   if(form.get('apply')!=='1')return json(summary);
   const {failed}=await applyPsdImport(series,episode,user.id,plan);
   return json({...summary,applied:true,failed});

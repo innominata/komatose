@@ -1,3 +1,4 @@
+import { deleteRegions } from "$lib/server/regionTrash";
 import { acceptedRegionKind } from "$lib/server/workflowService";
 import { json } from "@sveltejs/kit";
 import { and, eq } from "drizzle-orm";
@@ -219,10 +220,8 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
     requireStickies(user);
     const { episode, series } = await requireEpisodeAccess(user, params.eid);
     assertEpisodeIdle(episode.id);
-    await db
-      .delete(lines)
-      .where(and(eq(lines.id, params.lid), eq(lines.episodeId, episode.id)));
-    broadcast(episode.id, { type: "line:delete", id: params.lid });
+    // Kept for undo (Ctrl+Z or the toast's Undo), with its comments and suggestions.
+    deleteRegions(episode.id, [params.lid], "Delete region");
     const entry = await logActivity({
       seriesId: series.id,
       episodeId: episode.id,

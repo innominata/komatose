@@ -3,11 +3,11 @@ import { deciderPageStamp } from '../decider';
 import type { PageData, RegionData } from '../workflow';
 import { putDoc } from './workflowStore';
 import { compareOcrReadings, ocrResolutionAccepted, failedOcrConsensus, ocrComparableKey, type OcrConsensus, type OcrReading } from '../ocrConsensus';
-import { classifyRegionLineType, sfxClassificationSource, type RegionTypeHints } from '../sfx';
+import { classifyRegionLineType, lookupStandaloneSfx, looksLikeOnomatopoeia, sfxClassificationSource, type RegionTypeHints } from '../sfx';
 import { collapseSuggestions } from '../regionAi';
 import { normalizeTranslation } from '../translationText';
 import { resolveAssistant, visionEligible } from '../modelRegistry';
-import { modelDefaultFor } from './modelDefaultStore';
+import { effectiveDefault, noModelError } from './modelDefaultStore';
 import type { LineRow, OcrLang } from '../types';
 import { sqlite } from './db';
 import { broadcast } from './realtime';
@@ -75,8 +75,8 @@ function selectableTranscriptionId(id: string, rows = listRegistryRows()) {
 
 /** Saved ids that are still enabled and allowed to read text. Disabled or deleted models are omitted. */
 export function transcriptionModelIds(value?: string[] | null): string[] {
-  // An empty series list follows the operator's Transcribe default; nothing is built in.
-  const fallback = modelDefaultFor('transcribe');
+  // An empty series list follows the Transcribe default, else the first model that passed Read Text.
+  const fallback = effectiveDefault('transcribe');
   const ids = Array.isArray(value) && value.length ? value : fallback ? [fallback] : [];
   const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
   const rows = listRegistryRows();
@@ -86,7 +86,7 @@ export function transcriptionModelIds(value?: string[] | null): string[] {
 
 export function assertOcrConsensusInstalled(modelIds?: string[]) {
   const ids = transcriptionModelIds(modelIds);
-  if (!ids.length) throw new WorkflowError('Choose at least one transcription model in AI model settings.', 400);
+  if (!ids.length) throw new WorkflowError(noModelError('transcribe').message, 503);
   const rows = listRegistryRows();
   const missing = ids.filter(id => {
     try {
@@ -108,7 +108,7 @@ function labelFor(id: string) {
 }
 
 export function ocrSuggestionReason(reading: OcrReading, translatorLabel: string) {
-  const label = labelFor(reading.model);
+  const label = `${labelFor(reading.model)}${reading.view === 'silhouette' ? ' · silhouette' : ''}`;
   if (reading.error) return `${label}: ${reading.error}`;
   if (!reading.source) return label;
   return ocrSourceAttribution(label, reading.translation ? translatorLabel : '');
@@ -144,23 +144,26 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
     = (source, signal, lang) => translateOcrSource(source, signal, { lang }),
   lang?: OcrLang,
   modelIds?: string[],
-  hooks?: { onTranslate?: () => void; onDecide?: (modelId: string) => void; decider?: DeciderOptions }): Promise<OcrConsensus> {
+  hooks?: { onTranslate?: () => void; onDecide?: (modelId: string) => void; decider?: DeciderOptions;
+    /** Lettering-mask silhouette, read as a second opinion for sound effects and disagreements. */
+    silhouette?: () => Promise<Buffer | undefined>; sfx?: boolean }): Promise<OcrConsensus> {
   const ids = transcriptionModelIds(modelIds);
+  if (!ids.length) throw new WorkflowError(noModelError('transcribe').message, 503);
   const run = async (signal: AbortSignal) => {
     const director=directorContext();
     const cropHash=director ? await storeAsset(crop) : '';
     if (director) directorAsset(director.runId,cropHash);
-    const readings: OcrReading[] = await mapPool(ids, OCR_CONCURRENCY, async (id) => {
+    const readAll = (image: Buffer, view?: OcrReading['view']) => mapPool(ids, OCR_CONCURRENCY, async (id): Promise<OcrReading> => {
       signal.throwIfAborted();
       const timeout = AbortSignal.timeout(TRANSCRIPTION_READ_MS);
       const readSignal = AbortSignal.any([signal, timeout]);
       if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:request',
         {model:id,lang,crop:cropHash});
       try {
-        const source=(await read(id, crop, readSignal, lang)).trim();
+        const source=(await read(id, image, readSignal, lang)).trim();
         if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:response',
-          {model:id,source});
-        return {model:id,source};
+          {model:id,source,...(view ? {view} : {})});
+        return {model:id,source,...(view ? {view} : {})};
       }
       catch (error) {
         signal.throwIfAborted();
@@ -169,10 +172,18 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
           : (error instanceof Error ? error.message : String(error));
         if (director) directorEvent(director.runId,director.episodeId,director.imageId||null,'ocr:error',
           {model:id,error:message});
-        return { model: id, source: '', error: message };
+        return { model: id, source: '', error: message, ...(view ? { view } : {}) };
       }
     });
-    const result = compareOcrReadings(readings);
+    const readings = await readAll(crop);
+    if (hooks?.silhouette && (hooks.sfx || readsAsSfx(readings) || !compareOcrReadings(readings).agreed)) {
+      // Screentone-filled or outlined SFX often read only from their plain shape.
+      const silhouette = await hooks.silhouette().catch(() => undefined);
+      signal.throwIfAborted();
+      if (silhouette) readings.push(...(await readAll(silhouette, 'silhouette')).filter((reading) => reading.source && !reading.error));
+    }
+    // Agreeing readers differ only in spacing or punctuation; the Transcribe default's spelling wins.
+    const result = compareOcrReadings(readings, [effectiveDefault('transcribe')]);
     result.decision = await decideTranscription(crop, readings, signal, lang, hooks?.decider, hooks?.onDecide);
     if (result.decision) result.source = acceptedDecisionSource(result.decision);
     const translations = new Map<string, string>();
@@ -196,6 +207,12 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
     return result;
   };
   return run(abort);
+}
+
+/** Any reader saw a sound effect (ゴォーン, ドン…), even if the others did not. */
+function readsAsSfx(readings: OcrReading[]) {
+  return readings.some((reading) => !reading.error && reading.source.trim() &&
+    (lookupStandaloneSfx(reading.source) || looksLikeOnomatopoeia(reading.source)));
 }
 
 function lettered(source: string) {

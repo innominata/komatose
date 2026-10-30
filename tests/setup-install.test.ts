@@ -384,10 +384,31 @@ test('saved defaults for removed cleaners fall back without deleting downloaded 
   const defaults = await import('../src/lib/server/modelDefaultStore');
   const file = join(root, 'data', 'model-defaults.json');
   await writeFile(file, JSON.stringify({ version: 1, defaults: { inpaint: 'migan', cleaning: 'manga-inpainting', detect: 'ctd' } }));
-  assert.equal(defaults.effectiveDefault('inpaint', 'lama-manga'), 'lama-manga');
-  assert.equal(defaults.effectiveDefault('cleaning', 'aot'), 'aot');
-  assert.equal(defaults.effectiveDefault('detect', 'rtdetr'), 'ctd');
+  assert.equal(defaults.effectiveDefault('inpaint'), '', 'a removed default is ignored, and nothing here has passed Inpaint');
+  assert.equal(defaults.effectiveDefault('cleaning'), '');
+  assert.equal(defaults.effectiveDefault('detect'), 'ctd');
   assert.equal(JSON.parse(await readFile(file, 'utf8')).defaults.inpaint, 'migan', 'reading settings does not mutate local files');
+});
+
+test('an unset default follows the first model whose test passed, and none is a logged error', async () => {
+  const defaults = await import('../src/lib/server/modelDefaultStore');
+  const store = await import('../src/lib/server/modelRegistryStore');
+  await writeFile(join(root, 'data', 'model-defaults.json'), JSON.stringify({ version: 1, defaults: {} }));
+  const logged: string[] = [];
+  const error = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.join(' ')); };
+  try {
+    assert.throws(() => defaults.requireDefault('inpaint'), (e: Error & { status?: number }) => /No model can run Inpaint/.test(e.message) && e.status === 503);
+    assert.ok(logged.some((line) => line.startsWith('[models] No model can run Inpaint')), 'the missing model is logged');
+  } finally { console.error = error; }
+  const passed = store.listRegistryRows().filter((row) => row.id === 'aot' || row.id === 'lama-manga');
+  assert.equal(passed.length, 2, 'the bundled inpainters are listed');
+  for (const row of passed) store.saveProbeResult(row.id, { operation: 'inpaint', ok: true, outcome: 'passed', at: Date.now() });
+  const first = store.listRegistryRows().find((row) => row.id === 'aot' || row.id === 'lama-manga')!.id;
+  assert.equal(defaults.requireDefault('inpaint'), first, 'registry order picks among passing models');
+  defaults.setModelDefault('inpaint', first === 'aot' ? 'lama-manga' : 'aot');
+  assert.equal(defaults.requireDefault('inpaint'), first === 'aot' ? 'lama-manga' : 'aot', 'a chosen default wins');
+  defaults.setModelDefault('inpaint', undefined);
 });
 
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { lookupStandaloneSfx } from "$lib/sfx";
+  import { lookupStandaloneSfx, sfxAlternatives } from "$lib/sfx";
 
   let {
     source = "",
@@ -14,6 +14,8 @@
   } = $props();
 
   const match = $derived(lookupStandaloneSfx(source));
+  // "soft/float" offers soft and float as separate choices.
+  const meanings = $derived([...new Set((match?.meanings ?? []).flatMap(sfxAlternatives))]);
   const selected = $derived(current.trim().toLowerCase());
 </script>
 
@@ -21,7 +23,7 @@
   <div class="sfx-hints">
     <small>SFX · {match.source}</small>
     <div class="sfx-meanings">
-      {#each match.meanings as meaning}
+      {#each meanings as meaning (meaning)}
         <button
           type="button"
           class:active={selected === meaning.toLowerCase()}

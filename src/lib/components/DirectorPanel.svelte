@@ -137,6 +137,7 @@
     if(event.kind==='transcription:fallback') return `Transcription of ${region(detail.lineId)} failed, so the saved proofreader text was used`;
     if(event.kind==='text:correlate') return `Matching ${detail.lineIds?.length??0} unread regions against the page transcript`;
     if(event.kind==='translation:review') return `Translation concern sent to proofreading: ${tidy(detail.reason)}`;
+    if(event.kind==='change') { const ids=changedRegionIds(detail); return `${detail.label||'Changed the page'}${ids.length?`: ${regions(ids)}`:''}`; }
     if(event.kind==='stage') return `${stageName(detail.stage)} started${detail.attempt>1?` (attempt ${detail.attempt})`:''}`;
     if(event.kind==='stage:reused') return `${stageName(detail.stage)} already verified, reused`;
     if(event.kind==='stage:error') return `${stageName(detail.stage)} failed: ${tidy(detail.error)}`;
@@ -259,7 +260,31 @@
   const HIDDEN_FIELDS=new Set(['fingerprint']);
   // Shown as pictures above the fields instead of as asset hashes.
   const CLEAN_IMAGE_FIELDS=new Set(['image','mask','maskOverlay']);
+  // A change records the whole page before and after; show only what differs, so
+  // regions the change left alone (ignored ones included) do not look edited.
+  function changedParts(detail:any) {
+    const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+    const pick=(key:'lines'|'docs')=>{
+      const before:any[]=detail?.before?.[key]??[], after:any[]=detail?.after?.[key]??[];
+      const ids=[...new Set([...before,...after].map(item=>item.id))];
+      const find=(list:any[],id:string)=>list.find(item=>item.id===id);
+      return ids.filter(id=>!same(find(before,id),find(after,id))).map(id=>({id,before:find(before,id),after:find(after,id)}));
+    };
+    return {lines:pick('lines'),docs:pick('docs')};
+  }
+  function changedRegionIds(detail:any):string[] {
+    const {lines,docs}=changedParts(detail);
+    return [...new Set([...lines.map(l=>l.id),...docs.filter(d=>String(d.id).startsWith('region:')).map(d=>String(d.id).slice(7))])];
+  }
   function logFields(detail:unknown,kind=''):{label:string;value:unknown}[] {
+    if (kind==='change' && detail && typeof detail==='object') {
+      const {lines,docs}=changedParts(detail);
+      return [
+        {label:'Label',value:(detail as any).label},
+        ...lines.map(l=>({label:`Changed ${region(l.id)}`,value:{before:l.before??null,after:l.after??null}})),
+        ...docs.map(d=>({label:`Changed ${String(d.id).startsWith('region:')?region(String(d.id).slice(7)):d.id}`,value:{before:d.before?.data??null,after:d.after?.data??null}})),
+      ];
+    }
     if (detail && typeof detail==='object' && !Array.isArray(detail))
       return Object.entries(detail).filter(([label])=>!HIDDEN_FIELDS.has(label) && !(kind==='clean:request' && CLEAN_IMAGE_FIELDS.has(label)))
         .map(([label,value])=>({label:label.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/^./,c=>c.toUpperCase()),value}));

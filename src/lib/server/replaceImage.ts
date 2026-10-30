@@ -113,6 +113,13 @@ async function decodePsd(bytes: Buffer): Promise<Sharp> {
 	return flattenLayers(full);
 }
 
+/** A PSD's visible image as a PNG on white, for uploading it as a page. */
+export async function psdToPng(bytes: Buffer): Promise<Buffer> {
+	return (await decodePsd(bytes)).flatten({ background: { r: 255, g: 255, b: 255 } }).png().toBuffer();
+}
+
+export { isPsd };
+
 export async function replaceImage(opts: {
 	series: Series;
 	episode: Episode;

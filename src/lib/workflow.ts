@@ -59,8 +59,65 @@ export type TextStyle = {
   warpStyle: TextWarpStyle;
   /** Photoshop Warp Text Bend, −100 to 100. */
   warpBend: number;
+  /** Warp Text Horizontal Distortion, −100 to 100. */
+  warpHorizontal?: number;
+  /** Warp Text Vertical Distortion, −100 to 100. */
+  warpVertical?: number;
+  /** Warp Text orientation: the bend runs across (horizontal) or down (vertical) the text. */
+  warpOrientation?: "horizontal" | "vertical";
+  /** Letter spacing in thousandths of an em, like Photoshop's tracking. */
+  tracking?: number;
   emphasis: "normal" | "bold" | "italic";
+  /** Photoshop layer styles on the whole region (the outline is its Stroke). */
+  effects?: import("./textEffects").TextEffects;
 };
+/**
+ * Character overrides on part of a region's text, like Photoshop's Character panel. Unset
+ * fields follow the region's style. `size` is a percentage of the fitted size, so autofit
+ * still shrinks the whole region together.
+ */
+export type CharStyle = {
+  fontId?: string;
+  size?: number;
+  fill?: string;
+  fillOpacity?: number;
+  outline?: string;
+  outlineOpacity?: number;
+  outlineWidth?: number;
+  emphasis?: "normal" | "bold" | "italic";
+  /** Thousandths of an em, added to the region's tracking. */
+  tracking?: number;
+  /** Points; positive raises the characters. */
+  baselineShift?: number;
+  /** Percent. */
+  horizontalScale?: number;
+  /** Percent. */
+  verticalScale?: number;
+};
+export const CHAR_STYLE_KEYS = [
+  "fontId",
+  "size",
+  "fill",
+  "fillOpacity",
+  "outline",
+  "outlineOpacity",
+  "outlineWidth",
+  "emphasis",
+  "tracking",
+  "baselineShift",
+  "horizontalScale",
+  "verticalScale",
+] as const satisfies readonly (keyof CharStyle)[];
+/** Character style over the half-open range [start, end) of the region body. */
+export type CharRun = { start: number; end: number; style: CharStyle };
+/**
+ * Type on a path: the text runs along a smooth curve through `points` (page fractions)
+ * instead of filling the region polygon. `offset` is where the text starts along the path,
+ * as a fraction of its length, before alignment; `flip` runs it from the last point,
+ * upside down on the other side of the curve.
+ */
+export type TextPath = { points: Point[]; offset?: number; flip?: boolean };
+/** Photoshop's Warp Text styles in its menu order. */
 export const TEXT_WARP_STYLES = [
   "none",
   "arc",
@@ -68,6 +125,16 @@ export const TEXT_WARP_STYLES = [
   "arcUpper",
   "arch",
   "bulge",
+  "shellLower",
+  "shellUpper",
+  "flag",
+  "wave",
+  "fish",
+  "rise",
+  "fisheye",
+  "inflate",
+  "squeeze",
+  "twist",
 ] as const;
 export type TextWarpStyle = (typeof TEXT_WARP_STYLES)[number];
 export const TEXT_WARP_STYLE_LABELS: Record<TextWarpStyle, string> = {
@@ -77,6 +144,16 @@ export const TEXT_WARP_STYLE_LABELS: Record<TextWarpStyle, string> = {
   arcUpper: "Arc Upper",
   arch: "Arch",
   bulge: "Bulge",
+  shellLower: "Shell Lower",
+  shellUpper: "Shell Upper",
+  flag: "Flag",
+  wave: "Wave",
+  fish: "Fish",
+  rise: "Rise",
+  fisheye: "Fisheye",
+  inflate: "Inflate",
+  squeeze: "Squeeze",
+  twist: "Twist",
 };
 export const MIN_STYLE_SIZE = 1;
 export const DEFAULT_STYLE: TextStyle = {
@@ -97,6 +174,10 @@ export const DEFAULT_STYLE: TextStyle = {
   skewY: 0,
   warpStyle: "none",
   warpBend: 0,
+  warpHorizontal: 0,
+  warpVertical: 0,
+  warpOrientation: "horizontal",
+  tracking: 0,
   emphasis: "normal",
 };
 export type Preferences = {
@@ -167,7 +248,12 @@ export const STYLE_KEYS = [
   "skewY",
   "warpStyle",
   "warpBend",
+  "warpHorizontal",
+  "warpVertical",
+  "warpOrientation",
+  "tracking",
   "emphasis",
+  "effects",
 ] as const satisfies readonly (keyof TextStyle)[];
 
 export function pickStyle(input: unknown): Partial<TextStyle> {
@@ -225,7 +311,8 @@ export function styleDiff(
 
 /** A region owns its style once every field is stored on it, not filled in from the series default. */
 export function styleIsOwned(style: Partial<TextStyle> | undefined): boolean {
-  return !!style && STYLE_KEYS.every((key) => style[key] !== undefined);
+  // A layer style is optional: absent means none.
+  return !!style && STYLE_KEYS.every((key) => key === "effects" || style[key] !== undefined);
 }
 
 /**
@@ -247,6 +334,13 @@ export type FittedRow = {
   x: number;
   baseline: number;
   width: number;
+  /**
+   * The row cut where its character style changes: `text` of each piece, and the index of
+   * its style in `FittedLayout.charStyles`. Absent when the whole layout has one style.
+   */
+  pieces?: { text: string; style: number }[];
+  /** Path text: the index in `RegionData.textPaths` this row runs along; `x` is its start along it. */
+  path?: number;
 };
 export type FittedLayout = {
   key: string;
@@ -261,6 +355,10 @@ export type FittedLayout = {
   hyphenated: boolean;
   style: TextStyle;
   font: { id: string; hash: string; postscriptName: string };
+  /** Resolved character styles used by `rows[].pieces`, with each one's font. */
+  charStyles?: (CharStyle & { postscriptName: string })[];
+  /** Laid out along `RegionData.textPaths`, one row per path, which PSD Warp Text cannot represent. */
+  onPath?: boolean;
 };
 export type RegionData = {
   /** Retain the region and its text while suppressing its English lettering. */
@@ -299,6 +397,13 @@ export type RegionData = {
   geometryApproved?: boolean;
   geometryConfidence?: number;
   style?: Partial<TextStyle>;
+  /** Character overrides, valid for the body `charRunsBody`; see `remapCharRuns`. */
+  charRuns?: CharRun[];
+  charRunsBody?: string;
+  /** Type on a path: the text flows along these paths in order, one line each. */
+  textPaths?: TextPath[];
+  /** A single path saved before regions held several; read through `regionTextPaths`. */
+  textPath?: TextPath;
   /** A category refit keeps only placement overrides; avoid copying the resolved default on chapter load. */
   styleFromSeries?: boolean;
   layout?: FittedLayout;

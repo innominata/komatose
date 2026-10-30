@@ -32,7 +32,7 @@ import {
   readAsset,
   WorkflowError,
 } from "./workflowStore";
-import { pageFingerprint, auditedDirectorOperation } from "./directorState";
+import { cleanComplete, pageFingerprint, auditedDirectorOperation } from "./directorState";
 import {
   preferences,
   preparePage,
@@ -1810,6 +1810,11 @@ async function clean(
   findings?: unknown,
   scope?: CleanScope,
 ) {
+  // A page the user marked cleaning done keeps its artwork: no stage or repair repaints it.
+  if (cleanComplete(ctx.episode.id, imageId)) {
+    emit(ctx, imageId, "stage:reused", { stage: "clean", reason: "Cleaning is marked done" });
+    return undefined;
+  }
   // A cached read stage skips the region fit, and a mask never reaches past its
   // region. Grow any box that cuts its lettering before cleaning inside it.
   if (process.env.SCAN_DIRECTOR_REGION_EXTENT !== "0")

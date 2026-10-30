@@ -395,24 +395,16 @@ export async function rawLocalOperation(
 
 /** Model-backed operations are gated and dispatched just like language tasks. */
 export async function localOperation(payload: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, any>> {
- const { listRegistryRows } = await import('./modelRegistryStore');
- const { rowHasOperation } = await import('../modelRegistry');
  const { imageWorkflowModel } = await import('./modelImageWorkflow');
  const { executeModelTask } = await import('./modelTaskRunner');
  const { readFile, writeFile } = await import('node:fs/promises');
- const { effectiveDefault } = await import('./modelDefaultStore');
- // Koharu reads whole glyphs where CTD often keeps only fragments, so it leads when installed.
- const preferred: Record<string, string> = { textMask: 'koharu' };
- const defaultModel = (task: 'textMask' | 'inpaint') => {
-  const rows = listRegistryRows().filter(row => !row.disabled && rowHasOperation(row, task));
-  return effectiveDefault(task, (rows.find(row => row.id === preferred[task]) ?? rows[0])?.id || '');
- };
+ const { requireDefault } = await import('./modelDefaultStore');
  let task: import('../modelTasks').ModelTaskId | undefined;
  let id = String(payload.method || '');
  if (payload.cmd === 'detect-sfx') { task = 'detect'; id = 'coo'; }
  if (payload.cmd === 'detect-text') { task = 'detect'; id = 'koharu'; }
  if (payload.cmd === 'mask' && payload.detect) {
-  task = 'textMask'; id = payload.maskEngine && payload.maskEngine !== 'auto' ? String(payload.maskEngine) : defaultModel('textMask');
+  task = 'textMask'; id = payload.maskEngine && payload.maskEngine !== 'auto' ? String(payload.maskEngine) : requireDefault('textMask');
  }
  if (payload.cmd === 'geometry-batch' && id !== 'opencv' && id !== 'split') {
   const regions = Array.isArray(payload.regions) ? payload.regions : [];
@@ -431,9 +423,7 @@ export async function localOperation(payload: Record<string, unknown>, signal?: 
         await writeFile(String(payload.out), await readFile(prepared));
         return filled;
       }
-      const selected = defaultModel('inpaint');
-      if (!selected) throw new Error('Choose a model with a current passing Inpaint test for the remaining mask.');
-      return await localOperation({ ...payload, path: prepared, mask: remainingMask, strokes: [], method: selected }, signal);
+      return await localOperation({ ...payload, path: prepared, mask: remainingMask, strokes: [], method: requireDefault('inpaint') }, signal);
     } finally { await rm(dir, { recursive: true, force: true }); }
   }
   if (id === 'lama') id = 'lama-manga';

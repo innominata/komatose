@@ -406,6 +406,42 @@
                 oninput={(e) => edit("warpBend", Number(e.currentTarget.value))}
               /></label
             >
+            {#each [["warpHorizontal", "Horizontal distortion (%)"], ["warpVertical", "Vertical distortion (%)"]] as [key, label]}
+              <label class="hud-task-field"
+                >{label}
+                <input
+                  class="form-control form-control-sm"
+                  type="number"
+                  min="-100"
+                  max="100"
+                  step="1"
+                  disabled={current.warpStyle === "none"}
+                  value={current[key as "warpHorizontal"] ?? 0}
+                  oninput={(e) => edit(key as "warpHorizontal", Number(e.currentTarget.value))}
+                /></label
+              >
+            {/each}
+            <label class="hud-task-field"
+              >Warp orientation
+              <select
+                class="form-select form-select-sm"
+                disabled={current.warpStyle === "none"}
+                value={current.warpOrientation ?? "horizontal"}
+                onchange={(e) => edit("warpOrientation", e.currentTarget.value as "horizontal" | "vertical")}
+              ><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select></label
+            >
+            <label class="hud-task-field"
+              >Tracking (‰ em)
+              <input
+                class="form-control form-control-sm"
+                type="number"
+                min="-500"
+                max="2000"
+                step="10"
+                value={current.tracking ?? 0}
+                oninput={(e) => edit("tracking", Number(e.currentTarget.value))}
+              /></label
+            >
             <label class="hud-task-field"
               >Alignment
               <select

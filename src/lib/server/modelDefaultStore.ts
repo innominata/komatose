@@ -1,10 +1,10 @@
-import { RETIRED_INPAINT_MODEL_IDS } from '../modelRegistry';
-import type { ModelTaskId } from '../modelTasks';
+import { RETIRED_INPAINT_MODEL_IDS, rowHasOperation } from '../modelRegistry';
+import { taskLabel, type ModelTaskId } from '../modelTasks';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './modelPackJournal';
 import { DATA_DIR } from './paths';
-import { findRegistryRow } from './modelRegistryStore';
+import { findRegistryRow, listRegistryRows } from './modelRegistryStore';
 import type { ProviderOperation } from '../providerCatalog';
 
 /**
@@ -57,15 +57,34 @@ export function isDefaultModelForTask(row: { id: string }, task: ModelTaskId): b
 	return modelDefaultFor(task) === row.id;
 }
 
+/** Transcribe defaults are proven by the Read Text test. */
+const testFor = (job: DefaultJob): ModelTaskId => job === 'transcribe' ? 'vision' : job;
+
 /**
- * The stored default for a job when that row can still run it, else the caller's
- * fallback. Disabled or capability-stripped rows never win silently.
+ * The stored default for a job, else the first enabled model whose test for
+ * that job passed, else ''. Nothing is built in.
  */
-export function effectiveDefault(job: DefaultJob, fallback: string): string {
-	const stored = modelDefaultFor(job);
-	if (!stored) return fallback;
-  // Preserve an explicit choice. Execution explains stale evidence or unavailable service.
-  return stored;
+export function effectiveDefault(job: DefaultJob): string {
+	// The admin page sets Transcribe through its Read Text column.
+	const stored = modelDefaultFor(job) || (job === 'transcribe' ? modelDefaultFor('vision') : undefined);
+	// Preserve an explicit choice. Execution explains stale evidence or unavailable service.
+	if (stored) return stored;
+	return listRegistryRows().find(row => !row.disabled && rowHasOperation(row, testFor(job)))?.id ?? '';
+}
+
+/** Why a job has no model, logged so the operator sees it beside the failed run. */
+export function noModelError(job: DefaultJob): Error & { status: number } {
+	const label = taskLabel(testFor(job));
+	const message = `No model can run ${label}: none is set as its default and no enabled model has passed the ${label} test. Install one or run its test under Admin → Models.`;
+	console.error(`[models] ${message}`);
+	return Object.assign(new Error(message), { status: 503 });
+}
+
+/** effectiveDefault, or a logged error when no model can run the job. */
+export function requireDefault(job: DefaultJob): string {
+	const id = effectiveDefault(job);
+	if (!id) throw noModelError(job);
+	return id;
 }
 
 export function defaultsFileExists(): boolean {

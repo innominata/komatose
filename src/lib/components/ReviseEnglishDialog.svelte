@@ -35,6 +35,7 @@
       id: string,
       decision: "accept" | "reject",
       force?: boolean,
+      english?: string,
     ) => Promise<void>;
     suggestions: { id: string; state: string; base_revision?: number }[];
     onopensettings?: () => void;

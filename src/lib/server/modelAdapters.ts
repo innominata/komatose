@@ -2,7 +2,7 @@
 import type { ModelRow } from '../modelRegistry';
 import { ModelTaskError, type ModelTaskId } from '../modelTasks';
 import type { DiscoveredPackage } from './modelPackages';
-import { withAssistantHttp } from './openaiHttp';
+import { currentAssistantHttp, withAssistantHttp } from './openaiHttp';
 import { modelHttpConfig } from './modelConnection';
 
 export type TaskInput = Record<string, any>;
@@ -99,6 +99,11 @@ export async function invokeBuiltinAdapter(pkg: DiscoveredPackage, row: ModelRow
           looseSchema: input.looseSchema === true,
           schema: input.schema ? { type: 'json_schema', json_schema: { name: task, strict: true, schema: input.schema } } : undefined });
         return llm.extractJsonObject(output);
+      }
+      case 'sourceDecide': {
+        const config = currentAssistantHttp();
+        if (!config) throw new ModelTaskError('error', 'Decider endpoint is not configured');
+        return (await import('./transcriptionDecider')).invokeChatDecider({ ...config, model: opts.model || config.model }, input, abort);
       }
       default: return unsupported(task);
     }

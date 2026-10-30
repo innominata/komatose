@@ -1,7 +1,14 @@
 import type { Layer, Psd } from "ag-psd";
 import sharp, { type OverlayOptions } from "sharp";
 import type { Episode, ImageRow, LineRow, Series } from "../types";
-import { pageArtwork, type PageData, type RegionData, type TextStyle } from "../workflow";
+import { pageArtwork, type PageData, type Point, type RegionData, type TextPath, type TextStyle } from "../workflow";
+import type { EValue } from "./engineData";
+import { createImportedRegions, deleteImportedRegions, layerPath, layerToRegion, psdTxt2, type NewRegion } from "./psdRegions";
+import { effectiveDpi, preferences } from "./workflowService";
+import { isMetaLayer, pixelHash, readMeta, snapshotAsRegion } from "./psdMeta";
+import { EFFECT_LABELS, EFFECT_ORDER, effectsFromPsd, normalizeEffects, psdEffects } from "../textEffects";
+import { psdTextPath } from "./finishedExport";
+import { regionTextPaths } from "../textPath";
 import { effectiveTextRotation } from "../textRotation";
 import { MAX_SKEW } from "../textTransform";
 import { sqlite } from "./db";
@@ -42,13 +49,19 @@ export type PsdRegionChange = {
   skewX?: number;
   skewY?: number;
   renderEnabled?: boolean;
+  /** Path text: the region's paths, when a line's path was reshaped in Photoshop. */
+  textPaths?: TextPath[];
   describe: string[];
 };
 export type PsdImportPlan = {
   imageId: string;
   regions: PsdRegionChange[];
+  /** Text layers that match no region on the page, added as "Imported" regions. */
+  created: NewRegion[];
   artwork?: Buffer;
   warnings: string[];
+  /** The file looks like a PSD this page exported: it has the artwork layer or a region's text layer. */
+  fromExport: boolean;
 };
 
 /**
@@ -92,6 +105,13 @@ export function importedBody(psdText: string, body: string, rows: string[]) {
   const groups: number[] = [];
   let row = 0;
   for (const paragraph of paragraphs) {
+    // An empty paragraph has a row of its own in box text but none on paths (it skips a path).
+    if (!paragraph.trim()) {
+      const own = rows[row] !== undefined && !rows[row].trim() ? 1 : 0;
+      groups.push(own);
+      row += own;
+      continue;
+    }
     let count = 0, joined = "";
     while (row + count < rows.length && words(joined) !== words(paragraph))
       joined += `${count++ ? " " : ""}${rows[row + count - 1]}`;
@@ -170,6 +190,8 @@ function regionChange(
   current: TextStyle,
   fonts: { id: string; postscriptName?: string }[],
   warnings: string[],
+  /** Path text: the body comes from all of the region's line layers, and placement from their paths. */
+  path?: { text: string },
 ): PsdRegionChange | null {
   const layout = region.layout!;
   const text = layer.text!;
@@ -178,7 +200,7 @@ function regionChange(
   const change: PsdRegionChange = { lineId, layer: layer.name ?? lineId, style: {}, describe };
   const was = layout.style;
 
-  const body = importedBody(text.text ?? "", line.body ?? "", layout.rows.map((row) => row.text));
+  const body = importedBody(path ? path.text : (text.text ?? ""), line.body ?? "", layout.rows.map((row) => row.text));
   if (body !== undefined) {
     change.body = body;
     describe.push("English text");
@@ -186,7 +208,7 @@ function regionChange(
 
   // Position, rotation and skew come back from the layer matrix (see finishedPsd).
   let scale = 1;
-  if (text.transform?.length === 6) {
+  if (!path && text.transform?.length === 6) {
     const [xx, xy, yx, yy, tx, ty] = text.transform;
     const m = [xx * units, xy * units, yx * units, yy * units] as const;
     const parts = decomposeTextMatrix(m, { rotation: was.rotation, skewX: was.skewX ?? 0, skewY: was.skewY ?? 0 });
@@ -241,12 +263,13 @@ function regionChange(
   }
   const rows = layout.rows;
   const exportedLeading = rows.length > 1 ? (rows[1].baseline - rows[0].baseline) * units : layout.size * was.leading;
-  if (style.leading && !style.autoLeading && Math.abs(style.leading * scale - exportedLeading) > 0.05) {
+  if (!path && style.leading && !style.autoLeading && Math.abs(style.leading * scale - exportedLeading) > 0.05) {
     change.style.leading = Math.round(((style.leading * scale) / size) * 100) / 100;
     describe.push(`leading ${change.style.leading}`);
   }
   const align = text.paragraphStyle?.justification;
-  if ((align === "left" || align === "center" || align === "right") && align !== was.align) {
+  // Path layers are written left-aligned from where the text starts; alignment stays the region's.
+  if (!path && (align === "left" || align === "center" || align === "right") && align !== was.align) {
     change.style.align = align;
     describe.push(`${align} aligned`);
   }
@@ -273,6 +296,13 @@ function regionChange(
       describe.push(`outline opacity ${outlineOpacity}%`);
     }
   }
+  const fx = effectsFromPsd(layer.effects as Record<string, unknown> | undefined, layout.dpi);
+  // Compared as the export writes it, so unit rounding alone reads as no change.
+  const wasFx = effectsFromPsd(psdEffects(normalizeEffects(was.effects), layout.dpi) as Record<string, unknown>, layout.dpi);
+  if (JSON.stringify(fx ?? null) !== JSON.stringify(wasFx ?? null)) {
+    change.style.effects = fx;
+    describe.push(fx ? `layer style (${EFFECT_ORDER.filter((k) => fx[k]).map((k) => EFFECT_LABELS[k]).join(", ")})` : "no layer style");
+  }
   const visible = !layer.hidden;
   if (visible !== (region.renderEnabled !== false)) {
     change.renderEnabled = visible;
@@ -295,26 +325,79 @@ export async function planPsdImport(series: Series, episode: Episode, imageId: s
   const textLayers = (psd.children ?? []).flatMap(function flat(layer: Layer): Layer[] {
     return layer.children ? layer.children.flatMap(flat) : layer.text ? [layer] : [];
   });
+  // The region id is one of the name's "·"-separated parts ("Bubble 5 · line 2 · <id> · …").
+  // Komatose's export record (see psdMeta): layers by Photoshop layer id, which survives the
+  // rename Photoshop makes when a type layer's text is edited, and each region as exported.
+  const meta = readMeta(psd);
+  const ownExport = meta?.page === imageId ? meta : undefined;
+  if (meta && !ownExport) warnings.push("This PSD was exported from another page, so its text layers are matched by name only.");
+  const groups = new Map<string, Layer[]>();
+  const unmatched: Layer[] = [];
+  /** Layers of regions deleted since the export, by region id. */
+  const deleted = new Map<string, Layer[]>();
   for (const layer of textLayers) {
-    const id = layer.name?.match(/·\s*(\S+)\s*$/)?.[1];
+    if (isMetaLayer(layer)) continue;
+    const byId = ownExport && layer.id !== undefined ? ownExport.layers[String(layer.id)] : undefined;
+    const id = byId ?? (layer.name ?? "").split("·").map((part) => part.trim()).reverse().find((part) => lines.has(part));
     const line = id ? lines.get(id) : undefined;
-    if (!id || !line || line.imageId !== imageId) {
-      warnings.push(`Text layer “${layer.name}” does not match a region on this page, so it was skipped.`);
+    if (byId && !line && ownExport?.regions[byId]) deleted.set(byId, [...(deleted.get(byId) ?? []), layer]);
+    else if (!id || !line || line.imageId !== imageId) unmatched.push(layer);
+    else groups.set(id, [...(groups.get(id) ?? []), layer]);
+  }
+  const txt2 = psdTxt2(psd);
+  if (psd.engineData && !txt2) warnings.push("The PSD's text-engine data could not be read, so text paths are unchanged.");
+  const dpi = effectiveDpi(getDoc<PageData>(`page:${imageId}`, {}).data, page, preferences(episode.id, series.id));
+  const created = unmatched
+    .map((layer) => layerToRegion(layer, page, dpi, fonts, txt2, warnings))
+    .filter((r): r is NewRegion => !!r);
+  // A region deleted in Komatose after the export comes back only if Photoshop changed it.
+  for (const [id, layers] of deleted) {
+    const snap = snapshotAsRegion(ownExport!.regions[id], { id, imageId, body: "" } as LineRow);
+    const style = validateStyle(snap.region.layout!.style);
+    const edited = regionChange(layers[0], id, snap.line, snap.region, page, style, fonts, [],
+      snap.region.layout!.onPath ? { text: layers.map((l) => l.text?.text ?? "").join("\r") } : undefined);
+    if (!edited) {
+      warnings.push(`${layers[0].name}: its region was deleted after the export and the layer is unchanged, so it was skipped.`);
       continue;
     }
-    if (seen.has(id)) {
-      warnings.push(`Text layer “${layer.name}” repeats a region already imported, so it was skipped.`);
-      continue;
+    for (const layer of layers) {
+      const r = layerToRegion(layer, page, dpi, fonts, txt2, warnings);
+      if (r) created.push(r);
     }
-    seen.add(id);
-    const region = getDoc<RegionData>(`region:${id}`, {}).data;
+  }
+  for (const [id, layers] of groups) {
+    const currentLine = lines.get(id)!;
+    const currentRegion = getDoc<RegionData>(`region:${id}`, {}).data;
+    // Compare with the region as exported when the PSD says how that was, so only what was
+    // changed in Photoshop is applied; otherwise with the region as it is now.
+    const snap = ownExport?.regions[id] ? snapshotAsRegion(ownExport.regions[id], currentLine) : undefined;
+    const line = snap?.line ?? currentLine;
+    const region = snap ? { ...currentRegion, ...snap.region } : currentRegion;
+    const layer = layers[0];
     if (!region.layout) {
       warnings.push(`${layer.name}: the region has no fitted text to compare, so it was skipped.`);
       continue;
     }
-    const change = regionChange(layer, id, line, region, page, resolveStyle(line, region, episode.id, series.id), fonts, warnings);
+    const onPath = !!region.layout.onPath;
+    // A second box layer for one region is new text, not an edit of it.
+    if (!onPath && layers.length > 1)
+      for (const extra of layers.slice(1)) {
+        const r = layerToRegion(extra, page, dpi, fonts, txt2, warnings);
+        if (r) created.push(r);
+      }
+    const current = resolveStyle(currentLine, currentRegion, episode.id, series.id);
+    const change = regionChange(layer, id, line, region, page, current, fonts, warnings,
+      onPath ? { text: layers.map((l) => l.text?.text ?? "").join("\r") } : undefined) ?? (onPath ? { lineId: id, layer: layer.name ?? id, style: {}, describe: [] } : null);
     if (!change) continue;
-    if (region.locked) {
+    if (onPath) {
+      const paths = importedPaths(layers, region, page, txt2, warnings);
+      if (paths) {
+        change.textPaths = paths.paths;
+        change.describe.push(...paths.describe);
+      }
+      if (!change.describe.length) continue;
+    }
+    if (currentRegion.locked) {
       warnings.push(`${change.layer}: the layout is locked, so its changes were skipped.`);
       continue;
     }
@@ -323,13 +406,16 @@ export async function planPsdImport(series: Series, episode: Episode, imageId: s
   const doc = getDoc<PageData>(`page:${imageId}`, {});
   const current = pageArtwork(doc.data);
   const artwork = await importedArtwork(psd, warnings);
-  const changedArtwork = artwork && !(await sameArtwork(artwork, current ? await readAsset(current) : null)) ? artwork : undefined;
-  return { imageId, regions, artwork: changedArtwork, warnings };
+  // Unchanged since the export means not imported, even if the page was cleaned again since.
+  const unchangedInPhotoshop = !!(artwork && ownExport?.artwork && (await pixelHash(artwork)) === ownExport.artwork);
+  const changedArtwork = artwork && !unchangedInPhotoshop && !(await sameArtwork(artwork, current ? await readAsset(current) : null)) ? artwork : undefined;
+  const fromExport = !!meta || groups.size > 0 || (psd.children ?? []).some((l) => l.name === ARTWORK_LAYER);
+  return { imageId, regions, created, artwork: changedArtwork, warnings, fromExport };
 }
 
 /** Apply a plan as one page undo step. Text refits with the imported style; artwork is saved like a paint edit. */
 export async function applyPsdImport(series: Series, episode: Episode, userId: string, plan: PsdImportPlan) {
-  if (!plan.regions.length && !plan.artwork) throw new WorkflowError("The PSD has no changes to import");
+  if (!plan.regions.length && !plan.artwork && !plan.created.length) throw new WorkflowError("The PSD has no changes to import");
   const page = (await listImages(episode.id)).find((p) => p.id === plan.imageId)!;
   const lines = new Map((await listLines(episode.id)).map((l) => [l.id, l]));
   const geometry = await captureGeometry(episode.id, page.id);
@@ -352,6 +438,7 @@ export async function applyPsdImport(series: Series, episode: Episode, userId: s
       if (Object.keys(change.style).length)
         data = { ...data, style: validateStyle({ ...resolveStyle(line, data, episode.id, series.id), ...change.style }), styleFromSeries: false };
       if (change.renderEnabled !== undefined) data = { ...data, renderEnabled: change.renderEnabled };
+      if (change.textPaths) data = { ...data, textPaths: change.textPaths, textPath: undefined };
       const x = (line.x ?? 0) + (change.move?.dx ?? 0) / page.width;
       const y = (line.y ?? 0) + (change.move?.dy ?? 0) / page.height;
       if (change.move || change.rotation !== undefined || change.skewX !== undefined || change.skewY !== undefined) {
@@ -362,10 +449,11 @@ export async function applyPsdImport(series: Series, episode: Episode, userId: s
       putDoc(episode.id, doc.id, data, doc.revision);
     }
   })();
+  const added = await createImportedRegions(series, episode, userId, page, plan.created);
   await pushUndo(series.slug, episode.slug, {
-    type: "psd-import", imageId: page.id, geometry, bodies, description: "Import edits from PSD",
+    type: "psd-import", imageId: page.id, geometry, bodies, created: added.ids, description: "Import edits from PSD",
   });
-  const failed: string[] = [];
+  const failed: string[] = [...added.failed];
   for (const change of plan.regions) {
     const line = (await listLines(episode.id)).find((l) => l.id === change.lineId);
     if (!line?.body?.trim()) continue;
@@ -381,11 +469,41 @@ export async function applyPsdImport(series: Series, episode: Episode, userId: s
 }
 
 /** Undo an import: put the page, its regions and their English back as they were. */
-export async function undoPsdImport(episodeId: string, image: ImageRow, op: { geometry: GeometrySnapshot; bodies: { id: string; body: string }[] }) {
+export async function undoPsdImport(episodeId: string, image: ImageRow, op: { geometry: GeometrySnapshot; bodies: { id: string; body: string }[]; created?: string[] }) {
+  if (op.created?.length) deleteImportedRegions(episodeId, op.created);
   sqlite.transaction(() => {
     for (const { id, body } of op.bodies)
       sqlite.prepare("UPDATE lines SET body=?,revision=revision+1,updated_at=? WHERE id=? AND episode_id=?")
         .run(body, Date.now(), id, episodeId);
   })();
   await restoreGeometry(episodeId, image, op.geometry);
+}
+
+/** The region's paths with any line whose curve was reshaped in Photoshop replaced. */
+function importedPaths(layers: Layer[], region: RegionData, page: ImageRow, txt2: EValue | undefined, warnings: string[]) {
+  const layout = region.layout!;
+  const paths = regionTextPaths(region);
+  const units = 72 / layout.dpi;
+  const next = paths.map((p) => ({ ...p }));
+  const describe: string[] = [];
+  layers.forEach((layer, k) => {
+    const row = layout.rows[k];
+    const pathIndex = row?.path ?? k;
+    const path = paths[pathIndex];
+    const read = layerPath(layer, txt2, page);
+    if (!row || !path || !read) {
+      if (txt2 && !read) warnings.push(`${layer.name}: no text path found for this layer, so its line keeps its curve.`);
+      return;
+    }
+    const exported = psdTextPath(path, row.x, page.width, page.height, units).segments.flat();
+    // The layer transform is page points → pixels; compare in text space.
+    const [ta, , , td, te, tf] = layer.text?.transform ?? [1 / units, 0, 0, 1 / units, 0, 0];
+    const flat = read.segments.flat().map(([x, y]) => [(ta * x + te) * units, (td * y + tf) * units]);
+    const same = flat.length === exported.length && flat.every(([x, y], i) => Math.hypot(x - exported[i][0], y - exported[i][1]) < 0.5);
+    if (same) return;
+    // Photoshop sets the text from the path's start, so the new path starts where the text does.
+    next[pathIndex] = { points: read.points.slice(0, 64) };
+    describe.push(`path of line ${pathIndex + 1}`);
+  });
+  return describe.length ? { paths: next, describe } : undefined;
 }

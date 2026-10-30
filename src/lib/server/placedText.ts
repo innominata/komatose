@@ -3,6 +3,7 @@ import type { RegionData } from "../workflow";
 import { effectiveTextRotation } from "../textRotation";
 import { deltaTextTransform } from "../textTransform";
 import { layoutKey, regionPolygon } from "./typesetting";
+import { mapTextPaths } from "../textPath";
 
 /** Transform existing glyphs without changing their font size or line breaks. */
 export function transformPlacedText(
@@ -22,6 +23,7 @@ export function transformPlacedText(
   const cy = (Math.min(...poly.map(p => p.y)) + Math.max(...poly.map(p => p.y))) / 2;
   if (region.polygon?.length && (dx || dy))
     next.polygon = region.polygon.map(p => ({ x: p.x + dx, y: p.y + dy }));
+  if (dx || dy) Object.assign(next, mapTextPaths(region, p => ({ x: p.x + dx, y: p.y + dy })));
   if (rotation !== undefined || skewX !== undefined || skewY !== undefined)
     next.style = {
       ...region.style,

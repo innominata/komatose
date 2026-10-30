@@ -5,10 +5,15 @@ import {
   hasTextWarp,
   layoutWarpBox,
   psdTextWarp,
+  glyphToPage,
+  textWarpMap,
   warpFontPath,
   warpPad,
   warpPoint,
 } from "../src/lib/textWarp";
+import { TEXT_WARP_STYLES } from "../src/lib/workflow";
+import { applyCharStyle, commonCharStyle, normalizeCharRuns, remapCharRuns } from "../src/lib/charStyles";
+import { pathFrame } from "../src/lib/textPath";
 
 const box = { left: 0, top: 0, right: 100, bottom: 40 };
 
@@ -64,8 +69,9 @@ test("Arc envelope is a rainbow: middle sits above the sides", () => {
 
 test("Arc Lower bends the bottom more than the top", () => {
   const style = { warpStyle: "arcLower" as const, warpBend: 80 };
-  const top = warpPoint(0, 0, box, style);
-  const bottom = warpPoint(0, 40, box, style);
+  // As in Photoshop, the corners stay put and the bottom edge bows in the middle.
+  const top = warpPoint(50, 0, box, style);
+  const bottom = warpPoint(50, 40, box, style);
   assert.ok(Math.abs(bottom.y - 40) > Math.abs(top.y - 0));
 });
 
@@ -92,12 +98,8 @@ test("glyph outlines sample through the envelope instead of sliding upright", ()
       { command: "lineTo", args: [100, 0] },
       { command: "closePath", args: [] },
     ],
-    0,
-    20,
-    1,
-    false,
-    box,
-    style,
+    glyphToPage(0, 20, 1, false),
+    textWarpMap(box, style)!,
   );
   const ys = [...d.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) =>
     Number(m[2]),
@@ -116,12 +118,8 @@ test("tiny warped segments avoid redundant subdivisions", () => {
       { command: "moveTo", args: [0, 0] },
       { command: "lineTo", args: [1, 0] },
     ],
-    50,
-    20,
-    0.02,
-    false,
-    box,
-    { warpStyle: "arc", warpBend: 40 },
+    glyphToPage(50, 20, 0.02, false),
+    textWarpMap(box, { warpStyle: "arc", warpBend: 40 })!,
   );
   assert.equal((d.match(/L/g) ?? []).length, 1);
 });
@@ -133,12 +131,8 @@ test("adaptive curves follow inflections within subpixel tolerance", () => {
       { command: "moveTo", args: [0, 0] },
       { command: "bezierCurveTo", args: [30, 50, 70, -50, 100, 0] },
     ],
-    0,
-    20,
-    1,
-    false,
-    box,
-    style,
+    glyphToPage(0, 20, 1, false),
+    textWarpMap(box, style)!,
   );
   const points = [...d.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => ({
     x: Number(m[1]),
@@ -171,4 +165,108 @@ test("adaptive curves follow inflections within subpixel tolerance", () => {
     );
     assert.ok(error < 0.12, "outline error " + error);
   }
+});
+
+test("every Photoshop warp style bends smoothly and is the identity at zero", () => {
+  assert.equal(TEXT_WARP_STYLES.length, 16);
+  for (const warpStyle of TEXT_WARP_STYLES.slice(1)) {
+    assert.equal(textWarpMap(box, { warpStyle, warpBend: 0 }), undefined, warpStyle);
+    const strong = warpPoint(30, 10, box, { warpStyle, warpBend: 60 });
+    assert.ok(Number.isFinite(strong.x) && Number.isFinite(strong.y), warpStyle);
+    const tiny = warpPoint(30, 10, box, { warpStyle, warpBend: 0.5 });
+    assert.ok(Math.abs(tiny.x - 30) < 2 && Math.abs(tiny.y - 10) < 2, warpStyle);
+  }
+});
+
+test("warp distortion alone still warps, and PSD keeps it", () => {
+  const style = { ...DEFAULT_STYLE, warpStyle: "flag" as const, warpBend: 0, warpHorizontal: 40 };
+  assert.equal(hasTextWarp(style), true);
+  assert.equal(psdTextWarp(style)!.perspective, 40);
+  const corner = warpPoint(100, 0, box, style);
+  assert.notDeepEqual(corner, { x: 100, y: 0 });
+});
+
+test("vertical orientation bends down the text instead of across it", () => {
+  const across = warpPoint(50, 0, box, { warpStyle: "arch", warpBend: 50 });
+  const down = warpPoint(50, 0, box, { warpStyle: "arch", warpBend: 50, warpOrientation: "vertical" });
+  assert.ok(Math.abs(across.y) > 1);
+  assert.ok(Math.abs(down.x - 50) > Math.abs(down.y) || Math.abs(down.y) < Math.abs(across.y));
+});
+
+test("character runs apply, merge, clear and follow edits", () => {
+  let runs = applyCharStyle([], 11, 0, 5, { fill: "#FF0000" });
+  runs = applyCharStyle(runs, 11, 5, 11, { fill: "#ff0000" });
+  assert.deepEqual(runs, [{ start: 0, end: 11, style: { fill: "#ff0000" } }]);
+  runs = applyCharStyle(runs, 11, 3, 6, { fill: undefined, size: 150 });
+  assert.deepEqual(commonCharStyle(runs, 11, 3, 6), { size: 150 });
+  // "hello world" → "hello big world": typed text takes the style before it.
+  const moved = remapCharRuns(runs, "hello world", "hello big world");
+  assert.deepEqual(commonCharStyle(moved, 15, 10, 15), { fill: "#ff0000" });
+  assert.deepEqual(commonCharStyle(moved, 15, 4, 5), { size: 150 });
+  assert.deepEqual(normalizeCharRuns([{ start: 0, end: 4, style: { size: "huge" } }], 4), []);
+});
+
+test("a text path measures its length and places glyphs along the tangent", () => {
+  const frame = pathFrame([{ x: 0, y: 0 }, { x: 100, y: 0 }])!;
+  assert.equal(Math.round(frame.length), 100);
+  const [a, b, , , e, f] = frame.frame(25)!;
+  assert.deepEqual([a, b, e, f].map((n) => Math.round(n)), [1, 0, 25, 0]);
+  assert.equal(frame.frame(120), undefined);
+  const flipped = pathFrame([{ x: 0, y: 0 }, { x: 100, y: 0 }], true)!;
+  assert.equal(Math.round(flipped.frame(25)![0]), -1);
+});
+
+test("EngineData round-trips Photoshop's Txt2 block byte for byte", async () => {
+  const { PATH_TEXT_TXT2 } = await import("../src/lib/server/psdTemplates/pathText");
+  const { parseEngineData, serializeEngineData, formatReal } = await import("../src/lib/server/engineData");
+  const bytes = Buffer.from(PATH_TEXT_TXT2, "base64");
+  assert.ok(Buffer.from(serializeEngineData(parseEngineData(bytes))).equals(bytes));
+  assert.deepEqual([1, 0.5, -0.5, -52.122463, 0].map(formatReal), ["1.0", ".5", "-.5", "-52.12246", "0.0"]);
+});
+
+test("text path Beziers follow the layout curve and trim from the start", async () => {
+  const { textPathBeziers, trimBeziers } = await import("../src/lib/textPath");
+  const line = textPathBeziers([{ x: 0, y: 0 }, { x: 100, y: 0 }]);
+  const trimmed = trimBeziers(line, 25);
+  assert.ok(Math.abs(trimmed[0][0].x - 25) < 0.5);
+  assert.equal(trimmed[0][3].x, 100);
+  const curve = textPathBeziers([{ x: 0, y: 0 }, { x: 50, y: -30 }, { x: 100, y: 0 }]);
+  assert.equal(curve.length, 2);
+  assert.deepEqual(curve[0][3], { x: 50, y: -30 });
+});
+
+test("layer styles validate, round-trip through Photoshop's effects, and build filters", async () => {
+  const { EFFECT_DEFAULTS, EFFECT_ORDER, effectFilters, effectsFromPsd, effectsReach, normalizeEffects, psdEffects } = await import("../src/lib/textEffects");
+  const all = Object.fromEntries(EFFECT_ORDER.map((k) => [k, EFFECT_DEFAULTS[k]]));
+  const norm = normalizeEffects(all)!;
+  assert.deepEqual(Object.keys(norm).sort(), [...EFFECT_ORDER].sort());
+  assert.equal(normalizeEffects({ dropShadow: { opacity: 500, color: "red" } })!.dropShadow!.opacity, 100);
+  assert.equal(normalizeEffects({ wobble: {} }), undefined);
+  // 300 dpi: points ↔ pixels both ways.
+  const back = effectsFromPsd(psdEffects(norm, 300) as Record<string, unknown>, 300)!;
+  for (const k of EFFECT_ORDER) assert.deepEqual(back[k], norm[k], k);
+  assert.ok(Math.abs((psdEffects(norm, 300).dropShadow as { distance: { value: number } }[])[0].distance.value - (4 * 300) / 72) < 0.01);
+  assert.ok(effectsReach(norm) >= 4 + 4);
+  const fx = effectFilters(norm, 1, { x: 0, y: 0, width: 100, height: 50 }, { x: 10, y: 10, width: 80, height: 30 });
+  assert.ok(fx.exterior && fx.interior && fx.overlay);
+  assert.match(fx.defs, /<filter id="fx-ext"/);
+  assert.match(fx.defs, /feDiffuseLighting/);
+  assert.equal(effectFilters({ dropShadow: { ...EFFECT_DEFAULTS.dropShadow, enabled: false } }, 1, { x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }).defs, "");
+});
+
+test("throttle runs at once, then at most once per window with the latest value", async () => {
+  const { throttle } = await import("../src/lib/throttle");
+  const seen: number[] = [];
+  const t = throttle((v: number) => seen.push(v), 50);
+  t(1); t(2); t(3);
+  assert.deepEqual(seen, [1]);
+  await new Promise((r) => setTimeout(r, 70));
+  assert.deepEqual(seen, [1, 3], "one trailing call with the newest value");
+  t(4); t(5);
+  t.cancel();
+  await new Promise((r) => setTimeout(r, 70));
+  // Still inside the window after the trailing call, so 4 and 5 wait; cancel drops them.
+  assert.deepEqual(seen, [1, 3], "cancel drops the pending call");
+  t(6); t.flush();
+  assert.deepEqual(seen, [1, 3, 6], "flush runs the pending call now");
 });
