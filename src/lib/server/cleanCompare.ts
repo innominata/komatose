@@ -9,6 +9,7 @@ import { createJob, updateJob } from "./jobs";
 import { localOperation } from "./localWorker";
 import { imageWorkflowModel, runImageTaskFiles } from "./modelImageWorkflow";
 import { DATA_DIR } from "./paths";
+import { finishEditorAnswer } from "./workflowImages";
 import { getDoc, putDoc, readAsset, storeAsset, withPreviousArtwork, WorkflowError } from "./workflowStore";
 
 /**
@@ -87,6 +88,7 @@ export async function startCleanComparison(opts: {
           if (model) {
             const task = rowHasOperation(model, "inpaint") ? "inpaint" : "cleaning";
             await runImageTaskFiles(model, task, { path: sourcePath, mask: maskPath, out, ...(opts.prompt ? { prompt: opts.prompt } : {}) });
+            await finishEditorAnswer(sourcePath, out, maskPath);
           } else {
             await localOperation({ cmd: "clean", path: sourcePath, mask: maskPath, out, method, strokes: [], offset: [0, 0] });
           }

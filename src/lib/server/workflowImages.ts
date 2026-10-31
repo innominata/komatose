@@ -45,10 +45,26 @@ export async function runWorkflowPng(
         )
       : await localOperation({ ...payload, out: output }, signal);
     signal?.throwIfAborted();
+    // An editor redraws the crop slightly off in tone; match it to the page around the mask.
+    if (model) result.postprocess = await finishEditorAnswer(String(payload.path), output, String(payload.mask), signal);
     result.cleanDurationMs = Date.now() - started;
     return { result, artifact: await storeAsset(await readFile(output)) };
   } finally {
     await unlink(output).catch(() => {});
+  }
+}
+
+/**
+ * Matches an image editor's answer to the page (tone and lighting, Bear's "Tone only"
+ * finishing) in place. A finishing failure keeps the answer as the editor returned it.
+ */
+export async function finishEditorAnswer(page: string, answer: string, mask: string, signal?: AbortSignal) {
+  try {
+    return (await localOperation({ cmd: "finish", path: page, answer, mask, out: answer }, signal)).postprocess;
+  } catch (e) {
+    signal?.throwIfAborted();
+    console.warn("Post-processing skipped:", e instanceof Error ? e.message : e);
+    return undefined;
   }
 }
 

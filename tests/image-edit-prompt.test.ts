@@ -35,6 +35,7 @@ test("the local editor is registered as its own cleaning method", () => {
     "qwen-image-edit-lightning",
     "qwen-image-edit-q3",
     "qwen-image-edit-q2",
+    "flux3-klein",
   ]);
   assert.deepEqual(imageEditInstallArgs("qwen-image-edit-2511-q3"), ["--quant", "q3_k_m"]);
   assert.deepEqual(imageEditInstallArgs("qwen-image-edit-2511-lightning"), ["--lightning"]);
