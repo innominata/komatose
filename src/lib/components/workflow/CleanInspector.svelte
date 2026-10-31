@@ -2,6 +2,7 @@
   import "./studio-controls.css";
   import { cleanModelChoices, canStartClean, inpaintUnavailable } from "$lib/cleanMethods";
   import type { PageData, WorkflowDoc } from "$lib/workflow";
+  import { postprocessLabel } from "$lib/postprocess";
 
   let {
     showMask,
@@ -21,6 +22,7 @@
     onapprovemask,
     onclean,
     oncompare,
+    onpostprocess,
     onapplypass,
     onapproveclean,
     onclearstrokes,
@@ -54,6 +56,8 @@
     onclean?: (method: string) => void;
     /** Compare cleaning methods on the selected region; absent when no region is selected. */
     oncompare?: () => void;
+    /** Open the post-processing window for the page's last image-editor clean. */
+    onpostprocess?: () => void;
     onapplypass?: () => void;
     onapproveclean?: () => void;
     onclearstrokes?: () => void;
@@ -119,6 +123,10 @@
       <button type="button" class="method compare" disabled={!canClean || busy || !pageDoc?.data.mask}
         title={pageDoc?.data.mask ? "Run several methods on the selected region and pick the best" : "Paint or detect a mask first"}
         onclick={() => oncompare?.()}><i class="bi bi-layout-split" aria-hidden="true"></i> <span><b>Compare methods on this region…</b></span></button>
+    {/if}
+    {#if onpostprocess && pageDoc?.data.cleanFinish && pageDoc.data.cleanFinish.result === pageDoc.data.cleaned}
+      <button type="button" class="method compare" disabled={busy} title="Change how the editor's result was matched to the page (Ctrl+P)"
+        onclick={() => onpostprocess?.()}><i class="bi bi-sliders" aria-hidden="true"></i> <span><b>Post-processing…</b><small>{postprocessLabel(pageDoc.data.cleanFinish.method)}</small></span></button>
     {/if}
     <div class="grid2">
       <label>Clone offset X (px)<input type="number" bind:value={cloneX} /></label>

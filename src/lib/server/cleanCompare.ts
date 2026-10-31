@@ -9,7 +9,7 @@ import { createJob, updateJob } from "./jobs";
 import { localOperation } from "./localWorker";
 import { imageWorkflowModel, runImageTaskFiles } from "./modelImageWorkflow";
 import { DATA_DIR } from "./paths";
-import { finishEditorAnswer } from "./workflowImages";
+import { finishEditorAnswer } from "./postprocess";
 import { getDoc, putDoc, readAsset, storeAsset, withPreviousArtwork, WorkflowError } from "./workflowStore";
 
 /**

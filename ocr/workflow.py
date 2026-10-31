@@ -1648,7 +1648,7 @@ def run(req):
         mask = cv2.imread(req['mask'], cv2.IMREAD_GRAYSCALE)
         if answer is None or mask is None: raise ValueError('Finishing inputs are missing')
         if answer.shape != img.shape: answer = cv2.resize(answer, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)
-        result, report = postprocess.finish(img, answer, mask)
+        result, report = postprocess.finish(img, answer, mask, req.get('method') or postprocess.DEFAULT_METHOD)
         if not cv2.imwrite(req['out'], result): raise ValueError('Finish write failed')
         return {'postprocess': report, 'backend': 'CPU'}
     if req['cmd']=='detect-regions':

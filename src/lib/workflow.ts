@@ -446,6 +446,8 @@ export type PageData = {
   maskApproved?: boolean;
   cleanApproved?: boolean;
   cleanMethod?: string;
+  /** The last image-editor clean's saved answer, so its post-processing can change later. */
+  cleanFinish?: import("./postprocess").CleanFinish;
   cleanDurationMs?: number;
   backend?: string;
   dpi?: number;

@@ -35,6 +35,7 @@
   import DirectorMemory from './DirectorMemory.svelte';
   import StudioToasts from "./workflow/StudioToasts.svelte";
   import CleanCompareDialog from "./workflow/CleanCompareDialog.svelte";
+  import PostProcessDialog from "./workflow/PostProcessDialog.svelte";
   import StudioTopBar from "./workflow/StudioTopBar.svelte";
   import StageBar from "./workflow/StageBar.svelte";
   import StudioBanners from "./workflow/StudioBanners.svelte";
@@ -198,6 +199,7 @@
   let inspectorTab = $state("");
   /** Region whose cleaning methods are being compared (the comparison dialog is open). */
   let compareLineId = $state("");
+  let postprocessOpen = $state(false);
   /** Drawing a new text path for the selected region on the canvas. */
   let drawingTextPath = $state(false);
   let drawingTextPathFor = "";
@@ -4064,6 +4066,11 @@
       return;
     if (regionKeyMove(e)) return;
     const shortcut = e.ctrlKey || e.metaKey;
+    if (shortcut && !e.shiftKey && e.key.toLowerCase() === "p" && step === "Clean") {
+      e.preventDefault();
+      postprocessOpen = !postprocessOpen;
+      return;
+    }
     if ((e.key === "z" || e.key === "Z") && shortcut) {
       e.preventDefault();
       if (!e.repeat) pageSavedHistory(e.shiftKey ? "redo" : "undo");
@@ -4308,6 +4315,19 @@
     <button class="ed-btn" type="button" data-find="palette" aria-label="Find an action" onclick={() => (finderOpen = true)}><i class="bi bi-search" aria-hidden="true"></i><span class="txt">Find an action</span><kbd aria-hidden="true">Ctrl K</kbd></button>
   </StudioTopBar>
   <StudioToasts {error} {toasts} ondismisserror={() => (error = "")} ondismiss={dismissToast} />
+  {#if postprocessOpen && page && pageDoc}
+    <PostProcessDialog
+      {apiBase}
+      {asset}
+      {page}
+      pageData={pageDoc.data}
+      onclose={() => (postprocessOpen = false)}
+      onapplied={async () => {
+        await refresh();
+        notify("Post-processing changed. Undo restores the previous result.");
+      }}
+    />
+  {/if}
   {#if compareLineId && page && pageDoc}
     {@const compareLine = pageLines.find((l) => l.id === compareLineId)}
     {#if compareLine}
@@ -5019,6 +5039,7 @@
             onapprovemask={() => void approveMask()}
             onclean={(method) => void cleanWith(method)}
             oncompare={selected && selected.imageId === page?.id ? () => (compareLineId = selected!.id) : undefined}
+            onpostprocess={() => (postprocessOpen = true)}
             onapplypass={() => void applyCleaningPass()}
             onapproveclean={() => void approveCleanedAndNext()}
             onclearstrokes={() => (strokes = [])}

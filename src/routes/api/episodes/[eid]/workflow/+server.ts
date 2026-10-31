@@ -1,6 +1,8 @@
 import { normalizeCharRuns } from "$lib/charStyles";
 import { restoreDeletion } from "$lib/server/regionTrash";
 import { applyCleanComparison, startCleanComparison } from "$lib/server/cleanCompare";
+import { defaultPostprocess, finishEditorAnswer, postprocessPreviews, refinish, setDefaultPostprocess } from "$lib/server/postprocess";
+import { isPostprocessMethod, type PostprocessMethod } from "$lib/postprocess";
 import { mapTextPaths } from "$lib/textPath";
 import { runWorkflowPng } from '$lib/server/workflowImages';
 import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
@@ -280,6 +282,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
   try {
     const user = requireUser(locals.user);
     const { series, episode } = await requireEpisodeAccess(user, params.eid);
+    if (url.searchParams.has("postprocess")) return json({ method: defaultPostprocess() });
     if (url.searchParams.has("compare")) {
       const job = sqlite.prepare("SELECT episode_id,kind,state,progress,error FROM workflow_jobs WHERE id=?").get(url.searchParams.get("compare")) as
         | { episode_id: string; kind: string; state: string; progress: string; error: string | null }
@@ -745,6 +748,30 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         episodeId: episode.id, page, artwork: progress.artwork, result: chosen.asset, mask: progress.mask, box: progress.box, method: chosen.method,
       });
       return json({ doc });
+    }
+    if (action === "postprocess-previews" || action === "apply-postprocess") {
+      requireClean(user);
+      const page = (await listImages(episode.id)).find((p) => p.id === b.imageId);
+      if (!page) throw new WorkflowError("Page not found", 404);
+      const doc = getDoc<PageData>(`page:${page.id}`, {});
+      const finish = doc.data.cleanFinish;
+      if (!finish || finish.result !== doc.data.cleaned)
+        throw new WorkflowError("This page's cleaning has no saved editor result. Clean it again with an image editor to change its post-processing.");
+      if (action === "postprocess-previews") return json(await postprocessPreviews(finish));
+      assertEpisodeIdle(episode.id);
+      if (!isPostprocessMethod(b.method)) throw new WorkflowError("Unknown post-processing method");
+      const artifact = await refinish(finish, b.method);
+      const saved = putDoc(
+        episode.id,
+        doc.id,
+        withPreviousArtwork(doc.id, doc.data, { ...doc.data, cleaned: artifact, cleanApproved: false, cleanFinish: { ...finish, method: b.method, result: artifact } }, "replace"),
+        doc.revision,
+      );
+      return json({ doc: saved });
+    }
+    if (action === "postprocess-default") {
+      requireClean(user);
+      return json({ method: setDefaultPostprocess(b.method) });
     }
     if (action === "restore-deleted-regions") {
       requireEdit(user);
@@ -1544,6 +1571,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         );
         const cleanDurationMs = Date.now() - cleanStarted;
         if (abort.signal.aborted) throw new Error("Cancelled");
+        // An editor's answer is kept as it came, then matched to the page.
+        let finish: { answer: string; method: PostprocessMethod } | undefined;
+        if (action === "clean" && imageModel) {
+          const answer = await storeAsset(await readFile(output));
+          const method = defaultPostprocess();
+          await finishEditorAnswer(reconstruction().path, output, reconstruction().mask, method, abort.signal);
+          finish = { answer, method };
+        }
         const latest = (await listImages(episode.id)).find(
           (p) => p.id === img.id,
         );
@@ -1605,6 +1640,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
                   ...doc.data,
                   cleaned: artifact,
                   cleanMethod: result.method || method,
+                  cleanFinish: finish
+                    ? { ...finish, base: doc.data.cleanBase || doc.data.prepared!, mask: doc.data.mask!, result: artifact }
+                    : undefined,
                   cleanDurationMs,
                   backend: result.backend,
                   cleanApproved: false,

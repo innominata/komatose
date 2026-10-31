@@ -16,6 +16,10 @@ one grey channel), and the caller still writes only through the mask.
    model redrew (a low-pass difference past DRIFT_MAX) is no evidence.
 3. Lighting: the low-frequency difference left at the mask's edge, spread
    across the mask as a membrane and added inside it only.
+4. Screen (grey pages): the page's own dots copied or redrawn in phase across
+   the mask ([halftone]).
+
+METHODS picks the version, as Bear's Finishing does.
 """
 import cv2
 import numpy as np
@@ -39,6 +43,15 @@ CANNY_LOW, CANNY_HIGH = 30.0, 90.0
 TENSOR_SIGMA = 2.0
 MIN_COHERENCE = 0.35
 MEMBRANE_ITERS = 200
+# id -> (label, halftone reach, halftone over); reach None is no screen step.
+METHODS = {
+    'copy': ('Copy page dots', 'copy', 'all'),
+    'redraw': ('Redraw dots', 'table', 'all'),
+    'fill-dots': ('Tone only, fill lost dots', 'table', 'screen'),
+    'tone': ('Tone only', None, None),
+    'none': ('None', None, None),
+}
+DEFAULT_METHOD = 'copy'
 # Work on each mask piece with this much page around it.
 MARGIN = 96
 # A page whose channels differ by no more than this is grey.
@@ -124,7 +137,7 @@ def lighting(shown, toned, mask, edge, fade):
     return np.where(mask, toned + np.clip(field, -LIGHTING_CAP, LIGHTING_CAP) * fade, toned)
 
 
-def settle(shown, answer, mask):
+def settle(shown, answer, mask, method=DEFAULT_METHOD):
     """One crop: shown and answer as float channel lists, mask boolean. Returns
     the finished channels and the fitted (gain, offset) of each."""
     luma = lambda chans: sum(chans) / len(chans)
@@ -141,8 +154,17 @@ def settle(shown, answer, mask):
     for s, a in zip(shown, answer):
         toned, fit = tone(s, a, near, fade)
         fits.append(fit)
-        out.append(np.clip(lighting(s, toned, mask, edge, fade), 0, 255))
-    return out, fits
+        out.append(lighting(s, toned, mask, edge, fade))
+    _, reach, over = METHODS[method]
+    screened = 0
+    if reach and len(out) == 1:
+        import halftone
+        screen = halftone.redraw(shown[0], out[0], mask, protected, np.ones_like(mask), fade, reach, over)
+        if screen is not None:
+            value, weight = screen
+            out[0] = out[0] * (1 - weight) + value * weight
+            screened = int((weight > 0).sum())
+    return [np.clip(o, 0, 255) for o in out], fits, screened
 
 
 def is_grey(img):
@@ -152,14 +174,19 @@ def is_grey(img):
     return float(np.percentile(spread, 99)) <= GREY_SPREAD
 
 
-def finish(page, answer, mask):
+def finish(page, answer, mask, method=DEFAULT_METHOD):
     """Page and answer as BGR uint8 of one size, mask uint8. Returns the answer
     matched to the page inside the mask (pixels outside it are the page's)."""
+    if method not in METHODS:
+        raise ValueError(f'Unknown post-processing method: {method}')
     m = mask > 0
     result = page.copy()
+    if method == 'none':
+        result[m] = answer[m]
+        return result, {'method': method, 'pieces': 0, 'fitted': 0, 'screen': 0}
     grey = is_grey(page)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(m.astype(np.uint8), np.ones((31, 31), np.uint8)))
-    fitted = 0
+    fitted = screen = 0
     for i in range(1, n):
         x, y, w, h, _ = stats[i]
         x0, y0 = max(0, x - MARGIN), max(0, y - MARGIN)
@@ -173,8 +200,9 @@ def finish(page, answer, mask):
             shown, ans = [p.mean(axis=2)], [a.mean(axis=2)]
         else:
             shown, ans = [p[..., c] for c in range(3)], [a[..., c] for c in range(3)]
-        out, fits = settle(shown, ans, piece)
+        out, fits, screened = settle(shown, ans, piece, method)
         fitted += sum(f is not None for f in fits)
+        screen += screened
         done = np.stack(out * 3 if grey else out, axis=2).round().astype(np.uint8)
         result[y0:y1, x0:x1][piece] = done[piece]
-    return result, {'grey': grey, 'pieces': n - 1, 'fitted': fitted}
+    return result, {'method': method, 'grey': grey, 'pieces': n - 1, 'fitted': fitted, 'screen': screen}
