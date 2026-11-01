@@ -1000,6 +1000,12 @@ def _seal_outline_gaps(crop, gray, size):
     return sealed
 
 
+def _enclosed_share(region, fill):
+    """Fraction of a filled bubble that was enclosed holes rather than flood."""
+    total = int(cv2.countNonZero(fill))
+    return (total - int(cv2.countNonZero(region))) / total if total else 0.0
+
+
 def bubble_fill(img, req):
     """Flood-fill a speech bubble from a clicked point.
 
@@ -1012,6 +1018,7 @@ def bubble_fill(img, req):
     sy = int(round(max(0.0, min(1.0, float(req.get("py", 0)))) * H))
     saw_enclosed = False
     saw_sprawl = False
+    saw_sparse = False
 
     for radius in (512, 1024):
         cx0, cy0 = max(0, sx - radius), max(0, sy - radius)
@@ -1043,9 +1050,12 @@ def bubble_fill(img, req):
             rys, rxs = np.where(region > 0)
             bw = int(rxs.max()) - int(rxs.min()) + 1
             bh = int(rys.max()) - int(rys.min()) + 1
-            if max(bw, bh) > 0.75 * W or area < 0.3 * bw * bh:
-                saw_sprawl = True
+            # A thin, branching fill is a stroke or the gaps in artwork, not a
+            # balloon interior.
+            if area < 0.3 * bw * bh:
+                saw_sparse = True
                 continue
+            wide = max(bw, bh) > 0.75 * W
             saw_enclosed = True
             if _border_contrast(work, region) < 0.75:
                 continue
@@ -1064,6 +1074,12 @@ def bubble_fill(img, req):
             border = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
             fill = region.copy()
             fill[(labels > 0) & ~np.isin(labels, border)] = 255
+            # Webtoon balloons can span most of a narrow page. What separates a
+            # wide balloon from a panel is what the fill would paint over: a
+            # balloon encloses only lettering, a panel encloses its artwork.
+            if wide and _enclosed_share(region, fill) >= 0.1:
+                saw_sprawl = True
+                continue
             fill = cv2.erode(fill, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
             if not int(cv2.countNonZero(fill)):
                 raise ValueError("bubble is too thin to fill")
@@ -1088,8 +1104,10 @@ def bubble_fill(img, req):
             work[fill > 0] = colour
             img[cy0:cy1, cx0:cx1] = work
             return "bubble"
-    if saw_sprawl and not saw_enclosed:
-        raise ValueError("that looks bigger than a bubble — trace it with the lasso instead")
+    if saw_sprawl:
+        raise ValueError("that looks like a panel, not a bubble — trace it with the lasso instead")
+    if saw_sparse and not saw_enclosed:
+        raise ValueError("no bubble found there — that looks like lettering on the artwork; trace it with the lasso instead")
     if saw_enclosed:
         raise ValueError("no bubble found there — the border needs to differ from the fill by at least 75%")
     raise ValueError("bubble edge not found — click inside a closed bubble")

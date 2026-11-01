@@ -552,6 +552,28 @@ class Cleaning(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflow.bubble_fill(img, {'px': .5, 'py': 290 / 300, 'strict': True})
 
+    def test_bubble_fill_accepts_a_balloon_spanning_most_of_a_narrow_page(self):
+        # Webtoon strips are narrow, so a large balloon can be wider than 75% of the page.
+        img = np.full((900, 400, 3), 120, np.uint8)
+        cv2.ellipse(img, (200, 300), (180, 120), 0, 0, 360, (250,)*3, -1)
+        cv2.ellipse(img, (200, 300), (180, 120), 0, 0, 360, (0,)*3, 4)
+        cv2.putText(img, 'TEXT', (140, 310), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,)*3, 3)
+        for strict in (False, True):
+            out = img.copy()
+            self.assertEqual(workflow.bubble_fill(out, {'px': .5, 'py': 250 / 900, 'strict': strict}), 'bubble')
+            self.assertTrue(np.all(out[300, 200] >= 240))
+
+    def test_bubble_fill_rejects_a_wide_panel_with_artwork_inside(self):
+        img = np.full((900, 400, 3), 120, np.uint8)
+        cv2.rectangle(img, (20, 100), (380, 500), (250,)*3, -1)
+        cv2.rectangle(img, (20, 100), (380, 500), (0,)*3, 4)
+        cv2.circle(img, (200, 300), 90, (0,)*3, -1)
+        cv2.rectangle(img, (60, 380), (340, 460), (40,)*3, -1)
+        before = img.copy()
+        with self.assertRaisesRegex(ValueError, 'panel'):
+            workflow.bubble_fill(img, {'px': .1, 'py': 150 / 900})
+        np.testing.assert_array_equal(img, before)
+
     def test_bubble_fill_run_writes_filled_artwork(self):
         img = np.full((300, 400, 3), 80, np.uint8)
         cv2.ellipse(img, (200, 150), (130, 100), 0, 0, 360, (250,)*3, -1)

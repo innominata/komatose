@@ -623,10 +623,9 @@ def _bubble_fill(img, req: dict) -> str:
         rys, rxs = np.where(region > 0)
         bw = int(rxs.max()) - int(rxs.min()) + 1
         bh = int(rys.max()) - int(rys.min()) + 1
-        # Reject sprawling regions (panel backgrounds, gutters): bubbles are
-        # compact and far smaller than the page.
-        if max(bw, bh) > 0.75 * W or area < 0.3 * bw * bh:
-            raise ValueError("that looks bigger than a bubble — trace it with the lasso instead")
+        # A thin, branching fill is a stroke or the gaps in artwork.
+        if area < 0.3 * bw * bh:
+            raise ValueError("no bubble found there — that looks like lettering on the artwork; trace it with the lasso instead")
 
         # Text glyphs are holes in the flooded interior: components of the
         # complement that never reach the window border.
@@ -637,6 +636,12 @@ def _bubble_fill(img, req: dict) -> str:
         )
         fill = region.copy()
         fill[(labels > 0) & ~np.isin(labels, border)] = 255
+        # Webtoon balloons can span most of a narrow page. A balloon encloses
+        # only lettering; a panel background encloses its artwork.
+        if max(bw, bh) > 0.75 * W:
+            total = int(cv2.countNonZero(fill))
+            if total and (total - area) / total >= 0.1:
+                raise ValueError("that looks like a panel, not a bubble — trace it with the lasso instead")
         fill = cv2.erode(fill, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
         if not int(cv2.countNonZero(fill)):
             raise ValueError("bubble is too thin to fill")
