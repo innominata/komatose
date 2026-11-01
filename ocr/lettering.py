@@ -110,7 +110,11 @@ def regions_from_mask(mask):
         block = binary[y0:y1, x0:x1]
         if int(np.count_nonzero(block)) < 16:
             continue
-        dt = cv2.distanceTransform(block, cv2.DIST_L2, 3)
+        # Pad with background: a block the mask fills solid has no zero pixel,
+        # and the transform then reports FLT_MAX, which doubles to Infinity
+        # and is not valid JSON.
+        padded = cv2.copyMakeBorder(block, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+        dt = cv2.distanceTransform(padded, cv2.DIST_L2, 3)[1:-1, 1:-1]
         ridge = (dt > 0) & (dt >= cv2.dilate(dt, np.ones((3, 3), np.uint8)))
         regions.append({
             'cls': 'text',

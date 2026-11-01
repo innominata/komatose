@@ -11,6 +11,17 @@ import detect
 import lettering
 
 class Lettering(unittest.TestCase):
+    def test_solid_mask_block_reports_a_finite_stroke(self):
+        # A block with no background pixel used to report Infinity, which the
+        # server cannot parse as JSON.
+        import json
+        mask = np.zeros((200, 200), np.uint8)
+        mask[50:80, 40:120] = 255
+        regions = lettering.regions_from_mask(mask)
+        self.assertEqual(len(regions), 1)
+        self.assertTrue(0 < regions[0]['stroke'] < 40)
+        json.dumps(regions, allow_nan=False)
+
     def test_crop_coverage_and_context(self):
         crops=list(detect._crops(1500,1800,690,172))
         self.assertEqual(crops[0],(0,0,1500,1800))
