@@ -157,6 +157,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			// A managed model must be stopped before its config goes away, or the
 			// orphaned llama-server keeps running with nothing to own it.
 			const target = findRegistryRow(id);
+			// Package entries are rebuilt from their package on every read, so deleting
+			// one cannot stick. Uninstall removes its files instead.
+			if (target?.packageId)
+				return fail(400, 'This model comes from a model package and cannot be deleted. Use Uninstall to remove its files.');
 			if (target?.managedLaunch) {
 				const status = managedModelStatus(target);
 				if (['starting', 'running', 'stopping', 'queued'].includes(status.state))

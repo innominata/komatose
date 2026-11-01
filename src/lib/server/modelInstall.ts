@@ -312,6 +312,19 @@ function quantMarker(id: string): string | undefined {
 	return quant ? `installed-${quant}.json` : undefined;
 }
 
+/** A quant counts as installed only while its record and the weights it names are both on disk. */
+function quantWeightsPresent(id: string): boolean {
+	const marker = quantMarker(id);
+	if (!marker) return false;
+	const dir = imageEditModelDir('qwen-image-edit-2511');
+	try {
+		const file = String(JSON.parse(readFileSync(join(dir, marker), 'utf8'))?.diffusion?.file || '');
+		return Boolean(file) && existsSync(join(dir, file));
+	} catch {
+		return false;
+	}
+}
+
 function llmChatInstalled(): boolean {
 	const dir = envVar('SCAN_LLM_MODELS_DIR') || join(homedir(), 'models/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF');
 	try {
@@ -385,16 +398,15 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 			return existsSync(sdServerBin())
 				? { installed: true }
 				: { installed: false, detail: 'sd-server is not built' };
-		case 'qwen-image-edit-2511-q3':
 		case 'flux-3-image-klein':
 			if (!installedImageEdit('flux-3-image-klein'))
 				return existsSync(sdServerBin())
 					? { installed: false, detail: 'Weights not downloaded' }
 					: { installed: false, detail: 'sd-server is not built (install Qwen-Image-Edit 2511 first)' };
 			return { installed: true };
+		case 'qwen-image-edit-2511-q3':
 		case 'qwen-image-edit-2511-q2': {
-			const marker = quantMarker(target.id);
-			if (!marker || !existsSync(join(imageEditModelDir('qwen-image-edit-2511'), marker)))
+			if (!quantWeightsPresent(target.id))
 				return { installed: false, detail: 'Weights not downloaded' };
 			return existsSync(sdServerBin())
 				? { installed: true }
@@ -1064,7 +1076,9 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 			}
 		})();
 		if (recorded) paths.push(describePath(join(dir, recorded), 'Diffusion weights for this quant'));
-		paths.push({ path: join(dir, marker), note: 'Install record for this quant', kind: 'marker' });
+		// The quant's record is its own file, not a shared record with one entry per model,
+		// so it is deleted rather than edited.
+		paths.push({ path: join(dir, marker), note: 'Install record for this quant', kind: 'file' });
 		warnings.push('A running editor must be stopped first. The shared encoder and VAE stay for Qwen-Image-Edit 2511.');
 		return { paths, alsoRemoves, warnings };
 	}

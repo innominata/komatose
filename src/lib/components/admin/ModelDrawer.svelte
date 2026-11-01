@@ -480,7 +480,7 @@
 			{/if}
 
 			<!-- remove -->
-			{#if row && !row.seeded && st.key !== 'missing'}
+			{#if row && !row.seeded && !row.packageId && st.key !== 'missing'}
 				<div class="d-sec">
 					<h4>Remove</h4>
 					<div class="spread"><span class="muted small grow">Chapters that used it fall back to the job default.</span><button class="btn danger sm" onclick={() => void remove()}>Delete</button></div>

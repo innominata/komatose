@@ -280,6 +280,32 @@ test('uninstalling an environment waits for the models that run in it', async ()
 	assert.equal(uninstallPlan('env-review').blocked, undefined);
 });
 
+test('uninstalling a 2511 quant deletes its own install record and weights', async () => {
+	const dir = join(root, 'data/models/image/qwen-image-edit-2511');
+	await mkdir(dir, { recursive: true });
+	for (const [id, quant, file] of [
+		['qwen-image-edit-2511-q3', 'q3_k_m', 'qwen-image-edit-2511-Q3_K_M.gguf'],
+		['qwen-image-edit-2511-q2', 'q2_k', 'qwen-image-edit-2511-Q2_K.gguf'],
+	]) {
+		await writeFile(join(dir, file), 'x');
+		await writeFile(join(dir, `installed-${quant}.json`), JSON.stringify({ quant, diffusion: { file } }));
+		// Its own status, not FLUX's: the weights are found and only the server is missing.
+		assert.equal(targetInstalled(installTarget(id)!).detail, 'sd-server is not built');
+
+		uninstallTarget(id);
+		assert.equal(existsSync(join(dir, file)), false);
+		assert.equal(existsSync(join(dir, `installed-${quant}.json`)), false);
+		assert.equal(targetInstalled(installTarget(id)!).detail, 'Weights not downloaded');
+	}
+});
+
+test('a 2511 quant whose weights are gone is not installed even if its record remains', async () => {
+	const dir = join(root, 'data/models/image/qwen-image-edit-2511');
+	await mkdir(dir, { recursive: true });
+	await writeFile(join(dir, 'installed-q2_k.json'), JSON.stringify({ quant: 'q2_k', diffusion: { file: 'qwen-image-edit-2511-Q2_K.gguf' } }));
+	assert.equal(targetInstalled(installTarget('qwen-image-edit-2511-q2')!).detail, 'Weights not downloaded');
+});
+
 test('uninstall unlinks a symlinked environment without touching what it points at', async () => {
 	const real = join(root, 'keep-venv');
 	await mkdir(join(real, 'bin'), { recursive: true });
