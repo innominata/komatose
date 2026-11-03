@@ -22,6 +22,7 @@
     | "crop"
     | "split"
     | "reslice"
+    | "boundary"
     | "zoom";
 
   export type PaletteAction = {
@@ -109,6 +110,7 @@
     crop: { id: "crop", icon: "bi-crop", title: "Crop" },
     split: { id: "split", icon: "bi-vr", title: "Split page" },
     reslice: { id: "reslice", icon: "bi-hr", title: "Reslice strips" },
+    boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary'},
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", key: "Z" },
   };
 
@@ -159,7 +161,7 @@
     const zoom = ALL.zoom;
     if (step === "Prepare")
       return [
-        ...[ALL.select, ALL.crop, ALL.split, ALL.reslice].filter(
+        ...[ALL.select, ALL.crop, ALL.split, ALL.reslice, ALL.boundary].filter(
           (t) => t.id === "select" || canUpload,
         ),
         zoom,

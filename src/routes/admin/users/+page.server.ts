@@ -11,7 +11,8 @@ import {
 	isScanlator,
 	isTestSeries
 } from '$lib/server/access';
-import { listSignedInUsers } from '$lib/server/signedIn';
+import { listAllUserActivity } from '$lib/server/activity';
+import { SIGNED_IN_MS } from '$lib/server/signedIn';
 import { createUser, destroyUserSessions, SESSION_COOKIE, setPassword } from '$lib/server/auth';
 import { ALL_PROOFREADER_IDS, readUserSettings, saveUserProofreaders } from '$lib/server/userSettings';
 import { db } from '$lib/server/db';
@@ -55,7 +56,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		proofreaderIds: [...ALL_PROOFREADER_IDS],
 		me: actor.id,
 		scanlator: isScanlator(actor),
-		signedIn: isAdmin(actor) ? await listSignedInUsers() : null
+		activity: isAdmin(actor) ? await listAllUserActivity(50) : null,
+		signedInMs: SIGNED_IN_MS
 	};
 };
 

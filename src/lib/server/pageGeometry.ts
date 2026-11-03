@@ -8,6 +8,9 @@ import { getDoc, putDoc, readAsset, storeAsset } from "./workflowStore";
 import { listLines } from "./queries";
 import { layoutKey } from "./typesetting";
 import { broadcast } from "./realtime";
+import {randomUUID} from 'node:crypto';
+import {cleaningFinishes} from '../postprocess';
+import {WorkflowError} from './workflowStore';
 
 export type PixelTransform = {
   sx: number; sy: number; dx: number; dy: number; width: number; height: number;
@@ -20,16 +23,36 @@ export type RasterBackground = RasterColor | EdgeColors;
 export type GeometrySnapshot = {
   page: PageData;
   lines: { id: string; x: number | null | undefined; y: number | null | undefined; w: number | null | undefined; h: number | null | undefined; placed: boolean; region: RegionData }[];
+  history?:Record<string,{undo:any[];redo:any[]}>;
+  reviews?:{id:string;geometry?:unknown}[];
 };
 
 export async function captureGeometry(episodeId: string, imageId: string): Promise<GeometrySnapshot> {
-  return {
+  const snapshot:GeometrySnapshot={
     page: getDoc<PageData>(`page:${imageId}`, {}).data,
     lines: (await listLines(episodeId)).filter(l => l.imageId === imageId).map(l => ({
       id: l.id, x: l.x, y: l.y, w: l.w, h: l.h, placed: l.placed,
       region: getDoc<RegionData>(`region:${l.id}`, {}).data,
     })),
   };
+  snapshot.history={};
+  snapshot.reviews=(sqlite.prepare("SELECT id,payload,progress FROM workflow_jobs WHERE episode_id=? AND kind='page-proofread'").all(episodeId) as any[])
+    .filter(r=>JSON.parse(r.payload).imageId===imageId||(JSON.parse(r.progress).pageGeometry?.imageIds??[]).includes(imageId))
+    .map(r=>({id:r.id,geometry:JSON.parse(r.progress).pageGeometry}));
+  for(const id of [`page:${imageId}`,...snapshot.lines.map(l=>`region:${l.id}`)]) {
+    const row=sqlite.prepare('SELECT undo,redo FROM workflow_docs WHERE id=?').get(id) as any;
+    snapshot.history[id]={undo:JSON.parse(row?.undo??'[]'),redo:JSON.parse(row?.redo??'[]')};
+  }
+  const image=sqlite.prepare('SELECT width,height FROM images WHERE id=? AND episode_id=?').get(imageId,episodeId) as any;
+  if(image) {
+    const hashes=new Set<string>();
+    for(const p of [snapshot.page,...snapshot.history[`page:${imageId}`].undo,...snapshot.history[`page:${imageId}`].redo] as PageData[]) for(const k of ['prepared','original','cleaned','cleanBase','previousArtwork','mask'] as const) if(p[k]) hashes.add(p[k]!);
+    for(const asset of hashes) {
+      const meta=await sharp(await readAsset(asset)).metadata();
+      if(meta.width!==image.width||meta.height!==image.height) throw new WorkflowError('An older artwork history uses an unknown page coordinate system. Stopped before editing the page so its work and history remain intact.');
+    }
+  }
+  return snapshot;
 }
 
 /** Clip the source before compositing, including for negative nudges. */
@@ -75,6 +98,10 @@ export function transformRegion(line: LineRow, region: RegionData, page: ImageRo
     ...(region.polygon ? { polygon: region.polygon.map(point) } : {}),
     ...mapTextPaths(region, point),
   };
+  if(region.bubbleBounds) {
+    const b=region.bubbleBounds;
+    next.bubbleBounds={...point(b),w:b.w*page.width*t.sx/t.width,h:b.h*page.height*t.sy/t.height};
+  }
   if (region.layout) {
     const old = region.layout;
     const svg = old.svg.replace(/(<svg\b[^>]*>)/, `$1<g transform="translate(${t.dx} ${t.dy}) scale(${t.sx} ${t.sy})">`).replace(/<\/svg>\s*$/, "</g></svg>")
@@ -95,45 +122,65 @@ export function transformRegion(line: LineRow, region: RegionData, page: ImageRo
 }
 
 export async function applyPageGeometry(episodeId: string, oldPage: ImageRow, newPage: ImageRow, snapshot: GeometrySnapshot, t: PixelTransform, background: RasterBackground) {
-  const page = { ...snapshot.page };
-  for (const key of ["prepared", "original", "cleaned", "cleanBase", "previousArtwork", "mask"] as const) {
-    const hash = page[key];
-    if (hash) page[key] = await storeAsset(await transformRaster(await readAsset(hash), t, key === "mask" ? "#000000" : background));
-  }
-  if (page.prepared) {
-    page.preparedAt = newPage.updatedAt;
-    page.thumbnail = await storePageThumbnail(await readAsset(page.prepared));
-    page.thumbnailAt = newPage.updatedAt;
-  }
-  if (page.strokes) page.strokes = page.strokes.map(s => ({ ...s, radius: s.radius * Math.sqrt(t.sx * t.sy),
-    points: s.points.map(p => ({ x: (p.x * oldPage.width * t.sx + t.dx) / t.width, y: (p.y * oldPage.height * t.sy + t.dy) / t.height })) }));
-  const currentLines = await listLines(episodeId);
-  const textMasks = new Map<string, string>();
-  for (const saved of snapshot.lines) {
-    if (!saved.region.textMask) continue;
-    textMasks.set(
-      saved.id,
-      await storeAsset(await transformRaster(await readAsset(saved.region.textMask), t, "#ffffff")),
-    );
-  }
-  sqlite.transaction(() => {
-    for (const saved of snapshot.lines) {
-      const line = currentLines.find(l => l.id === saved.id);
-      if (!line || !line.placed || line.x == null || line.y == null) continue;
-      const transformed = transformRegion(line, saved.region, oldPage, t);
-      const b = transformed.bounds;
-      const visible = b.x + b.w > 0 && b.y + b.h > 0 && b.x < 1 && b.y < 1;
-      sqlite.prepare("UPDATE lines SET x=?,y=?,w=?,h=?,placed=?,updated_at=? WHERE id=? AND episode_id=?")
-        .run(b.x, b.y, b.w, b.h, visible ? 1 : 0, Date.now(), line.id, episodeId);
-      const doc = getDoc<RegionData>(`region:${line.id}`, {});
-      const textMask = textMasks.get(saved.id);
-      putDoc(episodeId, doc.id, textMask ? { ...transformed.region, textMask } : transformed.region, doc.revision);
+  const frameId=randomUUID(),cache=new Map<string,Promise<string>>();
+  const raster=(asset:string,mask=false)=>{
+    const key=asset+(mask?':mask':':art');
+    if(!cache.has(key)) cache.set(key,(async()=>storeAsset(await transformRaster(await readAsset(asset),t,mask?'#000000':background)))());
+    return cache.get(key)!;
+  };
+  const pageState=async(saved:PageData):Promise<PageData>=>{
+    const page:PageData={...saved,geometryFrameId:frameId,completed:undefined,maskDiagnostics:undefined};
+    for(const key of ['prepared','original','cleaned','cleanBase','previousArtwork','mask'] as const) if(saved[key]) page[key]=await raster(saved[key]!,key==='mask');
+    if(page.prepared) {page.preparedAt=newPage.updatedAt;page.thumbnail=await storePageThumbnail(await readAsset(page.cleaned??page.cleanBase??page.prepared));page.thumbnailAt=newPage.updatedAt;}
+    if(saved.strokes) page.strokes=saved.strokes.map(s=>({...s,radius:s.radius*Math.sqrt(t.sx*t.sy),points:s.points.map(p=>({x:(p.x*oldPage.width*t.sx+t.dx)/t.width,y:(p.y*oldPage.height*t.sy+t.dy)/t.height}))}));
+    if(saved.contentApprovals) page.contentApprovals=saved.contentApprovals.flatMap(a=>{
+      const x=Math.max(0,a.x*t.sx+t.dx),y=Math.max(0,a.y*t.sy+t.dy),right=Math.min(t.width,(a.x+a.width)*t.sx+t.dx),bottom=Math.min(t.height,(a.y+a.height)*t.sy+t.dy);
+      return right>x&&bottom>y?[{...a,x,y,width:right-x,height:bottom-y}]:[];
+    });
+    const finishes=[];
+    for(const f of cleaningFinishes(saved)) {
+      const answer=await storeAsset(await sharp(await readAsset(f.answer)).resize(oldPage.width,oldPage.height,{fit:'fill'}).png().toBuffer());
+      finishes.push({...f,base:await raster(f.base),answer:await raster(answer),mask:await raster(f.mask,true),result:await raster(f.result)});
     }
-    const doc = getDoc<PageData>(`page:${oldPage.id}`, {});
-    putDoc(episodeId, doc.id, page, doc.revision);
+    if(finishes.length) {page.cleanFinishes=finishes;page.cleanFinish=finishes.length===1?{...finishes[0],result:page.cleaned??finishes[0].result}:undefined;}
+    return page;
+  };
+  const regionState=async(line:LineRow,saved:RegionData,history=false)=>{
+    const original={...line,...(history?saved.historyBounds:{})};
+    const transformed=transformRegion(original,saved,oldPage,t);
+    transformed.region.geometryFrameId=frameId;
+    if(original.x!=null&&original.y!=null) transformed.region.historyBounds=transformed.bounds;
+    if(saved.textMask) transformed.region.textMask=await storeAsset(await transformRaster(await readAsset(saved.textMask),t,'#ffffff'));
+    if(saved.layout&&saved.layout.key!==layoutKey(original,saved,oldPage,saved.layout.style,saved.layout.dpi)&&transformed.region.layout) transformed.region.layout.key=saved.layout.key;
+    return transformed;
+  };
+  const page=await pageState(snapshot.page),currentLines=await listLines(episodeId);
+  const histories:Record<string,{undo:any[];redo:any[]}>={};
+  const pageHistory=snapshot.history?.[`page:${oldPage.id}`]??{undo:[],redo:[]};
+  histories[`page:${oldPage.id}`]={undo:await Promise.all(pageHistory.undo.map(pageState)),redo:await Promise.all(pageHistory.redo.map(pageState))};
+  const regions:({line:LineRow}&ReturnType<typeof transformRegion>)[]=[];
+  for(const saved of snapshot.lines) {
+    const line=currentLines.find(l=>l.id===saved.id);
+    if(!line) continue;
+    const oldHistory=snapshot.history?.[`region:${line.id}`]??{undo:[],redo:[]};
+    histories[`region:${line.id}`]={undo:await Promise.all(oldHistory.undo.map(async r=>(await regionState(line,r,true)).region)),redo:await Promise.all(oldHistory.redo.map(async r=>(await regionState(line,r,true)).region))};
+    regions.push({line,...await regionState(line,saved.region)});
+  }
+  sqlite.transaction(()=>{
+    for(const {line,bounds:b,region} of regions) {
+      if(line.placed&&line.x!=null&&line.y!=null) {
+        const visible=b.x+b.w>0&&b.y+b.h>0&&b.x<1&&b.y<1;
+        sqlite.prepare('UPDATE lines SET x=?,y=?,w=?,h=?,placed=?,updated_at=? WHERE id=? AND episode_id=?').run(b.x,b.y,b.w,b.h,visible?1:0,Date.now(),line.id,episodeId);
+      }
+      const doc=getDoc<RegionData>(`region:${line.id}`,{});putDoc(episodeId,doc.id,region,doc.revision);
+    }
+    const doc=getDoc<PageData>(`page:${oldPage.id}`,{});putDoc(episodeId,doc.id,page,doc.revision);
+    // Geometry has its own page undo entry. Keep cleaning/style undo in the new frame.
+    for(const [id,h] of Object.entries(histories)) sqlite.prepare('UPDATE workflow_docs SET undo=?,redo=? WHERE id=?').run(JSON.stringify(h.undo),JSON.stringify(h.redo),id);
+    const frame=getDoc(`frame:${frameId}`,{});putDoc(episodeId,frame.id,{id:frameId,width:t.width,height:t.height,sources:[{frameId:snapshot.page.geometryFrameId??`legacy:${oldPage.id}:${oldPage.updatedAt}`,imageId:oldPage.id,transform:t}]},frame.revision);
+    markGeometryReviews(episodeId,oldPage.id);
   })();
-  for (const line of (await listLines(episodeId)).filter(l => l.imageId === oldPage.id))
-    broadcast(episodeId, { type: "line:upsert", line });
+  for(const line of (await listLines(episodeId)).filter(l=>l.imageId===oldPage.id)) broadcast(episodeId,{type:'line:upsert',line});
 }
 
 export async function restoreGeometry(episodeId: string, image: ImageRow, snapshot: GeometrySnapshot) {
@@ -144,10 +191,31 @@ export async function restoreGeometry(episodeId: string, image: ImageRow, snapsh
       if (!changed.changes) continue;
       const doc = getDoc<RegionData>(`region:${line.id}`, {});
       putDoc(episodeId, doc.id, line.region, doc.revision);
+      const history=snapshot.history?.[doc.id];
+      if(history) sqlite.prepare("UPDATE workflow_docs SET undo=?,redo=? WHERE id=?").run(JSON.stringify(history.undo),JSON.stringify(history.redo),doc.id);
     }
     const doc = getDoc<PageData>(`page:${image.id}`, {});
     putDoc(episodeId, doc.id, { ...snapshot.page, ...(snapshot.page.prepared ? { preparedAt: image.updatedAt } : {}) }, doc.revision);
+    const history=snapshot.history?.[doc.id];
+    if(history) {
+      const normalise=(states:PageData[])=>states.map(p=>({...p,...(p.prepared?{preparedAt:image.updatedAt}:{} )}));
+      sqlite.prepare('UPDATE workflow_docs SET undo=?,redo=? WHERE id=?').run(JSON.stringify(normalise(history.undo)),JSON.stringify(normalise(history.redo)),doc.id);
+    }
+    markGeometryReviews(episodeId,image.id);
+    for(const saved of snapshot.reviews??[]) {
+      const row=sqlite.prepare('SELECT progress FROM workflow_jobs WHERE id=? AND episode_id=?').get(saved.id,episodeId) as any;
+      if(row) {const progress=JSON.parse(row.progress);if(saved.geometry===undefined) delete progress.pageGeometry;else progress.pageGeometry=saved.geometry;sqlite.prepare('UPDATE workflow_jobs SET progress=? WHERE id=?').run(JSON.stringify(progress),saved.id);}
+    }
   })();
   for (const line of (await listLines(episodeId)).filter(l => l.imageId === image.id))
     broadcast(episodeId, { type: "line:upsert", line });
+}
+
+function markGeometryReviews(episodeId:string,imageId:string) {
+  for(const row of sqlite.prepare("SELECT id,payload,progress FROM workflow_jobs WHERE episode_id=? AND kind='page-proofread'").all(episodeId) as any[]) {
+    const progress=JSON.parse(row.progress);
+    if(JSON.parse(row.payload).imageId!==imageId&&!(progress.pageGeometry?.imageIds??[]).includes(imageId)) continue;
+    progress.pageGeometry={imageIds:[...new Set([imageId,...progress.pageGeometry?.imageIds??[]])],stale:true,reason:'Page geometry changed'};
+    sqlite.prepare('UPDATE workflow_jobs SET progress=? WHERE id=?').run(JSON.stringify(progress),row.id);
+  }
 }

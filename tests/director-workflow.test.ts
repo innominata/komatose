@@ -187,7 +187,7 @@ const { createLocalHttpRow, updateRegistryRow } =
   await import("../src/lib/server/modelRegistryStore");
 const { fixturePasses, localMaskFixture } = await import("./local-ocr-fixture");
 const {
-  startDirector,
+  startDirector: startDirectorActual,
   stopDirector,
   resumeDirector,
   undoDirector,
@@ -196,6 +196,21 @@ const {
   directorPreflight,
   recoverDirectorRuns,
 } = await import("../src/lib/server/directorService");
+const { ALL_DIRECTOR_TASKS } = await import("../src/lib/director");
+// Most fixtures exercise the complete workflow; paid tasks are explicitly selected here.
+const startDirector = (opts: Parameters<typeof startDirectorActual>[0]) =>
+  startDirectorActual({...opts, policy: {tasks: [...ALL_DIRECTOR_TASKS], ...opts.policy}});
+
+test('granular task defaults exclude every paid proofreading task and keep stages independent',async()=>{
+  const {directorPolicy,directorTaskStages,SAVED_DIRECTOR_TASKS}=await import('../src/lib/director');
+  assert.deepEqual(directorPolicy().tasks,SAVED_DIRECTOR_TASKS);
+  assert.deepEqual([...directorTaskStages(['prepare'])],['prepare']);
+  assert.deepEqual([...directorTaskStages(['regions'])],['read']);
+  assert.deepEqual([...directorTaskStages(['classify'])],['classify']);
+  assert.deepEqual([...directorTaskStages(['proofread-raw'])],['translate']);
+  assert.deepEqual([...directorTaskStages(['request-raw'])],['raw-proofread']);
+});
+
 const {
   memorySettings,
   saveMemorySettings,
@@ -561,7 +576,7 @@ test("v2 runs without Clean completion and never grants human approval", async (
         )
         .get(result.runId, "passed") as any
     ).n,
-    7,
+    (await import("../src/lib/director")).DIRECTOR_STAGES.length,
   );
   const before = requests.length;
   await directorOverviewAsync(page.episode.id);
@@ -1965,6 +1980,7 @@ test("undo after an interrupted operation restores committed changes and preserv
 });
 
 test("cleaning uses a verified mask, preserves outside pixels and never approves its own work", async () => {
+  await fixturePasses('lama-manga',['inpaint']);
   const page = await seedChapter("cleaning-pipeline", 7);
   const doc = getDoc<any>(`page:${page.imageId}`, {});
   putDoc(
@@ -2020,7 +2036,7 @@ test("cleaning uses a verified mask, preserves outside pixels and never approves
             episode_id: page.episode.id,
             model: JSON.stringify(selected),
             proofreader: JSON.stringify(selected),
-            policy: "{}",
+            policy: JSON.stringify({tasks: [...ALL_DIRECTOR_TASKS]}),
           },
           ...page,
           user,
@@ -2093,7 +2109,7 @@ test("progressive cleaning fills balloons, checkpoints successes and escalates o
     const legacy=opts.legacyEditorBubble?await storeAsset(await sharp({create:{width:400,height:500,channels:3,background:'white'}}).png().toBuffer()):undefined;
     putDoc(page.episode.id,doc.id,{prepared:raw,preparedAt:1,cleanBase:raw,
       ...(legacy?{cleaned:legacy,directorCleaning:{raw,artwork:legacy,regions:{[ids[0]]:{geometry:'legacy',method:editor}}}}:{})},doc.revision);
-    const policy=directorPolicy({cleanMethod:opts.primary||'lama-manga',cleanFallbackModel:opts.noEditor?'':editor,repairCycles:3});
+    const policy=directorPolicy({tasks:[...ALL_DIRECTOR_TASKS],cleanMethod:opts.primary||'lama-manga',cleanFallbackModel:opts.noEditor?'':editor,repairCycles:3});
     const runId=createJob(page.episode.id,'director',{});
     sqlite.prepare("INSERT INTO director_runs(id,episode_id,user_id,scope,model,proofreader,state,page_ids,created_at,updated_at,version,policy) VALUES(?,?,?,'page',?,?,'running',?,1,1,2,?)")
       .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(policy));
@@ -2551,7 +2567,7 @@ test("outside-lettering close-ups revoke cached halos and invented lines before 
     const clean=await storeAsset(await sharp(svg('')).png().toBuffer());
     const doc=getDoc<any>(`page:${page.imageId}`,{});
     putDoc(page.episode.id,doc.id,{prepared:raw,cleaned:partial,directorCleaning:mode==='unstamped'?undefined:{raw,artwork:partial,regions:{[page.lineId]:{geometry:digest({box,polygon}),method:'lama-manga',bubbleToolsOnly:true}}}},doc.revision);
-    const policy=directorPolicy({cleanMethod:'lama-manga',cleanFallbackModel:editor});
+    const policy=directorPolicy({tasks:[...ALL_DIRECTOR_TASKS],cleanMethod:'lama-manga',cleanFallbackModel:editor});
     const runId=createJob(page.episode.id,'director',{});
     sqlite.prepare("INSERT INTO director_runs(id,episode_id,user_id,scope,model,proofreader,state,page_ids,created_at,updated_at,version,policy) VALUES(?,?,?,'page',?,?,'running',?,1,1,10,?)")
       .run(runId,page.episode.id,user.id,JSON.stringify(selected),JSON.stringify(selected),JSON.stringify([page.imageId]),JSON.stringify(policy));
@@ -4051,7 +4067,131 @@ test('a human exclusion remains protected when the proofreader reports text ther
   } finally {respond=normal;}
 });
 
-test('an old raw response for different source pixels is not reused',async()=>{
+test('granular saved-text tasks apply source and English without OCR, cleaning or proofreading',async()=>{
+  const page=await seedChapter('saved-only-typeset',40);
+  sqlite.prepare("UPDATE lines SET source='',body='',source_state='unreadable' WHERE id=?").run(page.lineId);
+  const parent=await savedRawProofread(page,`Region ${page.lineId}: Original source: こんにちは; English: Hello`);
+  const before=getDoc<any>(`page:${page.imageId}`,{}).data;
+  const start=proofreaderRequests.length;
+  const result=await runPage(page,{tasks:['prepare','regions','classify','proofread-raw','typeset']});
+  assert.equal(result.overview.pages[0].state,'partial',result.overview.pages[0].detail);
+  const line=(await listLines(page.episode.id)).find(l=>l.id===page.lineId)!;
+  assert.equal(line.source,'こんにちは');
+  assert.equal(line.body,'Hello');
+  assert.equal(line.sourceState,'read');
+  assert.ok(getDoc<any>(`region:${line.id}`,{}).data.layout);
+  assert.equal(getDoc<any>(`page:${page.imageId}`,{}).data.cleanBase,before.cleanBase);
+  assert.equal(proofreaderRequests.length,start);
+  assert.ok(result.overview.events.some(e=>e.kind==='critique:reused'&&e.detail.jobId===parent));
+  assert.equal(result.overview.events.some(e=>['clean:request','transcription:attempt','proofreader:question'].includes(e.kind)),false);
+  assert.equal(listJobs(page.episode.id).filter(j=>['page-proofread','region-ocr','clean'].includes(j.kind)).length,1);
+});
+
+test('request-raw task reuses identical pixels encoded differently and does not apply text',async()=>{
+  const page=await seedChapter('raw-task-reencoded',40);
+  const parent=await savedRawProofread(page,'Original source: こんにちは; English: Hello');
+  const {capturePageImages}=await import('../src/lib/server/pageImages');
+  const capture=await capturePageImages(page.series,page.episode,page.imageId,false);
+  const encoded=await storeAsset(await sharp(capture.raw).png({compressionLevel:0}).toBuffer());
+  assert.notEqual(encoded,await storeAsset(capture.raw));
+  const job=listJobs(page.episode.id).find(j=>j.id===parent)!;
+  updateJob(parent,'completed',{...job.progress,snapshot:{...(job.progress.snapshot as any),raw:encoded}});
+  sqlite.prepare("UPDATE lines SET source='',body='',source_state='unreadable' WHERE id=?").run(page.lineId);
+  const start=proofreaderRequests.length;
+  for(let i=0;i<2;i++) {
+    const result=await runPage(page,{tasks:['request-raw']});
+    assert.equal(result.overview.pages[0].state,'partial',result.overview.pages[0].detail);
+  }
+  assert.equal(proofreaderRequests.length,start);
+  assert.equal((await listLines(page.episode.id)).find(l=>l.id===page.lineId)!.body,'');
+});
+
+test('request-raw task buys a missing reading once and reuses it on subsequent runs',async()=>{
+  const page=await seedChapter('raw-task-once',40);
+  const start=proofreaderRequests.length;
+  for(let i=0;i<2;i++) {
+    const result=await runPage(page,{tasks:['request-raw']});
+    assert.equal(result.overview.pages[0].state,'partial',result.overview.pages[0].detail);
+  }
+  assert.deepEqual(proofreaderRequests.slice(start).map(r=>r.mode),['raw']);
+});
+
+test('applying raw text without the paid task never commissions a missing reading',async()=>{
+  const page=await seedChapter('apply-only-no-raw',40);
+  const start=proofreaderRequests.length;
+  const result=await runPage(page,{tasks:['proofread-raw']});
+  assert.equal(result.overview.pages[0].state,'unresolved');
+  assert.match(result.overview.pages[0].detail,/Select Request missing raw proofreads/);
+  assert.equal(proofreaderRequests.length,start);
+});
+
+test('preparation, geometry, classification and typesetting alone never request a raw proofread',async()=>{
+  const start=proofreaderRequests.length;
+  for(const task of ['prepare','regions','classify','typeset'] as const) {
+    const page=await seedChapter(`independent-${task}`,40);
+    const result=await runPage(page,{tasks:[task]});
+    assert.equal(result.overview.pages[0].state,'partial',result.overview.pages[0].detail);
+  }
+  assert.equal(proofreaderRequests.length,start);
+});
+
+test('resliced pages retain stale raw readings and cannot trigger duplicate paid raw requests',async()=>{
+  const page=await seedChapter('resliced-stale-proofread',40);
+  const parent=await savedRawProofread(page,'Original source: こんにちは; English: Hello');
+  const image=(await listImages(page.episode.id)).find(i=>i.id===page.imageId)!;
+  sqlite.prepare(`INSERT INTO images(id,episode_id,filename,original_name,sort_order,width,height,created_at,updated_at,page_number) VALUES(?,?,?,'neighbor.png',1,?,?,1,1,2)`)
+    .run(`${page.imageId}-neighbor`,page.episode.id,image.filename,image.width,image.height);
+  const doc=getDoc<any>(`page:${page.imageId}`,{});
+  putDoc(page.episode.id,`page:${page.imageId}-neighbor`,doc.data,0);
+  const {previewBoundary,moveBoundary}=await import('../src/lib/server/pageBoundary');
+  const preview=await previewBoundary({...page,user},page.imageId,400);
+  await moveBoundary({...page,user},page.imageId,400,preview.revisionToken);
+  assert.equal((listJobs(page.episode.id).find(j=>j.id===parent)!.progress.pageGeometry as any).stale,true);
+  const start=proofreaderRequests.length;
+  const result=await runPage(page,{tasks:['request-raw']});
+  assert.equal(result.overview.pages[0].state,'unresolved');
+  assert.match(result.overview.pages[0].detail,/no duplicate raw proofread was requested/);
+  assert.equal(proofreaderRequests.length,start);
+});
+
+test('saved-only Director reports a missing raw reading without requesting one',async()=>{
+  const page=await seedChapter('saved-only-missing',40);
+  const start=proofreaderRequests.length;
+  const result=await runPage(page,{savedProofreadsOnly:true,tasks:['proofread-raw','typeset']});
+  assert.equal(result.overview.pages[0].state,'unresolved');
+  assert.match(result.overview.pages[0].detail,/no completed saved raw proofread matches/);
+  assert.equal(proofreaderRequests.length,start);
+});
+
+test('saved-only Director leaves ambiguous mapping for manual review without a follow-up',async()=>{
+  const page=await seedChapter('saved-only-ambiguous',40);
+  await savedRawProofread(page,`Region ${page.lineId}: Original source: こんにちは; English: Hello`);
+  const normal=respond,start=proofreaderRequests.length;
+  respond=(purpose,data)=>purpose==='correct-text'
+    ? {textComplete:false,sourceReviewLineIds:[page.lineId],reason:'Ambiguous mapping',edits:[]}
+    : normal(purpose,data);
+  try {
+    const result=await runPage(page,{savedProofreadsOnly:true,tasks:['proofread-raw','typeset']});
+    assert.equal(result.overview.pages[0].state,'unresolved');
+    assert.match(result.overview.pages[0].detail,/manual review; no proofreader follow-up was requested/);
+    assert.equal(proofreaderRequests.length,start);
+  } finally {respond=normal;}
+});
+
+test('saved-only Director refuses a saved reading for different source pixels without requesting another',async()=>{
+  const page=await seedChapter('saved-only-stale',40);
+  await savedRawProofread(page,'A reading of the old raw');
+  const changed=await storeAsset(await sharp({create:{width:400,height:500,channels:3,background:'#fafafa'}}).png().toBuffer());
+  const doc=getDoc<any>(`page:${page.imageId}`,{});
+  putDoc(page.episode.id,doc.id,{...doc.data,prepared:changed,cleanBase:changed},doc.revision);
+  const start=proofreaderRequests.length;
+  const result=await runPage(page,{savedProofreadsOnly:true,tasks:['proofread-raw']});
+  assert.equal(result.overview.pages[0].state,'unresolved');
+  assert.match(result.overview.pages[0].detail,/saved raw proofread exists/);
+  assert.equal(proofreaderRequests.length,start);
+});
+
+test('an old raw response for different source pixels blocks a duplicate paid raw request',async()=>{
   const page=await seedChapter('frontier-stale-raw',40);
   await savedRawProofread(page,'Old raw page reading');
   const changed=await storeAsset(await sharp({create:{width:400,height:500,channels:3,background:'#fafafa'}}).png().toBuffer());
@@ -4059,8 +4199,9 @@ test('an old raw response for different source pixels is not reused',async()=>{
   putDoc(page.episode.id,doc.id,{...doc.data,prepared:changed,cleanBase:changed},doc.revision);
   const start=proofreaderRequests.length;
   const result=await runPage(page);
-  assert.equal(result.overview.pages[0].state,'passed',result.overview.pages[0].detail);
-  assert.deepEqual(proofreaderRequests.slice(start).map(r=>r.mode),['raw','critique']);
+  assert.equal(result.overview.pages[0].state,'unresolved');
+  assert.match(result.overview.pages[0].detail,/no duplicate raw proofread was requested/);
+  assert.equal(proofreaderRequests.length,start);
 });
 
 test('a textless page without regions does not request transcription or raw proofreading',async()=>{

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { POSTPROCESS_METHODS, postprocessLabel, type PostprocessMethod } from "$lib/postprocess";
+  import { cleaningFinishes, POSTPROCESS_METHODS, postprocessLabel, type PostprocessMethod } from "$lib/postprocess";
   import type { ImageRow } from "$lib/types";
   import type { PageData } from "$lib/workflow";
 
@@ -26,7 +26,9 @@
     onapplied: () => void | Promise<void>;
   } = $props();
 
-  const finish = $derived(pageData.cleanFinish && pageData.cleanFinish.result === pageData.cleaned ? pageData.cleanFinish : undefined);
+  let finishIndex=$state(0),previewRevision=$state<number|undefined>();
+  const finishes=$derived(cleaningFinishes(pageData));
+  const finish = $derived(pageData.cleanFinishes?.length?finishes[finishIndex]:pageData.cleanFinish && pageData.cleanFinish.result === pageData.cleaned ? pageData.cleanFinish : undefined);
   const current = $derived(finish?.method);
   let previews = $state<Preview[]>([]);
   let before = $state("");
@@ -53,7 +55,8 @@
     loading = true;
     error = "";
     try {
-      const data = await post({ action: "postprocess-previews", imageId: page.id });
+      const data = await post({ action: "postprocess-previews", imageId: page.id,finishIndex });
+      previewRevision=data.revision;
       previews = data.previews;
       before = data.before;
     } catch (e) {
@@ -75,7 +78,7 @@
     applying = true;
     error = "";
     try {
-      await post({ action: "apply-postprocess", imageId: page.id, method: pick });
+      await post({ action: "apply-postprocess", imageId: page.id, method: pick,finishIndex,expectedRevision:previewRevision });
       await onapplied();
       close();
     } catch (e) {
@@ -103,6 +106,7 @@
 <dialog class="hud-modal pp" bind:this={dialog} aria-labelledby="pp-title" onclose={onclose}>
   <header class="hud-window-bar"><h3 id="pp-title">Post-processing</h3></header>
   <div class="pp-body">
+    {#if finishes.length>1}<label>Saved cleaning fragment<select aria-label="Saved cleaning fragment" bind:value={finishIndex}>{#each finishes as f,i}<option value={i}>Clean {i+1} · {postprocessLabel(f.method)}</option>{/each}</select></label>{/if}
     {#if !finish}
       <p class="muted">This page's cleaning has no saved image-editor result. Post-processing applies to Qwen and FLUX cleans; clean the page again with one to change it.</p>
     {:else}

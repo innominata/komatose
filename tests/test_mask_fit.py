@@ -115,5 +115,50 @@ class MaskFit(unittest.TestCase):
         self.assertIsNone(mask_fit.flat_tone(noise, mask_fit.paper_tolerance(sigma)))
 
 
+def lettered_balloon(glow):
+    """A word in a large balloon; with `glow`, a grey halo 7 px round the letters."""
+    img = np.full((300, 400), 245, np.uint8)
+    cv2.ellipse(img, (200, 150), (170, 120), 0, 0, 360, 0, 3)
+    raw = np.zeros_like(img)
+    cv2.putText(raw, 'TEXT', (110, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.8, 255, 5)
+    if glow:
+        img[cv2.dilate(raw, mask_fit.disc(7)) > 0] = 200
+    img[raw > 0] = 20
+    allowed = np.zeros_like(img)
+    cv2.rectangle(allowed, (100, 110), (300, 190), 255, -1)
+    return img, raw, allowed
+
+
+class Expansion(unittest.TestCase):
+    def test_a_larger_expansion_grows_the_mask_inside_a_balloon(self):
+        # Neighbouring glyphs used to stop each other's growth, so every expansion
+        # gave the same mask.
+        img, raw, allowed = lettered_balloon(glow=False)
+        _, page = mask_fit.page_statistics(img)
+        sizes = [int(np.count_nonzero(mask_fit.fit_region(img, raw, allowed, 'inside', e, page))) for e in (5, 9, 13)]
+        self.assertLess(sizes[0], sizes[1])
+        self.assertLess(sizes[1], sizes[2])
+
+    def test_a_forced_expansion_reaches_past_a_glow_but_not_the_outline(self):
+        img, raw, allowed = lettered_balloon(glow=True)
+        _, page = mask_fit.page_statistics(img)
+        halo = (img == 200) & (cv2.dilate(allowed, np.ones((3, 3), np.uint8)) > 0)
+        plain = mask_fit.fit_region(img, raw, allowed, 'inside', 13, page) > 0
+        forced = mask_fit.fit_region(img, raw, allowed, 'inside', 13, page, force=True) > 0
+        self.assertLess(np.mean(plain[halo]), .9, 'an ordinary mask still stops where the paper stops')
+        self.assertEqual(np.mean(forced[halo]), 1.0)
+
+        tight = np.full((200, 300), 245, np.uint8)
+        cv2.rectangle(tight, (80, 70), (220, 130), 0, 3)
+        letters = np.zeros_like(tight)
+        cv2.putText(letters, 'TEXT', (95, 112), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255, 3)
+        tight[letters > 0] = 20
+        box = np.zeros_like(tight)
+        cv2.rectangle(box, (85, 75), (215, 125), 255, -1)
+        _, page = mask_fit.page_statistics(tight)
+        grown = mask_fit.fit_region(tight, letters, box, 'inside', 19, page, force=True) > 0
+        self.assertEqual(int(np.count_nonzero(grown & (tight < 60) & (letters == 0))), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

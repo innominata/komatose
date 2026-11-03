@@ -39,6 +39,8 @@ const groups = {
     "tests/series-reading-preferences.test.ts",
     "tests/clean-style-workflow.test.ts",
     "tests/page-undo-safety.test.ts",
+    "tests/page-reframe.test.ts",
+    "tests/chapter-mask.test.ts",
     "tests/transcription-decider.test.ts",
     "tests/model-packages.test.ts",
     "tests/model-capabilities.test.ts",

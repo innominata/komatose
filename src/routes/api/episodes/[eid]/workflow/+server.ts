@@ -1,8 +1,9 @@
+import { startChapterMask, cancelChapterMask } from '$lib/server/chapterMask';
 import { normalizeCharRuns } from "$lib/charStyles";
 import { restoreDeletion } from "$lib/server/regionTrash";
 import { applyCleanComparison, startCleanComparison } from "$lib/server/cleanCompare";
-import { defaultPostprocess, finishEditorAnswer, postprocessPreviews, refinish, setDefaultPostprocess } from "$lib/server/postprocess";
-import { isPostprocessMethod, type PostprocessMethod } from "$lib/postprocess";
+import { defaultPostprocess, finishEditorAnswer, postprocessPreviews, refinish, refinishFragment, setDefaultPostprocess } from "$lib/server/postprocess";
+import { cleaningFinishes, isPostprocessMethod, type PostprocessMethod } from "$lib/postprocess";
 import { mapTextPaths } from "$lib/textPath";
 import { runWorkflowPng } from '$lib/server/workflowImages';
 import { decisionThreshold, DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
@@ -451,6 +452,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         if (job.kind === 'page-proofread') cancelPageProofread(job.id);
         if (job.kind === 'page-proofread-batch') cancelChapterRawProofread(job.id);
         if (job.kind === "describe") cancelDescribePages(episode.id);
+        if (job.kind === "mask-chapter") cancelChapterMask(job.id);
         if (job.kind === "reslice") cancelReslice(episode.id);
         aborts.get(job.id)?.abort();
         updateJob(job.id, "cancelled", {
@@ -475,6 +477,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           ),
           { status: 202 },
         );
+      if (job.kind === 'mask-chapter') return json(await startChapterMask({series, episode, maskEngine: String(job.payload.engine || 'auto'), expansion: Number(job.payload.expansion ?? 5), imageIds: job.payload.imageIds?.filter(id => !job.pages.some(p => p.image_id === id && p.state === 'completed'))}), {status:202});
       if (job.kind === "reslice")
         return json(startReslice({ series, episode, user }, job.payload), { status: 202 });
       if (job.kind === 'page-proofread') {
@@ -754,17 +757,20 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       const page = (await listImages(episode.id)).find((p) => p.id === b.imageId);
       if (!page) throw new WorkflowError("Page not found", 404);
       const doc = getDoc<PageData>(`page:${page.id}`, {});
-      const finish = doc.data.cleanFinish;
-      if (!finish || finish.result !== doc.data.cleaned)
+      const finishes=cleaningFinishes(doc.data),index=Number(b.finishIndex??0),finish=Number.isInteger(index)?finishes[index]:undefined;
+      if (!finish || (!doc.data.cleanFinishes?.length&&finish.result!==doc.data.cleaned))
         throw new WorkflowError("This page's cleaning has no saved editor result. Clean it again with an image editor to change its post-processing.");
-      if (action === "postprocess-previews") return json(await postprocessPreviews(finish));
+      if (action === "postprocess-previews") return json({...await postprocessPreviews(finish),revision:doc.revision});
       assertEpisodeIdle(episode.id);
       if (!isPostprocessMethod(b.method)) throw new WorkflowError("Unknown post-processing method");
-      const artifact = await refinish(finish, b.method);
+      if(b.expectedRevision!==undefined&&b.expectedRevision!==doc.revision) throw new WorkflowError('The saved cleaning changed. Preview again.',409);
+      const artifact = doc.data.cleanFinishes?.length?await refinishFragment(finish,b.method,pageArtwork(doc.data)!):await refinish(finish, b.method);
+      const updated={...finish,method:b.method,result:artifact};
       const saved = putDoc(
         episode.id,
         doc.id,
-        withPreviousArtwork(doc.id, doc.data, { ...doc.data, cleaned: artifact, cleanApproved: false, cleanFinish: { ...finish, method: b.method, result: artifact } }, "replace"),
+        withPreviousArtwork(doc.id, doc.data, { ...doc.data, cleaned: artifact, cleanApproved: false,
+          cleanFinish:finishes.length===1?updated:undefined,cleanFinishes:doc.data.cleanFinishes?.length?finishes.map((f,i)=>i===index?updated:f):undefined }, "replace"),
         doc.revision,
       );
       return json({ doc: saved });
@@ -1196,6 +1202,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         revision: doc.revision + 1,
       });
       return json({ ok: true });
+    }
+    if (action === 'mask-chapter') {
+      requireClean(user);
+      assertEpisodeIdle(episode.id);
+      return json(await startChapterMask({series, episode, maskEngine: String(b.maskEngine || 'auto'), expansion: Number(b.expansion ?? 5)}), {status:202});
     }
     if (action === "typeset-all") {
       requireClean(user);

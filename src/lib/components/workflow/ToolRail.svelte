@@ -13,6 +13,7 @@
     crop: { id: "crop", icon: "bi-crop", title: "Crop", group: "" },
     split: { id: "split", icon: "bi-vr", title: "Split page", group: "" },
     reslice: { id: "reslice", icon: "bi-hr", title: "Reslice strips", group: "" },
+    boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary',group:''},
     brush: { id: "brush", icon: "bi-brush", title: "Mask brush (B)", group: "Mask" },
     erase: { id: "erase", icon: "bi-eraser", title: "Erase mask (E)", group: "Mask" },
     "mask-grow": { id: "mask-grow", icon: "bi-arrows-angle-expand", title: "Grow mask (G)", group: "Mask" },
@@ -53,7 +54,7 @@
   const tools = $derived.by((): ToolDef[] => {
     const zoom = ALL.zoom;
     if (step === "Prepare")
-      return [ALL.select, ...(canUpload ? [ALL.crop, pageMode === "strip" ? ALL.reslice : ALL.split] : []), zoom];
+      return [ALL.select, ...(canUpload ? [ALL.crop, pageMode === "strip" ? ALL.reslice : ALL.split,ALL.boundary] : []), zoom];
     if (step === "Translate" || step === "Review")
       return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), zoom] : [ALL.select, zoom];
     if (step === "Clean")

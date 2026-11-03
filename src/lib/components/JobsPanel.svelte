@@ -21,6 +21,7 @@
     error?: string | null;
     payload?: Record<string, unknown>;
     progress?: {
+    pageGeometry?: {stale:boolean;reason:string;imageIds:string[]};
       message?: string;
       manualRequired?: boolean;
       manualSlices?: { imageId: string; height: number }[];
@@ -120,6 +121,7 @@
         export: "Export",
         selection: "Selection translate",
         mask: "Detect mask",
+        "mask-chapter": "Mask chapter",
         clean: "Clean",
         geometry: "Geometry",
       }[kind] || kind
@@ -290,6 +292,7 @@
               <button type="button" class="small accent" onclick={() => onretry(job.id)}>Retry unfinished work</button>
             {/if}
             {#if job.kind === "page-proofread"}
+              {#if job.progress?.pageGeometry?.stale}<span class="small">Stale — {job.progress.pageGeometry.reason.toLowerCase()}</span>{/if}
               <button type="button" class="small" onclick={() => onopencritique(job.id)}>{job.progress?.critique ? "Open critique" : "Open proofreader"}</button>
             {/if}
             {#if job.progress?.artifact}

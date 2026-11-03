@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import DirectorImageViewer from './DirectorImageViewer.svelte';
-  import { ALL_DIRECTOR_TASKS, DIRECTOR_TASKS, directorStatusLabel, type DirectorFinding, type DirectorTask } from '$lib/director';
+  import { ALL_DIRECTOR_TASKS, SAVED_DIRECTOR_TASKS, DIRECTOR_TASKS, directorStatusLabel, type DirectorFinding, type DirectorTask } from '$lib/director';
   let { apiBase, scope, pageId, canEdit, busy, onnavigate, onsettings, models = $bindable([]), locked = $bindable(false), open = $bindable(false) }:
     {apiBase:string;scope:'page'|'chapter';pageId:string|null;canEdit:boolean;busy:boolean;onnavigate?:(pageId:string,lineId:string|undefined,stage:string)=>void;onsettings?:()=>void;models?:{id:string;name:string;model:string}[];locked?:boolean;open?:boolean}=$props();
   type Run = {id:string;scope:string;state:string;message:string;current_index:number;pageIds:string[];
@@ -36,24 +36,25 @@
   $effect(()=>{ if(open && !wasOpen) mode=untrack(()=>scope); wasOpen=open; });
   // Narrow screens show either the log list or one item's detail.
   let showDetail=$state(false);
-  const TASKS_KEY='komatose.director.tasks';
+  const TASKS_KEY='komatose.director.tasks.v2';
   function savedTasks():DirectorTask[] {
     try {
       const saved=JSON.parse(localStorage.getItem(TASKS_KEY)||'null');
       if (Array.isArray(saved)) return ALL_DIRECTOR_TASKS.filter(task=>saved.includes(task));
     } catch { /* Storage may be unavailable. */ }
-    return [...ALL_DIRECTOR_TASKS];
+    return [...SAVED_DIRECTOR_TASKS];
   }
   let tasks=$state<DirectorTask[]>(savedTasks());
   $effect(()=>{ try { localStorage.setItem(TASKS_KEY,JSON.stringify(tasks)); } catch { /* Per-browser convenience only. */ } });
   const presets:{label:string;tasks:DirectorTask[]}[]=[
-    {label:'All',tasks:[...ALL_DIRECTOR_TASKS]},
-    {label:'Text',tasks:['prepare','proofread-raw']},
+    {label:'Saved proofreads → typeset',tasks:[...SAVED_DIRECTOR_TASKS]},
+    {label:'All (includes paid)',tasks:[...ALL_DIRECTOR_TASKS]},
+    {label:'Text',tasks:['prepare','regions','classify','proofread-raw']},
     {label:'Clean',tasks:['clean-bubbles','clean-hard','clean-sfx']},
-    {label:'Finish',tasks:['typeset','proof']},
+    {label:'Finish + paid proofread',tasks:['typeset','proof']},
     {label:'None',tasks:[]},
   ];
-  const samePreset=(list:DirectorTask[])=>list.length===tasks.length&&list.every(task=>tasks.includes(task));
+  const samePreset=(preset:typeof presets[number])=>preset.tasks.length===tasks.length&&preset.tasks.every(task=>tasks.includes(task));
   function toggleTask(task:DirectorTask,on:boolean) {
     tasks=ALL_DIRECTOR_TASKS.filter(item=>item===task?on:tasks.includes(item));
   }
@@ -104,7 +105,7 @@
     const list=(ids??[]).map(regionNumber);
     return !list.length?'no regions':list.length===1?`region ${list[0]}`:`regions ${list.join(', ')}`;
   }
-  const STAGE_NAMES:Record<string,string>={prepare:'Prepare',transcribe:'Transcription',proofread:'Proofreading','proofread-raw':'Proofread raw',
+  const STAGE_NAMES:Record<string,string>={prepare:'Prepare',read:'Region geometry',classify:'Region types',translate:'Apply saved text','raw-proofread':'Reuse or request raw proofread',transcribe:'Transcription',proofread:'Proofreading','proofread-raw':'Apply raw proofread',
     clean:'Cleaning','clean-bubbles':'Bubble cleaning','clean-hard':'Hard bubble cleaning','clean-sfx':'SFX cleaning',typeset:'Typesetting',proof:'Final proof',check:'Checks'};
   const stageName=(stage:unknown)=>STAGE_NAMES[String(stage)]??String(stage??'Stage').replace(/[-_]/g,' ').replace(/^./,c=>c.toUpperCase());
   const PURPOSES:Record<string,string>={'inspect-cleaning':'Cleaning check','inspect-existing':'Page cleaning check'};
@@ -196,7 +197,7 @@
       `Page ${pageNumber} ${directorStatusLabel(detail.state).toLowerCase()}${detail.state==='unresolved'&&detail.detail?`: ${tidy(detail.detail)}`:''}`;
     if (event.kind==='request') return detail.task==='describe'?'Asked the model to describe the page':
       detail.task==='transcribe'?'Asked the model to transcribe the page':`Requested ${detail.task}`;
-    if (event.kind==='critique:reused') return 'Reused the saved proofreader critique';
+    if (event.kind==='critique:reused') return detail.mode==='raw'?'Used the saved raw proofread':'Used the saved proofreader response';
     if (event.kind==='proofreader:question') return `Asked the proofreader about ${region(detail.lineId)}`;
     if (event.kind==='proofreader:images') return detail.mode==='raw'?'Asked the proofreader to read the raw page':detail.mode==='raw-follow-up'?'Sent a region question to the proofreader':'Asked the proofreader to check the work';
     if (event.kind==='critique') return 'Proofreader critique received';
@@ -340,13 +341,13 @@
     const model=models.find(item=>item.id===selectedModel);
     if (!model) return;
     void act({action:retryBlocked?'retry-blocked':'start',scope:mode,imageId:mode==='page'?logPage?.id:undefined,
-      model:{engine:model.id,model:model.model||''},recheckAll,tasks});
+      model:{engine:model.id,model:model.model||''},recheckAll,tasks,policy:{savedProofreadsOnly:false}});
   }
   async function checkSetup() {
     const model=models.find(item=>item.id===selectedModel);
     working=true;
     try {
-      const response=await fetch(`${apiBase}/director`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'preflight',model:model?{engine:model.id,model:model.model}:undefined})});
+      const response=await fetch(`${apiBase}/director`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'preflight',model:model?{engine:model.id,model:model.model}:undefined,policy:{savedProofreadsOnly:false,tasks}})});
       const result=await response.json();if(!response.ok) throw new Error(result.error);
       preflight=result.issues;
       if(!preflight.length) preflight=[{stage:'ready',message:'Prerequisites available. Pages will be checked individually.'}];
@@ -425,16 +426,18 @@
         <summary class:warn={!tasks.length} title="Choose which Director tasks run">Tasks {tasks.length}/{ALL_DIRECTOR_TASKS.length} <i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
         <div class="director-pop director-tasks" aria-label="Director tasks">
           <div class="director-presets" role="group" aria-label="Task presets">
-            {#each presets as preset}<button type="button" class:active={samePreset(preset.tasks)} aria-pressed={samePreset(preset.tasks)} disabled={working||locked} onclick={()=>tasks=[...preset.tasks]}>{preset.label}</button>{/each}
+            {#each presets as preset}<button type="button" class:active={samePreset(preset)} aria-pressed={samePreset(preset)} disabled={working||locked} onclick={()=>tasks=[...preset.tasks]}>{preset.label}</button>{/each}
           </div>
           <ol>
             {#each DIRECTOR_TASKS as task, index}
               <li><label class="director-task" class:on={tasks.includes(task.id)} title={task.description}>
                 <input type="checkbox" checked={tasks.includes(task.id)} disabled={working||locked} onchange={(e)=>toggleTask(task.id,e.currentTarget.checked)}>
                 <span class="step">{index+1}</span>{task.label}
+                {#if ['request-raw','proofread-followups','proof'].includes(task.id)}<small aria-hidden="true">Paid proofreader</small>{/if}
               </label></li>
             {/each}
           </ol>
+          <p class="director-hint">Applying saved text, geometry checks, classification and typesetting never request proofreading. Paid proofreader tasks are marked separately. Existing raw proofreads are reused.</p>
           {#if !tasks.length}<p class="director-hint warn">Choose at least one task.</p>
           {:else if tasks.length<ALL_DIRECTOR_TASKS.length}<p class="director-hint">Unselected tasks are skipped; a page is only marked “Checks passed” when every task runs.</p>{/if}
         </div>
@@ -603,6 +606,9 @@
   .director-more .inline,.director-tasks .inline{display:flex;align-items:center;gap:6px}
   .director-tasks{min-width:min(460px,90vw)}
   .director-tasks ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:5px}
+  .director-tasks li{max-width:100%}
+  .director-tasks .director-task{white-space:normal}
+  .director-task small{font-size:.65rem;flex-shrink:0}
   .director-presets{display:flex;gap:4px;flex-wrap:wrap}.director-presets button{background:transparent;color:inherit;border:1px solid var(--d-line);border-radius:999px;padding:2px 10px;font-size:.75rem;cursor:pointer}.director-presets button.active{border-color:var(--d-accent);color:var(--d-accent);font-weight:600}
   .director-task{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 4px;border:1px solid var(--d-line);border-radius:999px;font-size:.78rem;white-space:nowrap;cursor:pointer;opacity:.55;transition:opacity .12s,border-color .12s}.director-task.on{opacity:1;border-color:var(--d-accent);background:var(--d-soft)}
   .director-task input{position:absolute;opacity:0;pointer-events:none}.director-task:focus-within{outline:2px solid var(--d-accent);outline-offset:1px}.director-task .step{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--d-line);font-size:.68rem;font-weight:600}.director-task.on .step{background:var(--d-accent);color:#fff}

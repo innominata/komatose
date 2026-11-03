@@ -15,6 +15,17 @@ workflow=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
 
 class FocusedMask(unittest.TestCase):
+    def test_whole_page_detection_bypasses_region_requirement_and_clipping(self):
+        image = np.full((80, 100, 3), 255, np.uint8)
+        expected = np.zeros((80, 100), np.uint8)
+        expected[0:5, 0:5] = 255
+        request = {'detect': True, 'wholePage': True, 'regions': [], 'expansion': 3}
+        with patch('lettering.propose_page', return_value=(expected, [], {'engine': 'fixture'})) as detector:
+            actual = workflow.removal_mask(image, request)
+        np.testing.assert_array_equal(actual, expected)
+        detector.assert_called_once()
+        self.assertEqual(request['_maskMeta']['engine'], 'fixture')
+
     def test_window_is_grown_to_the_model_side_and_kept_on_the_page(self):
         self.assertEqual(workflow.focus_window((1300, 1900, 1400, 1990), 2000, 1414), (390, 976, 1414, 2000))
         # A region larger than the model side keeps a margin instead.
@@ -31,7 +42,7 @@ class FocusedMask(unittest.TestCase):
         saved[0:5, 0:5] = 255        # a hand edit outside every region
         seen = {}
 
-        def propose(window, regions, expansion, engine, device, placements):
+        def propose(window, regions, expansion, engine, device, placements, force=False):
             seen['shape'], seen['regions'] = window.shape, regions
             found = np.zeros(window.shape[:2], np.uint8)
             found[100:120, 50:70] = 255

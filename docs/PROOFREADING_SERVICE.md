@@ -37,7 +37,7 @@ including a follow-up on the same page, sends `mode: "critique"`.
 | `POST` | `/v1/proofreaders/start` | Bring one proofreader up. |
 | `POST` | `/v1/proofread` | Send `mode`, images, and an optional prompt. Return `{ critique, context }`. |
 
-The Review **Proofread Raw** action sends one raw page image with `mode: raw`.
+The Translate **Proofread Raw** action sends one raw page image with `mode: raw`.
 The existing raw and typeset comparison sends `mode: critique`; its follow-ups
 also use `mode: critique`.
 

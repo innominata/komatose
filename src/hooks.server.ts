@@ -9,6 +9,7 @@ import { getUserBySession, SESSION_COOKIE, userCount } from '$lib/server/auth';
 import { directorLocked } from '$lib/server/directorAudit';
 import { requestSeriesId, seriesMaintenanceMessage, trackSeriesWrite } from '$lib/server/seriesMaintenance';
 import { recoverSeriesRestores } from '$lib/server/seriesBackups';
+import { trackRequestActivity } from '$lib/server/requestActivity';
 
 const backupRecovery = building ? Promise.resolve() : recoverSeriesRestores();
 
@@ -16,7 +17,10 @@ if (!building) void backupRecovery.then(() => recoverDirectorRuns()).catch(error
 
 const PUBLIC = new Set(['/login', '/setup']);
 
-export const handle: Handle = async ({ event, resolve }) => {
+export const handle: Handle = async ({ event, resolve }) =>
+	trackRequestActivity(event, async () => handleRequest({ event, resolve }));
+
+const handleRequest: Handle = async ({ event, resolve }) => {
 	await backupRecovery;
 	const sessionId = event.cookies.get(SESSION_COOKIE);
 	event.locals.user = await getUserBySession(sessionId);

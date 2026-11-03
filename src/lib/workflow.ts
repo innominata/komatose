@@ -361,6 +361,9 @@ export type FittedLayout = {
   onPath?: boolean;
 };
 export type RegionData = {
+  geometryFrameId?: string;
+  /** Bounds retained with a projected history entry; used when undoing old geometry. */
+  historyBounds?: { x: number; y: number; w: number; h: number };
   /** Retain the region and its text while suppressing its English lettering. */
   renderEnabled?: boolean;
   directorRenderingReview?: {runId:string;duplicateOf:string;evidence:string;reviewed?:boolean};
@@ -417,6 +420,12 @@ export const MASK_GROW_MIN = 1;
 export const MASK_GROW_MAX = 50;
 export const MASK_GROW_DEFAULT = 10;
 export type PageData = {
+  geometryFrameId?: string;
+  sourcePageIds?: string[];
+  contentApprovals?: { frameId: string; x: number; y: number; width: number; height: number; maskApproved: boolean; cleanApproved: boolean }[];
+  /** Linked snapshots undo the same historical cleaning edit on all its current pages. */
+  reframeHistory?: { eventId: string; pageIds: string[] };
+  cleanFinishes?: import('./postprocess').CleanFinish[];
   prepared?: string;
   original?: string;
   preparedAt?: number;
@@ -433,6 +442,7 @@ export type PageData = {
   previousArtwork?: string;
   mask?: string;
   maskDiagnostics?: {
+    wholePage?: boolean;
     mask: string;
     source: string;
     regions: string;

@@ -1,7 +1,62 @@
 <script lang="ts">
 	import { proofreaderLabel } from '$lib/proofreaders';
 	import { APP_NAME } from '$lib/brand';
+	import { onMount } from 'svelte';
 	let { data, form } = $props();
+
+	type Item = { id: string; action: string; label: string; createdAt: number };
+	type Summary = { id: string; username: string; role: string; lastSeenAt: number | null; total: number; actions: Item[] };
+
+	const POLL_MS = 10_000;
+	// svelte-ignore state_referenced_locally
+	let activity = $state<Summary[] | null>(data.activity);
+	// Full histories, fetched only when someone asks for one.
+	let expanded = $state<Record<string, Item[]>>({});
+	let loading = $state<Record<string, boolean>>({});
+	let refreshError = $state('');
+	let clock = $state(Date.now());
+
+	async function fetchAll(id: string): Promise<Item[]> {
+		const res = await fetch(`/api/admin/activity?user=${encodeURIComponent(id)}`);
+		if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+		return (await res.json()).actions;
+	}
+
+	async function refresh() {
+		if (!activity) return;
+		try {
+			const res = await fetch('/api/admin/activity');
+			if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+			activity = (await res.json()).users;
+			for (const id of Object.keys(expanded)) expanded[id] = await fetchAll(id);
+			refreshError = '';
+		} catch (e) {
+			refreshError = e instanceof Error ? e.message : String(e);
+		}
+		clock = Date.now();
+	}
+
+	async function toggleAll(id: string) {
+		if (expanded[id]) {
+			delete expanded[id];
+			return;
+		}
+		loading[id] = true;
+		try {
+			expanded[id] = await fetchAll(id);
+		} catch (e) {
+			refreshError = e instanceof Error ? e.message : String(e);
+		} finally {
+			loading[id] = false;
+		}
+	}
+
+	onMount(() => {
+		const timer = setInterval(() => {
+			if (document.visibilityState === 'visible') void refresh();
+		}, POLL_MS);
+		return () => clearInterval(timer);
+	});
 </script>
 
 <svelte:head>
@@ -26,40 +81,47 @@
 	<div class="hud-card mb-3" style="border-color: var(--hud-teal-ink)">{form.message}</div>
 {/if}
 
-{#if data.signedIn}
+{#if activity}
 	<div class="hud-card mb-4">
 		<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
-			<div class="hud-kicker mb-0">Signed in now</div>
-			<span class="text-secondary">Seen in the last 15 minutes</span>
-			<a class="btn-hud-ghost text-decoration-none ms-auto" href="/admin/users">Refresh</a>
+			<div class="hud-kicker mb-0">User activity</div>
+			<span class="text-secondary">Latest 50 actions per user · updates every {POLL_MS / 1000}s</span>
+			<button class="btn-hud-ghost ms-auto" type="button" onclick={() => void refresh()}>Refresh</button>
 		</div>
-		{#if data.signedIn.length === 0}
-			<p class="text-secondary mb-0">Nobody has been seen recently.</p>
-		{:else}
-			<div class="d-grid gap-3">
-				{#each data.signedIn as u (u.id)}
-					<div class="signed-in-user">
-						<div class="d-flex flex-wrap gap-2 align-items-baseline">
-							<strong>{u.username}</strong>
-							<span class="hud-kicker mb-0">{u.role}</span>
-							<span class="text-secondary ms-auto">Last seen {new Date(u.lastSeenAt).toLocaleString()}</span>
-						</div>
-						{#if u.actions.length === 0}
-							<p class="text-secondary mb-0 mt-2">No recorded actions yet.</p>
-						{:else}
-							<ol class="signed-in-actions">
-								{#each u.actions as a (a.id)}
-									<li>
-										<time datetime={new Date(a.createdAt).toISOString()}>{new Date(a.createdAt).toLocaleString()}</time>
-										{a.label}
-									</li>
-								{/each}
-							</ol>
-						{/if}
+		{#if refreshError}<p class="text-secondary small mb-2">Could not refresh: {refreshError}</p>{/if}
+		<div class="d-grid gap-3">
+			{#each activity as u (u.id)}
+				{@const online = !!u.lastSeenAt && clock - u.lastSeenAt < data.signedInMs}
+				{@const shown = expanded[u.id] ?? u.actions}
+				<div class="activity-user">
+					<div class="d-flex flex-wrap gap-2 align-items-baseline">
+						<strong>{u.username}</strong>
+						<span class="hud-kicker mb-0">{u.role}</span>
+						{#if online}<span class="online">Signed in</span>{/if}
+						<span class="text-secondary ms-auto">
+							{u.lastSeenAt ? `Last seen ${new Date(u.lastSeenAt).toLocaleString()}` : 'Never signed in'}
+						</span>
 					</div>
-				{/each}
-			</div>
-		{/if}
+					{#if shown.length === 0}
+						<p class="text-secondary mb-0 mt-2">No recorded actions yet.</p>
+					{:else}
+						<ol class="activity-actions" class:all={!!expanded[u.id]}>
+							{#each shown as a (a.id)}
+								<li>
+									<time datetime={new Date(a.createdAt).toISOString()}>{new Date(a.createdAt).toLocaleString()}</time>
+									{a.label}
+								</li>
+							{/each}
+						</ol>
+						{#if u.total > u.actions.length}
+							<button class="btn-hud-ghost mt-2" type="button" disabled={loading[u.id]} onclick={() => void toggleAll(u.id)}>
+								{expanded[u.id] ? `Show latest ${u.actions.length}` : loading[u.id] ? 'Loading…' : `Show all ${u.total}`}
+							</button>
+						{/if}
+					{/if}
+				</div>
+			{/each}
+		</div>
 	</div>
 {/if}
 
@@ -168,18 +230,25 @@
 {/each}
 
 <style>
-	.signed-in-user + .signed-in-user {
+	.activity-user + .activity-user {
 		border-top: 1px solid var(--hud-line);
 		padding-top: 0.85rem;
 	}
-	.signed-in-actions {
+	.activity-actions {
 		margin: 0.55rem 0 0;
 		padding: 0;
 		max-height: 16rem;
 		overflow: auto;
 		list-style: none;
 	}
-	.signed-in-actions li {
+	.activity-actions.all {
+		max-height: 32rem;
+	}
+	.online {
+		color: var(--hud-teal-ink);
+		font-size: 0.8rem;
+	}
+	.activity-actions li {
 		display: grid;
 		grid-template-columns: minmax(9.5rem, auto) 1fr;
 		gap: 0.65rem;
@@ -187,7 +256,7 @@
 		font-size: 0.86rem;
 		border-bottom: 1px solid var(--hud-line);
 	}
-	.signed-in-actions time {
+	.activity-actions time {
 		color: var(--hud-muted);
 		white-space: nowrap;
 	}

@@ -80,3 +80,68 @@ test('getUserBySession refreshes last seen when it is stale', async () => {
 	assert.ok(row);
 	assert.ok(row.lastSeenAt > stale);
 });
+
+test('the admin activity list has every user, their latest 50 actions, and full history on request', async () => {
+	const { listAllUserActivity } = await import('../src/lib/server/activity');
+	const t = Date.now() - 1_000_000;
+	for (let i = 0; i < 60; i++)
+		await db.insert(activity).values({ id: `act-root-${i}`, userId: 'admin-1', action: `bulk_${i}`, payload: '{}', createdAt: t + i });
+	const all = await listAllUserActivity(50);
+	assert.deepEqual(all.map((u) => u.username).sort(), ['idle', 'pat', 'root']);
+	const rootUser = all.find((u) => u.username === 'root')!;
+	assert.equal(rootUser.actions.length, 50);
+	assert.equal(rootUser.total, 61);
+	assert.equal((await listUserActivity('admin-1')).length, 61);
+	assert.equal(all.find((u) => u.username === 'idle')!.actions.length, 0);
+});
+
+test('requests that log nothing themselves get one entry, and repeats on one target merge', async () => {
+	const { trackRequestActivity } = await import('../src/lib/server/requestActivity');
+	const { sqlite } = await import('../src/lib/server/db');
+	await db.insert(users).values({ id: 'cleaner-1', username: 'cleaner', passwordHash: 'unused', role: 'typesetter', createdAt: 4 });
+	sqlite.prepare("INSERT INTO series (id, slug, title, created_at, updated_at) VALUES ('s-1','lantern','Lantern',1,1)").run();
+	sqlite.prepare("INSERT INTO episodes (id, series_id, slug, title, created_at, updated_at) VALUES ('ep-1','s-1','1','Chapter 1',1,1)").run();
+	const event = (body: object, method = 'POST', search = '') => ({
+		request: new Request(`http://local/api/episodes/ep-1/workflow${search}`, {
+			method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+		}),
+		url: new URL(`http://local/api/episodes/ep-1/workflow${search}`),
+		route: { id: '/api/episodes/[eid]/workflow' },
+		params: { eid: 'ep-1' },
+		locals: { user: { id: 'cleaner-1', username: 'cleaner', role: 'typesetter' } },
+	}) as any;
+	const ok = async () => new Response('{}', { status: 200 });
+	const rows = () => sqlite.prepare("SELECT action, payload FROM activity WHERE user_id='cleaner-1' ORDER BY created_at").all() as { action: string; payload: string }[];
+
+	await trackRequestActivity(event({ action: 'bubble-fill', imageId: 'img-1', px: 0.5, py: 0.5 }), ok);
+	await trackRequestActivity(event({ action: 'bubble-fill', imageId: 'img-1', px: 0.2, py: 0.7 }), ok);
+	assert.equal(rows().length, 1);
+	assert.equal(rows()[0].action, 'workflow:bubble-fill');
+	const merged = JSON.parse(rows()[0].payload);
+	assert.equal(merged.count, 2);
+	assert.equal(merged.imageId, 'img-1');
+	assert.equal(merged.px, undefined, 'only allowlisted fields are kept');
+	assert.equal(activityLabel('workflow:bubble-fill', rows()[0].payload, 'Lantern', 'Chapter 1'), 'Bubble fill · Chapter 1 ×2');
+
+	await trackRequestActivity(event({ action: 'page', imageId: 'img-1', history: 'undo' }), ok);
+	assert.equal(rows().at(-1)!.action, 'workflow:page-undo');
+
+	// Failures, reads, and requests that wrote their own entry add nothing.
+	const before = rows().length;
+	await trackRequestActivity(event({ action: 'clean', imageId: 'img-1' }), async () => new Response('{}', { status: 409 }));
+	await trackRequestActivity(event({ action: 'preferences' }), ok);
+	await trackRequestActivity(event({ action: 'remove-blank-regions' }), async () => {
+		await logActivity({ userId: 'cleaner-1', action: 'deleted_blank_regions' });
+		return new Response('{}');
+	});
+	assert.deepEqual(rows().slice(before).map((r) => r.action), ['deleted_blank_regions']);
+
+	// Form posts are named by their action and their fields are never read.
+	await trackRequestActivity({
+		...event({}), request: new Request('http://local/admin/users?/password', { method: 'POST', body: new URLSearchParams({ next: 'secret123' }) }),
+		url: new URL('http://local/admin/users?/password'), route: { id: '/admin/users' }, params: {},
+	}, ok);
+	const form = rows().at(-1)!;
+	assert.equal(form.action, 'users:password');
+	assert.ok(!form.payload.includes('secret'));
+});

@@ -809,6 +809,9 @@ export async function cleanDirectorPage(
               .map((l) => maskRegion(l, regionDoc(l.id).data))
           : protectedPolygons(targets),
         expansion: full ? 0 : 5 + grow,
+        // A grown mask is asked for on purpose, usually to reach past a glow, so the
+        // worker must not stop it where the paper stops being flat.
+        forceExpansion: !full && grow > 0,
       },
       ctx.signal,
     );

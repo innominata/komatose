@@ -22,7 +22,7 @@ export const POST: RequestHandler = async ({locals,params,request}) => {
     const {series,episode}=await requireEpisodeAccess(user,params.eid);
     requireEdit(user);
     const body=await request.json();
-    if(body.action==='preflight') return json(await directorPreflight(series,episode,user,body.model));
+    if(body.action==='preflight') return json(await directorPreflight(series,episode,user,body.model,body.policy));
     if(body.action==='memory') { requireFullAi(user); return json(saveMemorySettings(series.id,body.revision,body.data,body.rebuild===true)); }
     if (body.action==='start' || body.action==='retry-blocked') {
       requireFullAi(user);

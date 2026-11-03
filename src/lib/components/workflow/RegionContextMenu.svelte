@@ -170,11 +170,12 @@
           disabled={!canClean || busy || regionDoc?.data.locked}
           onclick={() => {
             const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.saveRotation(
-              target.id,
+              line.id,
               doc?.revision ?? 0,
-              { ...ops.inheritedStyle(target.lineType), ...doc?.data.style },
+              { ...ops.inheritedStyle(line.lineType), ...doc?.data.style },
               0,
             );
           }}>Reset text rotation</button
@@ -185,11 +186,12 @@
             disabled={!canClean || busy || regionDoc?.data.locked}
             onclick={() => {
               const doc = regionDoc;
+              const line = target;
               menu = null;
               void ops.savePlacedTransform(
-                target.id,
+                line.id,
                 doc?.revision ?? 0,
-                { ...ops.inheritedStyle(target.lineType), ...doc?.data.style },
+                { ...ops.inheritedStyle(line.lineType), ...doc?.data.style },
                 { skewX: 0, skewY: 0 },
               );
             }}>Reset skew</button
@@ -302,8 +304,9 @@
           title="Read this region again at the page's full resolution and replace only its part of the mask"
           disabled={!canClean || busy || strokes.length > 0}
           onclick={() => {
+            const line = target;
             menu = null;
-            void ops.applyMask(true, target.id);
+            void ops.applyMask(true, line.id);
           }}>Detect lettering in this region</button
         >
       {/if}
@@ -312,14 +315,15 @@
           role="menuitem"
           disabled={!canClean || busy}
           onclick={() => {
+            const line = target;
             menu = null;
             void ops.act({
               action: "geometry",
               imageId: pageId,
-              lineId: target.id,
+              lineId: line.id,
               expectedRevision: pageDoc!.revision,
               method: backend?.models?.some(m => m.tasks.includes('segmentBubble')) ? backend!.models!.find(m => m.tasks.includes('segmentBubble'))!.id : "opencv",
-              ...(backend?.models?.some(m => m.tasks.includes('segmentBubble')) ? { points: bubbleFitPoints(target) } : {}),
+              ...(backend?.models?.some(m => m.tasks.includes('segmentBubble')) ? { points: bubbleFitPoints(line) } : {}),
             });
           }}>Fit bubble</button
         >
@@ -327,11 +331,12 @@
           role="menuitem"
           disabled={!canClean || busy}
           onclick={() => {
+            const line = target;
             menu = null;
             void ops.act({
               action: "geometry",
               imageId: pageId,
-              lineId: target.id,
+              lineId: line.id,
               expectedRevision: pageDoc!.revision,
               method: "opencv",
             });
@@ -341,11 +346,13 @@
           role="menuitem"
           disabled={!canClean || busy}
           onclick={() => {
+            const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.act({
               action: "region",
-              id: target.id,
-              expectedRevision: regionDoc?.revision ?? 0,
+              id: line.id,
+              expectedRevision: doc?.revision ?? 0,
               data: { geometryApproved: true },
             });
           }}>Approve geometry</button
@@ -355,11 +362,13 @@
           disabled={!canClean}
           onclick={() => {
             ops.selectLine(target.id);
+            const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.act({
               action: "fit",
-              id: target.id,
-              expectedRevision: regionDoc?.revision ?? 0,
+              id: line.id,
+              expectedRevision: doc?.revision ?? 0,
             });
           }}>Typeset this region</button
         >
@@ -368,10 +377,11 @@
           disabled={!canClean || busy}
           onclick={() => {
             const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.act({
               action: "region",
-              id: target.id,
+              id: line.id,
               expectedRevision: doc?.revision ?? 0,
               data: { locked: !doc?.data.locked },
             });
@@ -382,10 +392,11 @@
           disabled={!canClean || busy}
           onclick={() => {
             const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.act({
               action: "text-mask",
-              id: target.id,
+              id: line.id,
               expectedRevision: doc?.revision ?? 0,
               knockout: true,
             });
@@ -396,10 +407,11 @@
           disabled={!canClean || busy || !regionDoc?.data.textMask}
           onclick={() => {
             const doc = regionDoc;
+            const line = target;
             menu = null;
             void ops.act({
               action: "text-mask",
-              id: target.id,
+              id: line.id,
               expectedRevision: doc?.revision ?? 0,
               clear: true,
             });

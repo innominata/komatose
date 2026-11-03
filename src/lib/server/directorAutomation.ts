@@ -88,6 +88,7 @@ export type AutomationContext = {
   transcribe: () => Promise<void>;
   transcribeRegion?: (line: LineRow) => Promise<void>;
   translationBrief?: () => Promise<string>;
+  ensureRawProofread?: () => Promise<void>;
   askProofreader?: (line: LineRow, question: string) => Promise<string>;
   proofread: (
     capture?: Awaited<ReturnType<typeof capturePageImages>>,
@@ -307,6 +308,8 @@ export async function stageFingerprint(
     image: [image?.filename, image?.updatedAt],
     prepared: page.prepared,
     automation: "targeted-repairs-v11-transcription-correlation",
+    savedProofreadsOnly: directorPolicy(JSON.parse(ctx.run.policy)).savedProofreadsOnly,
+    tasks: directorPolicy(JSON.parse(ctx.run.policy)).tasks,
     ...(stage === "prepare" || stage === "typeset"
       ? {}
       : { model: ctx.run.model }),
@@ -320,6 +323,12 @@ export async function stageFingerprint(
     data: regionData(line).data,
   }));
   if (stage === "prepare") return digest(base);
+  if (stage === "raw-proofread") return digest({
+    ...base,
+    readings: sqlite.prepare(`SELECT id,progress FROM workflow_jobs WHERE episode_id=?
+      AND kind='page-proofread' AND state='completed' AND json_extract(payload,'$.imageId')=?
+      AND json_extract(payload,'$.mode')='raw' ORDER BY created_at DESC`).all(ctx.episode.id,imageId),
+  });
   if (stage === "read")
     return digest({
       ...base,
@@ -3372,6 +3381,19 @@ export async function runAutomationPage(
             call,
             attempt ? { previousFailure: last } : undefined,
           );
+        if (stage === "raw-proofread" && (await ownLines(ctx.episode.id,imageId)).length)
+          await ctx.ensureRawProofread?.();
+        if (stage === "transcribe" && ctx.transcribeRegion) {
+          for (const line of await ownLines(ctx.episode.id,imageId)) {
+            if(!regionData(line).data.locked && (!line.source?.trim() || line.sourceState!=='read')) {
+              try { await guarded(ctx,imageId,'Transcribe region',()=>ctx.transcribeRegion!(line)); }
+              catch(error) {
+                ctx.signal.throwIfAborted();
+                emit(ctx,imageId,'transcription:fallback',{lineId:line.id,message:error instanceof Error?error.message:String(error)});
+              }
+            }
+          }
+        }
         if (stage === "classify") await classify(ctx, imageId, call);
         if (
           stage === "translate" &&
@@ -3395,7 +3417,7 @@ export async function runAutomationPage(
           const restored = (await ownLines(ctx.episode.id, imageId))
             .filter((line) => !originalIds.has(line.id))
             .map((line) => line.id);
-          if (restored.length)
+          if (restored.length && policy.tasks.includes('classify'))
             await classify(ctx, imageId, call, { lineIds: restored });
         }
         if (stage === "clean")

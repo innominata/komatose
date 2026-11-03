@@ -1195,7 +1195,8 @@ def focused_mask(img, req, propose):
     placement = placements[index] if index < len(placements) else None
     found, diagnostics, meta = propose(
         np.ascontiguousarray(img[wy0:wy1, wx0:wx1]), [local], req.get('expansion', 5),
-        engine=req.get('maskEngine', 'auto'), device=req.get('device', 'cpu'), placements=[placement])
+        engine=req.get('maskEngine', 'auto'), device=req.get('device', 'cpu'), placements=[placement],
+        force=bool(req.get('forceExpansion')))
     import mask_fit
     bound = allowed
     if placement in ('inside', 'outside'):
@@ -1214,7 +1215,13 @@ def focused_mask(img, req, propose):
 
 def removal_mask(img, req):
     H, W = img.shape[:2]
-    if req.get('detect'):
+    if req.get('detect') and req.get('wholePage'):
+        from lettering import propose_page
+        mask, diagnostics, meta = propose_page(img, req.get('expansion', 5),
+            engine=req.get('maskEngine', 'auto'), device=req.get('device', 'cpu'))
+        req['_maskDiagnostics'] = diagnostics
+        req['_maskMeta'] = meta
+    elif req.get('detect'):
         allowed = np.zeros((H, W), np.uint8)
         for region in req.get('regions', []):
             if len(region) >= 3:
@@ -1230,7 +1237,7 @@ def removal_mask(img, req):
         else:
             mask, diagnostics, meta = propose(
                 img, req['regions'], req.get('expansion', 5), engine=engine, device=req.get('device', 'cpu'),
-                placements=req.get('regionPlacements'))
+                placements=req.get('regionPlacements'), force=bool(req.get('forceExpansion')))
         req['_maskDiagnostics'] = diagnostics
         req['_maskMeta'] = meta
         req['_requestedMaskEngine'] = engine
@@ -1263,7 +1270,7 @@ def removal_mask(img, req):
             cv2.polylines(mask, [points], False, color, radius*2, cv2.LINE_8)
         for p in points:
             cv2.circle(mask, tuple(p), radius, color, -1)
-    if req.get('detect') and req.get('focus') is None:
+    if req.get('detect') and not req.get('wholePage') and req.get('focus') is None:
         # Clip the complete proposal, including padding and any supplied strokes.
         # A fitted region may reach past its box to take a glyph or outline the
         # box missed, so it is clipped to its own fitted reach instead.

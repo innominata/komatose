@@ -3,7 +3,7 @@ import { acceptedRegionKind } from "$lib/server/workflowService";
 import { json } from "@sveltejs/kit";
 import { and, eq } from "drizzle-orm";
 import { logActivity } from "$lib/server/activity";
-import { db } from "$lib/server/db";
+import { db, sqlite } from "$lib/server/db";
 import { images, lines } from "$lib/server/db/schema";
 import {
   assertEpisodeIdle,
@@ -166,17 +166,21 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
     // follows the resized box, while a fitted or traced shape is kept.
     if (["x", "y", "w", "h"].some((key) => key in body && body[key] !== (existing as any)[key])) {
       const region = getDoc<RegionData>(`region:${line.id}`, {});
-      if (!region.data.locked && copiesBox(region.data.polygon, existing) &&
-          line.x != null && line.y != null && line.w != null && line.h != null)
-        putDoc(episode.id, region.id, {
-          ...region.data,
-          polygon: [
-            { x: line.x, y: line.y },
-            { x: line.x + line.w, y: line.y },
-            { x: line.x + line.w, y: line.y + line.h },
-            { x: line.x, y: line.y + line.h },
-          ],
-        }, region.revision);
+      if(line.x != null && line.y != null && line.w != null && line.h != null) {
+        const next:RegionData={...region.data,historyBounds:{x:line.x,y:line.y,w:line.w,h:line.h}};
+        if (!region.data.locked && copiesBox(region.data.polygon, existing)) next.polygon=[
+          {x:line.x,y:line.y},{x:line.x+line.w,y:line.y},{x:line.x+line.w,y:line.y+line.h},{x:line.x,y:line.y+line.h},
+        ];
+        sqlite.transaction(()=>{
+          putDoc(episode.id,region.id,next,region.revision);
+          const row=sqlite.prepare('SELECT undo FROM workflow_docs WHERE id=?').get(region.id) as {undo:string};
+          const undo=JSON.parse(row.undo);
+          if(undo.length&&existing.x!=null&&existing.y!=null&&existing.w!=null&&existing.h!=null) {
+            undo[undo.length-1]={...undo.at(-1),historyBounds:{x:existing.x,y:existing.y,w:existing.w,h:existing.h}};
+            sqlite.prepare('UPDATE workflow_docs SET undo=? WHERE id=?').run(JSON.stringify(undo),region.id);
+          }
+        })();
+      }
     }
     if (patch.status === "approved")
       rejectPendingSuggestions(episode.id, line.id);

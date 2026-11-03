@@ -19,6 +19,8 @@
     busy = false,
     hasMaskRegions = false,
     ondetect,
+    onmaskchapter,
+    chapterMaskBusy = false,
     onapprovemask,
     onclean,
     oncompare,
@@ -52,6 +54,8 @@
     busy?: boolean;
     hasMaskRegions?: boolean;
     ondetect?: () => void;
+    onmaskchapter?: () => void;
+    chapterMaskBusy?: boolean;
     onapprovemask?: () => void;
     onclean?: (method: string) => void;
     /** Compare cleaning methods on the selected region; absent when no region is selected. */
@@ -83,6 +87,8 @@
       <button type="button" disabled={busy || !canClean || strokeCount > 0 || !hasMaskRegions} onclick={() => ondetect?.()}><i class="bi bi-magic" aria-hidden="true"></i> Detect lettering</button>
       <button type="button" data-find="approve-mask" disabled={busy || !canClean || (!strokeCount && !(pageDoc?.data.mask && !pageDoc.data.maskApproved))} onclick={() => onapprovemask?.()}><i class="bi bi-check2" aria-hidden="true"></i> Approve mask</button>
     </div>
+    <button type="button" class="block" disabled={busy || !canClean || strokeCount > 0 || chapterMaskBusy} onclick={() => onmaskchapter?.()}><i class="bi bi-magic" aria-hidden="true"></i> {chapterMaskBusy ? 'Masking chapter…' : 'Mask chapter'}</button>
+    <p class="muted">Mask chapter detects lettering across every story page without regions. Review the masks, then use the cleaning tools.</p>
     <p class="muted">Refine with the Brush, Erase and Grow mask tools. <strong>Grow mask</strong> expands only the clicked section. Committing brush edits approves the mask.</p>
     {#if strokeCount}
       <div class="btn-row small"><span>{strokeCount} draft strokes</span><button type="button" class="link" onclick={() => onclearstrokes?.()}>Clear draft strokes</button></div>
@@ -95,7 +101,7 @@
     {/if}
     {#if pageDoc?.data.maskDiagnostics}
       {#each pageDoc.data.maskDiagnostics.entries.filter((entry) => entry.reasons.length) as entry}
-        <div class="alert attn"><i class="bi bi-flag" aria-hidden="true"></i> Region {entry.regionNumber ?? entry.region + 1}: {entry.reasons.join(", ")}. Check before cleaning.</div>
+        <div class="alert attn"><i class="bi bi-flag" aria-hidden="true"></i> {pageDoc.data.maskDiagnostics.wholePage ? "Page" : `Region ${entry.regionNumber ?? entry.region + 1}`}: {entry.reasons.join(", ")}. Check before cleaning.</div>
       {/each}
     {/if}
   </section>

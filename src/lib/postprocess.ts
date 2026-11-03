@@ -30,3 +30,8 @@ export type CleanFinish = {
   /** The cleaned artwork this finishing produced; another clean since replaces it. */
   result: string;
 };
+
+export function cleaningFinishes(page:{cleanFinish?:CleanFinish;cleanFinishes?:CleanFinish[]}):CleanFinish[] {
+  const all=[...(page.cleanFinishes??[]),...(page.cleanFinish?[page.cleanFinish]:[])];
+  return all.filter((f,i)=>all.findLastIndex(p=>p.answer===f.answer&&p.mask===f.mask)===i);
+}

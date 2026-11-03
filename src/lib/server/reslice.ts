@@ -413,126 +413,23 @@ export async function reslicePages(
   );
   if (!slices.length) throw new ResliceError("No slices to write");
 
-  // Calculate all pixel layers and geometry before changing any source page.
-  const before = await listImages(ctx.episode.id);
-  const selected = new Set(imgs.map(i => i.id));
-  const insertAt = Math.max(0, before.findIndex(i => selected.has(i.id)));
-  const sliceNumber = new Map<string, number>();
-  const plans: { slice: Slice; image: ImageRow; page: PageData }[] = [];
-  for (const [i, slice] of slices.entries()) {
-    if (opts.abort?.aborted) throw new ResliceError("Cancelled", 499);
-    const sources = work.sources.filter(s => s.top < slice.bottom && s.top + s.image.height > slice.top);
-    const source = sources[0].image;
-    const n = (sliceNumber.get(source.id) ?? 0) + 1;
-    sliceNumber.set(source.id, n);
-    const captions = [...new Set(sources.map(s => s.image.caption).filter(Boolean))];
-    const image: ImageRow = { id: nid(), episodeId: ctx.episode.id, filename: "",
-      originalName: `${sliceNameBase(source)}-${n}.png`, sortOrder: insertAt + i,
-      width: slice.width, height: slice.height, dpi: source.dpi ?? 72,
-      caption: captions.join("\n\n"), role: "page", createdAt: now(), updatedAt: now() };
-    const page = await slicePageWork(work, slice, image);
-    image.dpi = page.dpi;
-    plans.push({ slice, image, page });
-  }
-  const moved: { line: LineRow; region: RegionData }[] = [];
-  for (const source of work.sources) {
-    for (const line of work.lines.filter(l => l.imageId === source.image.id)) {
-      // Preserve unplaced and out-of-bounds regions too; none may be orphaned
-      // when the old image rows are removed.
-      const center = source.top + Math.max(0, Math.min(source.image.height - 0.001,
-        ((line.y ?? 0) + (line.h ?? 0) / 2) * source.image.height));
-      const plan = plans.find(p => center >= p.slice.top && center < p.slice.bottom)!;
-      const transformed = await sliceRegionWork(line, source, plan.slice, plan.image, plan.page.dpi ?? 72);
-      const bounds = transformed.bounds;
-      moved.push({ line: { ...line, imageId: plan.image.id,
-        x: line.x == null ? line.x : bounds.x, y: line.y == null ? line.y : bounds.y,
-        w: line.w == null ? line.w : bounds.w, h: line.h == null ? line.h : bounds.h,
-        revision: (line.revision ?? 0) + 1, updatedAt: now() }, region: transformed.region });
-    }
-  }
-  for (const plan of plans) {
-    const pageRegions = moved.filter(m => m.line.imageId === plan.image.id);
-    sliceCompletion(work, plan.slice, plan.page, pageRegions.map(m => m.line),
-      pageRegions.map(m => ({ id: m.line.id, data: m.region })));
-  }
-
-  const undoDir = join(episodeDir(ctx.series.slug, ctx.episode.slug), `reslice-undo-${nid()}`);
-  await mkdir(undoDir, { recursive: true });
-  for (const img of imgs) {
-    const src = imagePath(ctx.series.slug, ctx.episode.slug, img.filename);
-    if (existsSync(src)) await copyFile(src, join(undoDir, img.filename));
-    const orig = origImagePath(ctx.series.slug, ctx.episode.slug, img.filename);
-    if (existsSync(orig)) await copyFile(orig, join(undoDir, `${img.filename}.orig`));
-  }
-  const kept = before.filter(i => !selected.has(i.id));
-  const created = plans.map(p => p.image);
-  const ordered = [...kept.slice(0, insertAt), ...created, ...kept.slice(insertAt)];
-  let undoWritten = false;
-  try {
-    for (const plan of plans) {
-      if (opts.abort?.aborted) throw new ResliceError("Cancelled", 499);
-      const saved = await saveImageFile({ seriesSlug: ctx.series.slug, episodeSlug: ctx.episode.slug,
-        sortOrder: plan.image.sortOrder, originalName: plan.image.originalName,
-        bytes: plan.slice.bytes, mime: "image/png" });
-      plan.image.filename = saved.filename;
-      await writeFile(origImagePath(ctx.series.slug, ctx.episode.slug, saved.filename), await readAsset(plan.page.original!));
-    }
-    await pushUndo(ctx.series.slug, ctx.episode.slug, { type: "reslice", dir: undoDir,
-      previous: imgs, createdIds: created.map(i => i.id), geometry: work.geometry,
-      lines: work.lines.filter(l => l.imageId && selected.has(l.imageId)).map(l => ({
-        id: l.id, imageId: l.imageId, x: l.x, y: l.y, w: l.w, h: l.h, revision: l.revision,
-      })), order: before.map(i => ({ id: i.id, sortOrder: i.sortOrder })) });
-    undoWritten = true;
-    // Pixel assets are already written; commit page membership, saved layers,
-    // lettering and approvals together. Cancellation cannot leave half a split.
-    sqlite.transaction(() => {
-      if (opts.abort?.aborted) throw new ResliceError("Cancelled", 499);
-      for (const source of work.sources) {
-        const current = db.select().from(images).where(eq(images.id, source.image.id)).get();
-        if (!current || current.updatedAt !== source.image.updatedAt || current.caption !== source.image.caption)
-          throw new ResliceError("A source page changed while reslicing. Retry.", 409);
-      }
-      for (const [id, revision] of Object.entries(work.revisions))
-        if (getDoc(id, {}).revision !== revision)
-          throw new ResliceError("Saved cleaning or lettering changed while reslicing. Retry.", 409);
-      for (const image of created) db.insert(images).values(image).run();
-      for (const item of moved) {
-        const old = work.lines.find(l => l.id === item.line.id)!;
-        const changed = sqlite.prepare("UPDATE lines SET image_id=?,x=?,y=?,w=?,h=?,revision=?,updated_at=? WHERE id=? AND episode_id=? AND revision=?")
-          .run(item.line.imageId, item.line.x ?? null, item.line.y ?? null, item.line.w ?? null, item.line.h ?? null,
-            item.line.revision, item.line.updatedAt, item.line.id, ctx.episode.id, old.revision ?? 0);
-        if (!changed.changes) throw new ResliceError("A region changed while reslicing. Retry.", 409);
-        // Geometry alone does not invalidate a pending source/English suggestion.
-        sqlite.prepare("UPDATE suggestions SET base_revision=? WHERE episode_id=? AND line_id=? AND base_revision=? AND state='pending'")
-          .run(item.line.revision, ctx.episode.id, item.line.id, old.revision ?? 0);
-        const doc = getDoc<RegionData>(`region:${item.line.id}`, {});
-        putDoc(ctx.episode.id, doc.id, item.region, doc.revision);
-      }
-      for (const plan of plans) putDoc(ctx.episode.id, `page:${plan.image.id}`, plan.page, 0);
-      for (const img of imgs) db.delete(images).where(eq(images.id, img.id)).run();
-      for (const [i, img] of ordered.entries()) db.update(images).set({ sortOrder: i }).where(eq(images.id, img.id)).run();
-    })();
-  } catch (e) {
-    if (undoWritten) await popUndo(ctx.series.slug, ctx.episode.slug);
-    for (const image of created) if (image.filename) await removeImageFile(ctx.series.slug, ctx.episode.slug, image.filename);
-    throw e;
-  }
-  for (const img of imgs) {
-    await removeImageFile(ctx.series.slug, ctx.episode.slug, img.filename);
-    broadcast(ctx.episode.id, { type: "image:delete", id: img.id });
-  }
-  for (const image of created) {
-    if (opts.jobId) pageResult(opts.jobId, image.id, "completed");
-    broadcast(ctx.episode.id, { type: "image:upsert", image });
-  }
-  for (const item of moved) broadcast(ctx.episode.id, { type: "line:upsert", line: item.line });
-  const next = await listImages(ctx.episode.id);
-  broadcast(ctx.episode.id, { type: "image:reorder", order: next.map(img => ({ id: img.id, sortOrder: img.sortOrder })) });
-  const manualSlices = plans.filter(p => p.slice.height > allowedHeight(maxHeight)).map(p => ({
-    imageId: p.image.id, top: p.slice.top, bottom: p.slice.bottom, height: p.slice.height,
-  }));
-  return { images: next, forced, manualSlices };
-
+  const { executeReframe } = await import('./pageReframe');
+  const counters=new Map<string,number>();
+  const outputs=slices.map(slice=>{
+    const source=work.sources.find(s=>s.top<slice.bottom&&s.top+s.image.height>slice.top)!;
+    const n=(counters.get(source.image.id)??0)+1;counters.set(source.image.id,n);
+    return {id:nid(),width:slice.width,height:slice.height,originalName:`${sliceNameBase(source.image)}-${n}.png`,
+      placements:work.sources.flatMap(s=>{
+        const top=Math.max(s.top,slice.top),bottom=Math.min(s.top+s.image.height,slice.bottom);
+        return bottom>top?[{imageId:s.image.id,rect:{x:0,y:top-s.top,width:s.image.width,height:bottom-top},
+          x:Math.floor((slice.width-s.image.width)/2),y:top-slice.top}]:[];
+      })};
+  });
+  if(imgs.length===1&&outputs.length===1&&outputs[0].width===imgs[0].width&&outputs[0].height===imgs[0].height) outputs[0].id=imgs[0].id;
+  const result=await executeReframe(ctx,imgs.map(i=>i.id),outputs,'Reslice pages',undefined,opts.abort,opts.jobId);
+  if(opts.jobId) for(const output of outputs) pageResult(opts.jobId,output.id,'completed');
+  return {images:result.images,forced,manualSlices:slices.flatMap((slice,i)=>slice.height>allowedHeight(maxHeight)
+    ?[{imageId:outputs[i].id,top:slice.top,bottom:slice.bottom,height:slice.height}]:[])};
 }
 
 export function startReslice(

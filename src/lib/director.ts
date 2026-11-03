@@ -2,7 +2,7 @@ import type { TaskEngine } from "./aiTasks";
 import type { LineRow } from "./types";
 import type { RegionData } from "./workflow";
 
-export const DIRECTOR_VERSION = 15;
+export const DIRECTOR_VERSION = 17;
 export function currentDirectorPresentation(
   line: LineRow,
   data: RegionData,
@@ -17,6 +17,8 @@ export function currentDirectorPresentation(
 export const DIRECTOR_STAGES = [
   "prepare",
   "read",
+  "raw-proofread",
+  "transcribe",
   "classify",
   "translate",
   "clean",
@@ -29,14 +31,38 @@ export const DIRECTOR_TASKS = [
   {
     id: "prepare",
     label: "Prepare",
-    description:
-      "Renumber pages, transcribe every region and verify region placement",
-    stages: ["prepare", "read", "classify"],
+    description: "Prepare page images and numbering",
+    stages: ["prepare"],
+  },
+  {
+    id: "regions", label: "Check region geometry",
+    description: "Find missing regions and correct their bounds and placement",
+    stages: ["read"],
+  },
+  {
+    id: "request-raw", label: "Request missing raw proofreads",
+    description: "Paid proofreader task. Reuse existing readings; request only pages with no saved raw proofread",
+    stages: ["raw-proofread"],
+  },
+  {
+    id: "classify", label: "Classify region types",
+    description: "Correct dialogue, thought, aside and SFX types using saved text and visual evidence",
+    stages: ["classify"],
+  },
+  {
+    id: "transcribe", label: "OCR unresolved regions",
+    description: "Allow OCR of unresolved regions during geometry checks and text mapping",
+    stages: ["transcribe"],
   },
   {
     id: "proofread-raw",
-    label: "Proofread Raw",
-    description: "Send raws for translation and apply it to the regions",
+    label: "Apply raw proofread",
+    description: "Apply source and English from raw proofreading to the regions",
+    stages: ["translate"],
+  },
+  {
+    id: "proofread-followups", label: "Ask proofreader about unresolved text",
+    description: "Paid proofreader task. Reuse saved answers before requesting a crop clarification",
     stages: ["translate"],
   },
   {
@@ -65,8 +91,8 @@ export const DIRECTOR_TASKS = [
   },
   {
     id: "proof",
-    label: "Proof",
-    description: "Send the typeset page to the proofreader and fix its critique",
+    label: "Proofread final page",
+    description: "Paid proofreader task. Critique the rendered page and fix its findings",
     stages: ["check"],
   },
 ] as const satisfies readonly {
@@ -79,6 +105,7 @@ export type DirectorTask = (typeof DIRECTOR_TASKS)[number]["id"];
 export const ALL_DIRECTOR_TASKS: DirectorTask[] = DIRECTOR_TASKS.map(
   (task) => task.id,
 );
+export const SAVED_DIRECTOR_TASKS: DirectorTask[] = ['prepare', 'regions', 'classify', 'proofread-raw', 'typeset'];
 export function directorTaskStages(tasks: readonly DirectorTask[]) {
   return new Set<DirectorStage>(
     DIRECTOR_TASKS.filter((task) => tasks.includes(task.id)).flatMap(
@@ -93,7 +120,8 @@ export const cleanScope = (tasks: readonly DirectorTask[]): CleanScope => ({
   sfx: tasks.includes("clean-sfx"),
 });
 export const fullDirectorTasks = (tasks: readonly DirectorTask[]) =>
-  ALL_DIRECTOR_TASKS.every((task) => tasks.includes(task));
+  ALL_DIRECTOR_TASKS.filter(task => !['request-raw', 'proofread-followups', 'transcribe'].includes(task))
+    .every((task) => tasks.includes(task));
 export type DirectorFinding = {
   code: string;
   message: string;
@@ -125,6 +153,7 @@ export type DirectorPolicy = {
   repairCycles: number;
   requestTimeoutMs: number;
   tasks: DirectorTask[];
+  savedProofreadsOnly: boolean;
 };
 export const DEFAULT_DIRECTOR_POLICY: DirectorPolicy = {
   fallbacks: [],
@@ -133,7 +162,8 @@ export const DEFAULT_DIRECTOR_POLICY: DirectorPolicy = {
   maskEngine: "auto",
   repairCycles: 3,
   requestTimeoutMs: 180_000,
-  tasks: ALL_DIRECTOR_TASKS,
+  tasks: SAVED_DIRECTOR_TASKS,
+  savedProofreadsOnly: false,
 };
 export function directorPolicy(
   input: Partial<DirectorPolicy> = {},
@@ -162,9 +192,11 @@ export function directorPolicy(
     requestTimeoutMs: Number.isFinite(input.requestTimeoutMs)
       ? Math.max(1000, Math.min(600_000, input.requestTimeoutMs!))
       : 180_000,
-    tasks: Array.isArray(input.tasks)
+    savedProofreadsOnly: input.savedProofreadsOnly === true,
+    tasks: (Array.isArray(input.tasks)
       ? ALL_DIRECTOR_TASKS.filter((task) => input.tasks!.includes(task))
-      : ALL_DIRECTOR_TASKS,
+      : SAVED_DIRECTOR_TASKS).filter(task => input.savedProofreadsOnly !== true ||
+        !['clean-bubbles', 'clean-hard', 'clean-sfx', 'proof', 'request-raw', 'proofread-followups', 'transcribe'].includes(task)),
   };
 }
 export const directorStatusLabel = (state: string) =>

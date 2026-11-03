@@ -1,4 +1,5 @@
 import { rowHasOperation, isTranslationSpecialist } from '../modelRegistry';
+import { pageEditLocks } from './pageEditLock';
 import { deciderPageStamp } from '../decider';
 import type { PageData } from '../workflow';
 import { effectiveDefault, requireDefault } from './modelDefaultStore';
@@ -176,6 +177,7 @@ export function isFullAiRunning(episodeId: string): boolean {
 
 export function assertEpisodeIdle(episodeId: string) {
   if (
+    pageEditLocks.has(episodeId) ||
     isFullAiRunning(episodeId) ||
     rereadBatches.has(episodeId) ||
     fillMissingBatches.has(episodeId) ||

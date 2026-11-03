@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { preparePageLabel, type PageUndoSummary } from '../prepareActions';
 import { episodeDir } from './storage';
+import {sqlite} from './db';
 
 import type { ImageRow } from '../types';
 
 export type PageUndoOp = { description?: string; undoId?: string } & (
+	| import('./pageReframe').ReframeUndo
 	| { type: 'combine'; originalId: string; removed: ImageRow; geometry: Record<string, GeometrySnapshot> }
 	| { type: 'pixels'; imageId: string; imageIds?: string[]; geometry?: Record<string, GeometrySnapshot> }
 	| { type: 'psd-import'; imageId: string; geometry: GeometrySnapshot; bodies: { id: string; body: string }[]; created?: string[] }
@@ -63,6 +65,10 @@ export function pageUndoSummary(op: PageUndoOp | undefined, images: readonly Ima
 	if (!op) return null;
 	let label: string, effect: string, ids: string[];
 	switch (op.type) {
+		case 'reframe':
+			label=op.description;
+			effect='Restore the previous page boundaries, all artwork layers, regions, lettering, completion flags and edit histories. Later work is protected.';
+			ids=op.created.map(i=>i.id); break;
 		case 'reslice':
 			label = `Reslice ${op.previous.length} → ${op.createdIds.length} pages`;
 			effect = `Remove ${op.createdIds.length} sliced page${op.createdIds.length === 1 ? '' : 's'} and restore ${op.previous.length} previous page${op.previous.length === 1 ? '' : 's'}, their order, saved artwork, region positions and lettering. Undo is stopped if those sliced pages contain later work.`;
@@ -97,12 +103,17 @@ function undoPath(seriesSlug: string, episodeSlug: string) {
 	return join(episodeDir(seriesSlug, episodeSlug), 'undo.json');
 }
 
-export async function readUndoLog(seriesSlug: string, episodeSlug: string): Promise<PageUndoOp[]> {
+export async function readUndoLog(seriesSlug: string, episodeSlug: string, includePending=false): Promise<PageUndoOp[]> {
 	const path = undoPath(seriesSlug, episodeSlug);
 	if (!existsSync(path)) return [];
 	try {
 		const data = JSON.parse(await readFile(path, 'utf8')) as unknown;
-		return Array.isArray(data) ? (data as PageUndoOp[]) : [];
+    if(!Array.isArray(data)) return [];
+    return includePending?data:data.filter((op:PageUndoOp)=>{
+      if(op.type!=='reframe'||!op.frameIds?.length) return true;
+      return op.frameIds.some((id,i)=>sqlite.prepare('SELECT 1 FROM workflow_docs WHERE id=? OR (id=? AND json_extract(data,\'$.geometryFrameId\')=?) LIMIT 1')
+        .get(`frame:${id}`,`page:${op.created[i]?.id}`,id));
+    });
 	} catch {
 		return [];
 	}
@@ -122,8 +133,9 @@ export async function popUndo(
 	seriesSlug: string,
 	episodeSlug: string,
 	expectedToken?: string,
+  includePending=false,
 ): Promise<PageUndoOp | null> {
-	const log = await readUndoLog(seriesSlug, episodeSlug);
+	const log = await readUndoLog(seriesSlug, episodeSlug,includePending);
 	if (expectedToken !== undefined && (!log.length || pageUndoToken(log[log.length - 1]) !== expectedToken))
 		throw Object.assign(new Error('The next undo action changed. Review its updated description and confirm again.'), { status: 409 });
 	const op = log.pop() || null;
@@ -136,6 +148,7 @@ export async function discardDeletedPageUndo(seriesSlug: string, episodeSlug: st
 	const deleted = new Set(imageIds);
 	const log = await readUndoLog(seriesSlug, episodeSlug);
 	const kept = log.filter(op => {
+		if(op.type==='reframe') return ![...op.created,...op.previous].some(i=>deleted.has(i.id));
 		if (op.type === 'pixels') return ![op.imageId, ...(op.imageIds ?? [])].some(id => deleted.has(id));
 		if (op.type === 'psd-import') return !deleted.has(op.imageId);
 		if (op.type === 'combine') return !deleted.has(op.originalId) && !deleted.has(op.removed.id);

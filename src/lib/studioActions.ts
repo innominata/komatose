@@ -80,6 +80,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Crop a page", "Prepare › Edit page › Crop tool", "Palette crop tool", { stage: "prepare", prepView: "page", tool: "crop" }, "tool-crop"),
   A("Split a page", "Prepare › Edit page › Split tool", "Palette split tool", { stage: "prepare", prepView: "page", tool: "split" }, "tool-split"),
   A("Reslice strips (manual cuts)", "Prepare › Edit page › Reslice tool", "Palette reslice tool", { stage: "prepare", prepView: "page", tool: "reslice" }, "tool-reslice"),
+  A("Move page boundary", "Any stage › Boundary", "Move the smaller segment to the adjacent page and retain saved work", {stage:"prepare",prepView:"page",tool:"boundary"}, "tool-boundary"),
   A("Apply reslice cuts", "Tool options bar (Reslice tool)", "Palette scissors button", { stage: "prepare", prepView: "page", tool: "reslice" }, "tool-options"),
   A("Nudge page", "Prepare › Edit page › Inspector › Nudge", "Palette Nudge group", { stage: "prepare", prepView: "page", tab: "page" }, "nudge"),
   A("Replace page from image / PSD", "Page menu › Page, or Prepare › Edit page › Page actions", "Page context menu (Prepare)", { stage: "prepare", prepView: "page", tab: "page" }, "replace-file"),
@@ -143,6 +144,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Show raw vs typeset", "View bar › Showing raw/typeset", "Palette compare", { stage: "review" }, "view-compare"),
   A("Reading-flow arrows", "Review canvas (with Regions on)", "Review canvas", { stage: "review" }, "view-regions"),
 
+  A("Mask chapter", "Clean › Mask chapter", "Detect lettering on every story page without regions", { stage: "clean" }, "mask-chapter"),
   A("Detect lettering (generate mask)", "Clean › Inspector step 1 · stage bar Next", "Palette magic wand · page menu", { stage: "clean", tab: "clean" }, "detect-lettering", "mask ctd koharu"),
   A("Mask engine & detection padding", "Clean › Inspector step 1", "Clean inspector", { stage: "clean", tab: "clean" }, "clean-mask"),
   A("Approve mask", "Clean › Inspector step 1 · stage bar Next", "Palette · page menu", { stage: "clean", tab: "clean" }, "approve-mask"),

@@ -31,6 +31,7 @@
   import { type PaletteId } from "./ToolPalette.svelte";
   import JobsPanel from "./JobsPanel.svelte";
   import DirectorPanel from './DirectorPanel.svelte';
+  import BoundaryDialog from './workflow/BoundaryDialog.svelte';
   import DirectorWarnings from './workflow/DirectorWarnings.svelte';
   import DirectorMemory from './DirectorMemory.svelte';
   import StudioToasts from "./workflow/StudioToasts.svelte";
@@ -200,6 +201,12 @@
   /** Region whose cleaning methods are being compared (the comparison dialog is open). */
   let compareLineId = $state("");
   let postprocessOpen = $state(false);
+  let boundaryOpen=$state(false);
+  async function openBoundary() {
+    if(!page||busy||aiRunning||directorLocked||reviewImageBusy||!canUpload) return;
+    if(!(await saves.flushAll())) {notify('Resolve unsaved drafts first');return;}
+    boundaryOpen=true;
+  }
   /** Drawing a new text path for the selected region on the canvas. */
   let drawingTextPath = $state(false);
   let drawingTextPathFor = "";
@@ -232,7 +239,7 @@
   const FIRST_ACTIONS: Record<string, string> = {
     Prepare: "upload",
     Translate: "transcribe",
-    Review: "proofread-raw",
+    Review: "proofread-english",
     Clean: "detect-lettering",
     Typeset: "autofit-all",
   };
@@ -365,10 +372,15 @@
   let savedProofreadJobId = $state<string | null>(null);
   let scriptProofreadDialog: ScriptProofreadDialog;
   const proofreadJob = $derived(studioState?.jobs.find(job => job.id === proofreadJobId));
+  /** Open a saved reply beside the page, with the inspector back on its first tab. */
+  function openSavedReply(id: string) {
+    savedProofreadJobId = id;
+    inspectorTab = "";
+  }
   const savedProofreadJob = $derived(studioState?.jobs.find(job => job.id === savedProofreadJobId));
   const pageProofreadReplies = $derived((studioState?.jobs ?? []).filter(job =>
     job.kind === 'page-proofread' && job.state === 'completed' && !!job.progress?.critique &&
-    job.payload?.imageId === page?.id));
+    (job.payload?.imageId === page?.id || job.progress?.pageGeometry?.imageIds?.includes(page?.id))));
   let resliceSizing = $state<ResliceSizing>("strips");
   let resliceMaxHeight = $state<number | undefined>(2048);
   const resliceSizeValid = $derived(resliceSizing !== "custom" || validSliceHeight(resliceMaxHeight));
@@ -879,7 +891,7 @@
         proofreadJobId = result.jobId;
       }
       await refresh();
-      notify('The proofreader reply will be saved in this page’s Review replies and Jobs. You can keep editing with the window open.');
+      notify('The proofreader reply will be saved in this page’s Replies tab and Jobs. You can keep editing with the window open.');
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
@@ -893,7 +905,7 @@
         scope: 'chapter', mode: 'raw', model: aiModels.proofread,
       });
       await refresh();
-      notify(`Proofreading ${result.total} unfinished Review page${result.total === 1 ? '' : 's'} in order. Replies will be saved in Review and Jobs.`);
+      notify(`Proofreading ${result.total} unfinished Review page${result.total === 1 ? '' : 's'} in order. Replies will be saved in each page’s Replies tab and Jobs.`);
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
@@ -2666,6 +2678,15 @@
     }
     return result;
   }
+  function chapterMaskRunning() {
+    return !!studioState?.jobs.some(j => j.kind === 'mask-chapter' && ['running','queued','cancelling'].includes(j.state));
+  }
+  async function maskChapter() {
+    if (!canClean || busy || chapterMaskRunning()) return;
+    if (strokes.length) { notify('Save or clear your draft mask strokes before masking the chapter.'); return; }
+    const result = await act({action:'mask-chapter', maskEngine, expansion});
+    if (result) { setMaskVisibility(true); notify('Detecting lettering on every chapter page. No regions are needed. Inspect the masks before cleaning.'); }
+  }
   function approveMask() {
     if (strokes.length) {
       void applyMask();
@@ -3637,6 +3658,7 @@
   }
 
   function choosePalette(id: PaletteId, opts?: { showBrushSize?: boolean }) {
+    if(id==='boundary') {void openBoundary();return;}
     if (id === 'assign-character') {
       if (step !== 'Review' || !canEdit || busy) return;
       cancelPolygon();
@@ -4312,9 +4334,13 @@
   >
     <DirectorPanel {apiBase} {scope} pageId={page?.id??null} canEdit={canUpload} {busy} bind:open={directorOpen} bind:models={directorModels} bind:locked={directorLocked} onsettings={()=>settingsSection="director"}
       onnavigate={(id,region,stage)=>{choosePage(id);void switchStep(stage==='clean'?'Clean':stage==='classify'||stage==='typeset'?'Typeset':stage==='prepare'?'Prepare':'Review');if(region)selectLine(region);}} />
+    <button class="ed-btn" type="button" data-find="move-boundary" aria-label="Move page boundary" disabled={!page||busy||aiRunning||directorLocked||reviewImageBusy||!canUpload} onclick={()=>void openBoundary()}><i class="bi bi-arrows-collapse-vertical" aria-hidden="true"></i><span class="txt">Boundary</span></button>
     <button class="ed-btn" type="button" data-find="palette" aria-label="Find an action" onclick={() => (finderOpen = true)}><i class="bi bi-search" aria-hidden="true"></i><span class="txt">Find an action</span><kbd aria-hidden="true">Ctrl K</kbd></button>
   </StudioTopBar>
   <StudioToasts {error} {toasts} ondismisserror={() => (error = "")} ondismiss={dismissToast} />
+  {#if boundaryOpen && page && studioState}
+    <BoundaryDialog {apiBase} {page} images={studioState.images} lines={studioState.lines} source={asset(pageDoc?.data.prepared)||`/api/images/${page.id}?v=${page.updatedAt}`} onclose={()=>boundaryOpen=false} onapply={pageOperation}/>
+  {/if}
   {#if postprocessOpen && page && pageDoc}
     <PostProcessDialog
       {apiBase}
@@ -4404,13 +4430,16 @@
             <button type="button" class="ed-btn primary" data-find="transcribe" aria-label={scope === "chapter" ? "Transcribe chapter" : "Transcribe page"} disabled={busy || !canUpload || (scope === "page" && !page)} onclick={() => scope === "chapter" || !page ? runAI("transcribe") : transcribePage(page.id)}><i class="bi bi-chat-square-text" aria-hidden="true"></i> Transcribe</button>
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
             <button type="button" class="ed-btn" data-find="fill-missing" aria-label="Fill missing source &amp; English" title="Transcribe empty sources and fill empty English. Never overwrites." disabled={busy || !canEdit} onclick={() => fillMissing(scope === "page" ? page?.id : undefined)}><i class="bi bi-plus-square" aria-hidden="true"></i> Fill missing</button>
+            {#if scope === "chapter"}
+              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount} title={rawProofreadGate.reason || 'Send unfinished Review pages with regions to the proofreader, one at a time.'} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
+            {:else}
+              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
+            {/if}
           {:else if step === "Review"}
             {#if scope === "chapter"}
               <button type="button" class="ed-btn primary" data-find="proofread-script" disabled={busy || aiRunning || !canEdit || !studioState.lines.some(line => !isIgnoredLine(line) && (line.source?.trim() || line.body.trim()))} title="Proofread the whole chapter script with a text model." onclick={() => scriptProofreadDialog.open([aiModels.proofread, aiModels.enquire])}><i class="bi bi-journal-check" aria-hidden="true"></i> Proofread entire script</button>
-              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount} title={rawProofreadGate.reason || 'Send unfinished Review pages with regions to the proofreader, one at a time.'} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
             {:else}
               <button type="button" class="ed-btn" data-find="proofread-english" aria-label="Proofread edited English" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !proofreadGate.ok || (proofreadOperation === "pageImageProofread" && !page)} title={proofreadTitle} onclick={() => runAI("proofread")}><i class="bi bi-spellcheck" aria-hidden="true"></i> Proofread English</button>
-              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}
             <button type="button" class="ed-btn" data-find="accept-all" disabled={!canEdit || busy} onclick={async () => { const result = await act({ action: "approve-all-translations" }); if (result) notify(`Accepted ${result.approved} translation${result.approved === 1 ? "" : "s"}.`); }}><i class="bi bi-check2-all" aria-hidden="true"></i> Accept all translations</button>
             <DirectorWarnings {apiBase} pageId={page?.id ?? null} {canEdit} refreshKey={directorLocked} onregion={(id) => selectLine(id)} />
@@ -4424,6 +4453,7 @@
               {/each}
             </ol>
             <span class="vsep"></span>
+            <button type="button" class="ed-btn" data-find="mask-chapter" title="Detect lettering on every story page without creating regions" disabled={busy || !canClean || !page || strokes.length > 0 || chapterMaskRunning()} onclick={() => void maskChapter()}><i class="bi bi-magic" aria-hidden="true"></i> Mask chapter</button>
             <span class="group-label">Next</span>
             {#if !maskDone && !pageDoc?.data.mask}
               <button type="button" class="ed-btn primary" data-find="detect-lettering" disabled={busy || !canClean} onclick={() => applyMask(true)}>Detect lettering</button>
@@ -4816,6 +4846,7 @@
             {:else if step === "Translate"}
               <button type="button" role="tab" aria-selected={activeTab === "regions"} onclick={() => (inspectorTab = "regions")}>Regions <span class="badge">{pageLines.length}</span></button>
               <button type="button" role="tab" aria-selected={activeTab === "page"} data-find="tab-page-script" onclick={() => (inspectorTab = "page")}>Page &amp; script</button>
+              <button type="button" role="tab" aria-selected={activeTab === "replies"} data-find="tab-proofread-replies" onclick={() => (inspectorTab = "replies")}>Replies <span class="badge">{pageProofreadReplies.length}</span></button>
             {:else if step === "Review"}
               <button type="button" role="tab" aria-selected={activeTab === "queue"} data-find="tab-review-queue" onclick={() => (inspectorTab = "queue")}>To review <span class="badge">{reviewLines.length}</span></button>
               <button type="button" role="tab" aria-selected={activeTab === "page"} onclick={() => (inspectorTab = "page")}>Page &amp; script</button>
@@ -4881,7 +4912,7 @@
           {/if}
         {:else if step === "Review" && activeTab === "glossary"}
           {@render translationSettings("glossary")}
-        {:else if step === "Review" && activeTab === "replies"}
+        {:else if (step === "Translate" || step === "Review") && activeTab === "replies"}
           <div class="proofread-replies">
             <h3>Proofreader replies {#if page}· Page {pageNo}{/if}</h3>
             {#if !page}
@@ -4890,7 +4921,7 @@
               <p>No saved replies for this page yet.</p>
             {:else}
               {#each pageProofreadReplies as reply (reply.id)}
-                <button type="button" class="proofread-reply" onclick={() => (savedProofreadJobId = reply.id)}>
+                <button type="button" class="proofread-reply" onclick={() => openSavedReply(reply.id)}>
                   <strong>{pageProofreadCall(reply)}</strong>
                   <time datetime={new Date(reply.created_at).toISOString()}>{new Date(reply.created_at).toLocaleString()}</time>
                   <span>{reply.progress.critique}</span>
@@ -5035,6 +5066,8 @@
             {canClean}
             {busy}
             hasMaskRegions={pageLines.length > 0}
+            onmaskchapter={() => void maskChapter()}
+            chapterMaskBusy={chapterMaskRunning()}
             ondetect={() => void applyMask(true)}
             onapprovemask={() => void approveMask()}
             onclean={(method) => void cleanWith(method)}
@@ -6017,7 +6050,7 @@
   }
   :global(body[data-first-action="upload"] label[data-find="upload"]),
   :global(body[data-first-action="transcribe"] button[data-find="transcribe"]),
-  :global(body[data-first-action="proofread-raw"] button[data-find="proofread-raw"]),
+  :global(body[data-first-action="proofread-english"] button[data-find="proofread-english"]),
   :global(body[data-first-action="detect-lettering"] button[data-find="detect-lettering"]),
   :global(body[data-first-action="autofit-all"] button[data-find="autofit-all"]) {
     animation: first-action-pulse 1.6s ease-in-out infinite;

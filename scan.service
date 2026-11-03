@@ -14,7 +14,8 @@ Restart=always
 RestartSec=3
 KillMode=process
 Environment=NODE_ENV=production
-Environment=BODY_SIZE_LIMIT=50M
+# Whole-chapter uploads and series backups share this per-request limit.
+Environment=BODY_SIZE_LIMIT=8G
 
 [Install]
 WantedBy=multi-user.target

@@ -118,4 +118,31 @@ class Lettering(unittest.TestCase):
         self.assertEqual(mask.shape,image.shape[:2]);self.assertFalse(mask.any())
         self.assertIn('empty coverage',diagnostics[0]['reasons'])
 
+class WholePageMask(unittest.TestCase):
+    def test_ctd_detects_once_and_pads_text_anywhere_without_regions(self):
+        image = np.full((80, 100, 3), 255, np.uint8)
+        raw = np.zeros((80, 100), np.uint8)
+        raw[5:10, 5:10] = 255
+        raw[65:70, 85:90] = 255
+        with patch.object(detect, 'detect_ctd', return_value=([], raw)) as detector, \
+                patch.object(lettering, 'refine', return_value=(raw, False)):
+            mask, diagnostics, meta = lettering.propose_page(image, 2, engine='ctd')
+        detector.assert_called_once()
+        self.assertTrue(mask[3, 5])
+        self.assertTrue(mask[71, 85])
+        self.assertFalse(mask[40, 50])
+        self.assertEqual(meta['engine'], 'ctd')
+        self.assertEqual(diagnostics[0]['pixels'], np.count_nonzero(mask))
+
+    def test_koharu_mask_needs_no_regions_and_preserves_empty_pages(self):
+        image = np.full((80, 100, 3), 255, np.uint8)
+        raw = np.zeros((80, 100), np.uint8)
+        module = types.SimpleNamespace(installed=lambda: True, predict=lambda image, device: raw,
+            VERSION='fixture', REPO='fixture', REVISION='fixture', runtime_backend=lambda device: 'CPU')
+        with patch.dict(sys.modules, {'koharu_mask': module}):
+            mask, diagnostics, meta = lettering.propose_page(image, 0, engine='koharu')
+        self.assertFalse(mask.any())
+        self.assertEqual(diagnostics[0]['reasons'], [])
+        self.assertEqual(meta['engine'], 'koharu')
+
 if __name__=='__main__': unittest.main()

@@ -23,7 +23,7 @@ author's permission.
 import cv2
 import numpy as np
 
-VERSION = 'placement-fit-v2'
+VERSION = 'placement-fit-v3'
 # Share of the paper beside the lettering that must sit at one tone to be flat.
 FLAT_SHARE = .9
 # Growth limits in pixels on a page scaled to 1024 on its geometric mean side.
@@ -114,9 +114,13 @@ def half_stroke(seed):
     return float(np.median(dt[ridge])) if np.any(ridge) else 1.0
 
 
-def fit_inside(gray, seed, strong, sigma, scale, expansion):
-    """Grow each glyph cluster on its own, so one beside the outline does not hold back the rest."""
-    limit = max(1, int(expansion), round(INSIDE_MAX * scale))
+def fit_inside(gray, seed, strong, sigma, scale, expansion, force=0):
+    """Grow each glyph cluster on its own, so one beside the outline does not hold back the rest.
+
+    `force` is a radius a caller asked for explicitly (the director retrying past a
+    glow): up to it, growth ignores the paper's tone and only the outline stops it.
+    """
+    limit = max(1, int(expansion), int(force), round(INSIDE_MAX * scale))
     pad = limit + 4
     h, w = seed.shape
     # Clusters a little apart are fitted separately; touching glyphs are fitted together.
@@ -128,23 +132,26 @@ def fit_inside(gray, seed, strong, sigma, scale, expansion):
         x0, y0, x1, y1 = max(0, x - pad), max(0, y - pad), min(w, x + cw + pad), min(h, y + ch + pad)
         window = (slice(y0, y1), slice(x0, x1))
         part = np.where(labels[window] == i, seed[window], 0).astype(np.uint8)
-        out[window] |= _grow_on_paper(gray[window], part, strong[window], sigma, limit)
+        # The rest of the lettering is passed along so neighbouring glyphs are not
+        # mistaken for the balloon's outline or for artwork on the paper.
+        out[window] |= _grow_on_paper(gray[window], part, strong[window], sigma, limit, seed[window], force)
     return with_stray_lettering(gray, seed, out, sigma, scale)
 
 
-def _grow_on_paper(gray, seed, strong, sigma, limit):
+def _grow_on_paper(gray, seed, strong, sigma, limit, ink=None, force=0):
     tolerance = paper_tolerance(sigma)
     # Glyph edges are strong too, and Sobel spreads them a pixel past the glyph.
-    # Only an edge beyond that, such as the balloon outline, stops growth.
-    glyphs = _grow(seed, 2)
+    # Only an edge beyond that, such as the balloon outline, stops growth. `ink` is
+    # all the lettering nearby, so a neighbouring glyph is neither outline nor artwork.
+    glyphs = _grow(seed if ink is None else ink, 2)
     best = _grow(seed, 1)
     for radius in range(1, limit + 1):
         candidate = _grow(seed, radius)
         border = (candidate > 0) & (cv2.erode(candidate, np.ones((3, 3), np.uint8)) == 0)
         if np.any(border & strong & (glyphs == 0)):
             break
-        ring = (_grow(candidate, 2) > 0) & (candidate == 0)
-        if radius > 1 and flat_tone(gray[ring], tolerance) is None:
+        ring = (_grow(candidate, 2) > 0) & (candidate == 0) & (glyphs == 0)
+        if radius > max(1, force) and flat_tone(gray[ring], tolerance) is None:
             break
         best = candidate
     return best
@@ -269,8 +276,12 @@ def fit_outside(seed, allowed, scale, expansion):
     return cv2.bitwise_and(_grow(seed, radius), _grow(allowed, radius))
 
 
-def fit_region(image_gray, raw, allowed, placement, expansion, page):
-    """Fitted mask for one region on the whole page. `page` holds shared statistics."""
+def fit_region(image_gray, raw, allowed, placement, expansion, page, force=False):
+    """Fitted mask for one region on the whole page. `page` holds shared statistics.
+
+    `force` means the caller asked for this expansion on purpose, so inside a balloon
+    it is reached even across a glow or halo, stopping only at the outline.
+    """
     expansion = max(0, min(20, int(expansion)))
     scale = page['scale']
     limit = reach(expansion, scale)
@@ -290,7 +301,8 @@ def fit_region(image_gray, raw, allowed, placement, expansion, page):
     if placement not in ('inside', 'outside'):
         fitted = _grow(seed, expansion)
     elif placement == 'inside':
-        fitted = fit_inside(image_gray[window], seed, page['strong'][window], page['sigma'], scale, expansion)
+        fitted = fit_inside(image_gray[window], seed, page['strong'][window], page['sigma'], scale, expansion,
+                            expansion if force else 0)
     else:
         fitted = fit_outside(seed, allowed[window], scale, expansion)
     if image_gray is not None:

@@ -570,38 +570,16 @@ async function combineAdjacent(ctx: Ctx, input: unknown, direction: "spread" | "
     throw new PageEditError("Select exactly two consecutive pages");
   const [first, second] = selected;
   if (selected.some(isCreditsPage)) throw new PageEditError("Credits pages cannot be combined");
-  const [firstBytes, secondBytes] = await Promise.all(selected.map(img => readWorkingBytes(ctx, img)));
-  const [a, b] = await Promise.all([sharp(firstBytes).metadata(), sharp(secondBytes).metadata()]);
-  const rtl = preferences(ctx.episode.id, ctx.series.id).direction === "rtl";
-  const width = direction === "spread" ? a.width! + b.width! : Math.max(a.width!, b.width!);
-  const height = direction === "strip" ? a.height! + b.height! : Math.max(a.height!, b.height!);
-  const bytes = await sharp({ create: { width, height, channels: 4, background: "#ffffff" } })
-    .composite(direction === "spread"
-      ? rtl
-        ? [{ input: secondBytes, left: 0, top: 0 }, { input: firstBytes, left: b.width!, top: 0 }]
-        : [{ input: firstBytes, left: 0, top: 0 }, { input: secondBytes, left: a.width!, top: 0 }]
-      : [{ input: firstBytes, left: 0, top: 0 }, { input: secondBytes, left: 0, top: a.height! }]).png().toBuffer();
-  const geometry = Object.fromEntries(await Promise.all(selected.map(async img => [img.id, await captureGeometry(ctx.episode.id, img.id)])));
-  await backupWorking(ctx, first);
-  await pushUndo(ctx.series.slug, ctx.episode.slug, { type: "combine", originalId: first.id, removed: second, geometry,
-    ...(direction === "strip" ? { description: "Join strips" } : {}) });
-  const image = await commitPixels(ctx, first, bytes, false);
-  for (const img of selected) {
-    await applyPageGeometry(ctx.episode.id, img, image, geometry[img.id],
-      { sx: 1, sy: 1, dx: direction === "spread" ? (rtl && img.id === first.id ? b.width! : !rtl && img.id === second.id ? a.width! : 0) : 0,
-        dy: direction === "strip" && img.id === second.id ? a.height! : 0, width, height }, "#ffffff");
-  }
-  // Joined artwork needs a fresh prepared source; cleaning belongs to the old pages.
-  const doc = getDoc(`page:${first.id}`, {});
-  putDoc(ctx.episode.id, doc.id, {}, doc.revision);
-  await db.update(lines).set({ imageId: first.id }).where(and(eq(lines.episodeId, ctx.episode.id), eq(lines.imageId, second.id)));
-  await db.delete(images).where(eq(images.id, second.id));
-  // Keep the removed half's files for undo.
-  broadcast(ctx.episode.id, { type: "image:delete", id: second.id });
-  for (const line of await listLines(ctx.episode.id)) broadcast(ctx.episode.id, { type: "line:upsert", line });
-  void logActivity({ seriesId: ctx.series.id, episodeId: ctx.episode.id, userId: ctx.user.id,
-    action: direction === "strip" ? "joined_strip" : "combined_spread", payload: { imageIds: selected.map(img => img.id) } });
-  return image;
+  const { executeReframe } = await import('./pageReframe');
+  const rtl=preferences(ctx.episode.id,ctx.series.id).direction==='rtl';
+  const width=direction==='spread'?first.width+second.width:Math.max(first.width,second.width);
+  const height=direction==='strip'?first.height+second.height:Math.max(first.height,second.height);
+  const result=await executeReframe(ctx,[first.id,second.id],[{id:first.id,width,height,placements:selected.map(img=>({
+    imageId:img.id,rect:{x:0,y:0,width:img.width,height:img.height},
+    x:direction==='spread'?(rtl?(img.id===first.id?second.width:0):(img.id===second.id?first.width:0)):0,
+    y:direction==='strip'&&img.id===second.id?first.height:0,
+  }))}],direction==='strip'?'Join strips':'Combine pages into a spread');
+  return result.images.find(i=>i.id===first.id)!;
 }
 
 export function combineSpread(ctx: Ctx, input: unknown): Promise<ImageRow> {
@@ -641,112 +619,12 @@ export async function splitSpread(
   }
   const mid =
     at != null ? splitXFromAt(width, at) : (gutter?.x ?? Math.round(width / 2));
-  const right = await sharp(raw)
-    .extract({ left: mid, top: 0, width: width - mid, height })
-    .png()
-    .toBuffer();
-  const left = await sharp(raw)
-    .extract({ left: 0, top: 0, width: mid, height })
-    .png()
-    .toBuffer();
-
-  await backupWorking(ctx, img);
-  const prevOrder = imgs.map((i) => ({ id: i.id, sortOrder: i.sortOrder }));
-  const rightMeta = await sharp(right).metadata();
-  await writeFile(
-    imagePath(ctx.series.slug, ctx.episode.slug, img.filename),
-    right,
-  );
-  const t = now();
-  await db
-    .update(images)
-    .set({
-      width: rightMeta.width || mid,
-      height: rightMeta.height || height,
-      updatedAt: t,
-    })
-    .where(eq(images.id, img.id));
-
-  const savedName = img.filename.replace(/(\.[^.]+)$/, "-l$1");
-  const leftPath = imagePath(ctx.series.slug, ctx.episode.slug, savedName);
-  await writeFile(leftPath, left);
-  const origLeft = leftPath + ".orig";
-  await writeFile(origLeft, left);
-  const leftMeta = await sharp(left).metadata();
-  const newId = nid();
-  const leftRow = {
-    id: newId,
-    episodeId: ctx.episode.id,
-    filename: savedName,
-    originalName: img.originalName.replace(/(\.[^.]+)$/, "-left$1"),
-    sortOrder: img.sortOrder + 1,
-    width: leftMeta.width || mid,
-    height: leftMeta.height || height,
-    caption: img.caption || "",
-    role: img.role ?? "page",
-    createdAt: t,
-    updatedAt: t,
-  };
-  for (const other of imgs) {
-    if (other.sortOrder > img.sortOrder) {
-      await db
-        .update(images)
-        .set({ sortOrder: other.sortOrder + 1 })
-        .where(eq(images.id, other.id));
-    }
-  }
-  await db.insert(images).values(leftRow);
-
-  const splitFrac = mid / width;
-  const placed = (await listLines(ctx.episode.id)).filter(
-    (l) => l.imageId === img.id && l.placed,
-  );
-  for (const line of placed) {
-    const x = line.x ?? 0;
-    if (x >= splitFrac) {
-      const span = 1 - splitFrac;
-      await db
-        .update(lines)
-        .set({
-          x: span > 0 ? (x - splitFrac) / span : 0,
-          w: Math.min(1, (line.w ?? 0.4) / Math.max(span, 0.01)),
-          updatedAt: t,
-        })
-        .where(eq(lines.id, line.id));
-    } else {
-      await db
-        .update(lines)
-        .set({
-          imageId: newId,
-          x: splitFrac > 0 ? x / splitFrac : 0,
-          w: Math.min(1, (line.w ?? 0.4) / Math.max(splitFrac, 0.01)),
-          updatedAt: t,
-        })
-        .where(eq(lines.id, line.id));
-    }
-  }
-
-  await pushUndo(ctx.series.slug, ctx.episode.slug, {
-    type: "split",
-    originalId: img.id,
-    createdId: newId,
-    order: prevOrder,
-  });
-
-  const next = await listImages(ctx.episode.id);
-  for (const image of next)
-    broadcast(ctx.episode.id, { type: "image:upsert", image });
-  for (const line of await listLines(ctx.episode.id)) {
-    broadcast(ctx.episode.id, { type: "line:upsert", line });
-  }
-  void logActivity({
-    seriesId: ctx.series.id,
-    episodeId: ctx.episode.id,
-    userId: ctx.user.id,
-    action: "split_spread",
-    payload: { imageId, createdId: newId, forced: !gutter },
-  });
-  return next;
+  const {executeReframe}=await import('./pageReframe');
+  const rtl=preferences(ctx.episode.id,ctx.series.id).direction==='rtl';
+  const left={id:rtl?nid():img.id,width:mid,height,placements:[{imageId:img.id,rect:{x:0,y:0,width:mid,height},x:0,y:0}]};
+  const right={id:rtl?img.id:nid(),width:width-mid,height,placements:[{imageId:img.id,rect:{x:mid,y:0,width:width-mid,height},x:0,y:0}]};
+  const result=await executeReframe(ctx,[img.id],rtl?[right,left]:[left,right],'Split page into two halves');
+  return result.images;
 }
 
 export async function splitWideSpreads(
@@ -1235,6 +1113,12 @@ export async function undoPageOp(
   const next = (await readUndoLog(ctx.series.slug, ctx.episode.slug)).at(-1);
   if (expectedUndoToken !== undefined && (!next || pageUndoToken(next) !== expectedUndoToken))
     throw new PageEditError('The next undo action changed. Review its updated description and confirm again.', 409);
+  if(next?.type==='reframe') {
+    const {undoReframe}=await import('./pageReframe');
+    const result=await undoReframe(ctx,next);
+    await popUndo(ctx.series.slug,ctx.episode.slug,expectedUndoToken);
+    return {op:next,...result};
+  }
   if (next?.type === 'reslice') {
     const savedLines = new Set(next.lines.map(line => line.id));
     for (const imageId of next.createdIds) {
@@ -1258,6 +1142,7 @@ export async function undoPageOp(
   }
   const op = await popUndo(ctx.series.slug, ctx.episode.slug, expectedUndoToken);
   if (!op) throw new PageEditError("Nothing to undo");
+  if(op.type==='reframe') throw new PageEditError('The undo action changed. Retry.',409);
   if (op.type === "combine") {
     await db.insert(images).values(op.removed);
     for (const saved of op.geometry[op.removed.id].lines)

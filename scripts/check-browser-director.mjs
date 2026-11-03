@@ -284,9 +284,19 @@ try {
   await expect(cleaningFallback).toHaveValue("qwen-image-edit-2511-lightning");
   await settings.getByRole("button", {name:"Close settings",exact:true}).click();
   await page.locator('[data-find="director"]').click();
+  await panel.locator('summary').filter({hasText:/^Tasks /}).click();
+  await panel.getByRole('button',{name:'Saved proofreads → typeset',exact:true}).click();
+  for (const name of ['Prepare','Check region geometry','Classify region types','Apply raw proofread','Typeset'])
+    await expect(panel.getByRole('checkbox',{name:new RegExp(name)})).toBeChecked();
+  for (const name of ['Clean bubbles','Clean hard bubbles','Clean SFX','Proofread final page','Request missing raw proofreads','Ask proofreader about unresolved text','OCR unresolved regions'])
+    await expect(panel.getByRole('checkbox',{name:new RegExp(`^\\d*\\s*${name}$`)})).not.toBeChecked();
+  await panel.locator('summary').filter({hasText:/^Tasks /}).click();
   await panel
     .getByRole("button", { name: /Run (page|chapter) Director/ })
     .click();
+  const startCall=calls.find(call=>call.action==='start');
+  assert.equal(startCall.policy.savedProofreadsOnly,false);
+  assert.deepEqual(startCall.tasks,['prepare','regions','classify','proofread-raw','typeset']);
   await expect(
     panel.getByRole("button", { name: /Ambiguous thought balloon/ }),
   ).toBeVisible();

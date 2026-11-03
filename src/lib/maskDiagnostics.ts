@@ -14,5 +14,5 @@ export function currentMaskDiagnostics(page: PageData, signature: string) {
   const diagnostics = page.maskDiagnostics;
   return diagnostics && diagnostics.mask === page.mask &&
     diagnostics.source === (page.cleanBase || page.prepared) &&
-    diagnostics.regions === signature ? diagnostics : undefined;
+    (diagnostics.wholePage || diagnostics.regions === signature) ? diagnostics : undefined;
 }

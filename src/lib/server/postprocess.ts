@@ -57,6 +57,18 @@ export async function refinish(finish: CleanFinish, method: PostprocessMethod) {
   }
 }
 
+/** A moved clean is a fragment: never replace artwork outside its saved mask. */
+export async function refinishFragment(finish:CleanFinish,method:PostprocessMethod,current:string) {
+  const result=await refinish(finish,method);
+  return compositeFinishedFragment(current,result,finish.mask);
+}
+export async function compositeFinishedFragment(current:string,result:string,maskAsset:string) {
+  const mask=await sharp(await readAsset(maskAsset)).removeAlpha().greyscale().raw().toBuffer({resolveWithObject:true});
+  const rgb=await sharp(await readAsset(result)).removeAlpha().png().toBuffer();
+  const overlay=await sharp(rgb).joinChannel(mask.data,{raw:{width:mask.info.width,height:mask.info.height,channels:1}}).png().toBuffer();
+  return storeAsset(await sharp(await readAsset(current)).composite([{input:overlay}]).png().toBuffer());
+}
+
 /** The mask's bounds plus context, the area every preview shows. */
 async function previewBox(mask: Buffer) {
   const { data, info } = await sharp(mask).greyscale().raw().toBuffer({ resolveWithObject: true });

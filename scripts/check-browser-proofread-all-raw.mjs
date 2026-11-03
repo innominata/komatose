@@ -31,7 +31,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${base}/series/fixture-series/episodes/fixture-episode`);
   await page.waitForFunction(() => document.body.dataset.studioReady === '1');
-  await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: 'Review', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: 'Translate', exact: true }).click();
   await page.getByRole('group', { name: 'Run on' }).getByRole('button', { name: 'Whole chapter', exact: true }).click();
   const allRaw = page.getByRole('button', { name: 'Proofread All Raw', exact: true });
   await expect(allRaw).toBeEnabled();
@@ -43,6 +43,24 @@ try {
   assert.deepEqual(batch.pages.map(entry => entry.state), ['completed', 'completed']);
   assert.deepEqual(after.jobs.filter(job => job.kind === 'page-proofread' && job.payload.mode === 'raw')
     .map(job => job.payload.imageId).sort(), ['fixture-page-0', 'fixture-page-1']);
+  // Each step's Replies tab opens a saved reply docked left at full height and
+  // returns the inspector to its first tab.
+  await page.getByRole('group', { name: 'Run on' }).getByRole('button', { name: /^Page \d+$/ }).click();
+  const tabs = page.getByRole('tablist', { name: 'Inspector' });
+  for (const [step, first] of [['Translate', /^Regions/], ['Review', /^To review/]]) {
+    await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: step, exact: true }).click();
+    await tabs.getByRole('tab', { name: /^Replies/ }).click();
+    await page.locator('.proofread-reply').first().click();
+    const win = page.getByRole('dialog', { name: /proofreader reply$/ });
+    await expect(win).toBeVisible();
+    const box = await win.boundingBox();
+    assert.equal(Math.round(box.x), 0, `${step} reply window is docked left`);
+    assert.equal(Math.round(box.y), 0, `${step} reply window starts at the top`);
+    assert.ok(Math.abs(box.height - 1000) <= 1, `${step} reply window is full height (${box.height})`);
+    assert.ok(Math.abs(box.width - 620) <= 1, `${step} reply window keeps its width (${box.width})`);
+    await expect(tabs.getByRole('tab', { name: first })).toHaveAttribute('aria-selected', 'true');
+    await win.getByRole('button', { name: 'Close saved reply' }).click();
+  }
   assert.deepEqual(errors, []);
   console.log('Chapter Raw proofreading browser check passed.');
 } finally { await browser.close(); }

@@ -77,7 +77,7 @@ export function protectedResliceRanges(work: ResliceWork) {
   });
 }
 
-function sourceHasStalePolygonFrame(source: Source) {
+export function sourceHasStalePolygonFrame(source: Source) {
   const positioned = source.snapshot.lines.filter(saved => saved.region.polygon?.length &&
     !saved.region.resliceStalePolygon && saved.y != null && saved.h != null);
   const displaced = positioned.filter(saved => {
@@ -87,7 +87,7 @@ function sourceHasStalePolygonFrame(source: Source) {
   return positioned.length >= 3 && displaced > positioned.length / 2;
 }
 
-function currentReslicePolygon(line: LineRow, region: RegionData, image: ImageRow, staleFrame: boolean) {
+export function currentReslicePolygon(line: LineRow, region: RegionData, image: ImageRow, staleFrame: boolean) {
   const polygon = region.polygon;
   if (!polygon?.length || polygon.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))) return [];
   // Keep the classification stable when a page with many old-frame interiors
@@ -198,17 +198,8 @@ export async function sliceRegionWork(line: LineRow, source: ResliceWork["source
   return next;
 }
 
-/** Carry forward valid completion stamps, recalculated for the new page membership. */
+/** Completion belongs to a page, never to an arbitrary crop of its content. */
 export function sliceCompletion(work: ResliceWork, slice: SliceWindow, page: PageData,
   lines: LineRow[], regions: { id: string; data: RegionData }[]) {
-  const sources = work.sources.filter(s => s.top < slice.bottom && s.top + s.image.height > slice.top);
-  for (const step of PAGE_STEPS) {
-    if (!sources.every(source => source.snapshot.page.completed?.[step] === pageStepStamp(step,
-      source.snapshot.page, work.lines.filter(l => l.imageId === source.image.id),
-      work.comments.filter(c => source.snapshot.lines.some(l => l.id === c.lineId)),
-      source.snapshot.lines.map(l => ({ id: l.id, data: l.region }))))) continue;
-    page.completed ??= {};
-    page.completed[step] = pageStepStamp(step, page, lines,
-      work.comments.filter(c => lines.some(l => l.id === c.lineId)), regions);
-  }
+  delete page.completed;
 }

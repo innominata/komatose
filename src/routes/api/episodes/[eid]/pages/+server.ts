@@ -33,6 +33,7 @@ import {
 import { previewReslice, startReslice, parseResliceSize, ResliceError } from '$lib/server/reslice';
 import { readUndoLog, pageUndoSummary } from '$lib/server/pageUndo';
 import { listImages } from '$lib/server/queries';
+import { previewBoundary, moveBoundary } from '$lib/server/pageBoundary';
 import { deletePages, extractPages } from '$lib/server/pageSelection';
 import type { RequestHandler } from './$types';
 
@@ -64,6 +65,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 		const op = String(body.op || '');
 		const ctx = { series, episode, user };
+		if(op==='boundary-preview'||op==='move-boundary') {
+			requireUpload(user);
+			const imageId=String(body.imageId||''),cutY=Number(body.cutY);
+			return json({ok:true,...(op==='boundary-preview'?await previewBoundary(ctx,imageId,cutY):await moveBoundary(ctx,imageId,cutY,String(body.revisionToken||'')))});
+		}
 
 		if (op === 'caption') {
 			requireStickies(user);

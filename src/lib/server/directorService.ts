@@ -18,7 +18,7 @@ import { sqlite } from './db';
 import { directorAsset, directorEvent, directorLocked, withDirector } from './directorAudit';
 import { cleanComplete, pageFingerprint, recordNumberingChange, storyImages, undoDirectorChange, undoDirectorScope } from './directorState';
 import { createJob, listJobs, pageResult, runWithJob, updateJob } from './jobs';
-import { getDoc, putDoc, storeAsset, WorkflowError } from './workflowStore';
+import { getDoc, putDoc, readAsset, storeAsset, WorkflowError } from './workflowStore';
 import { preferences, renumberPages } from './workflowService';
 import { listImages, listLines } from './queries';
 import { cancelDescribePages } from './pageEdit';
@@ -233,7 +233,7 @@ export async function startDirector(opts: {series:Series;episode:Episode;user:Pu
   if (!opts.model || typeof opts.model.engine!=='string' || typeof opts.model.model!=='string')
     throw new WorkflowError('Choose a chat and vision model for Director',400);
   if (directorLocked(opts.episode.id)) throw new WorkflowError('Director is already running on this chapter',409);
-  const policy = directorPolicy({...(opts.policy??memorySettings(opts.series.id).data.policy),...(opts.tasks?{tasks:opts.tasks}:{})});
+  const policy = directorPolicy({...memorySettings(opts.series.id).data.policy,...opts.policy,...(opts.tasks?{tasks:opts.tasks}:{})});
   if (!policy.tasks.length) throw new WorkflowError('Choose at least one Director task',400);
   if (listJobs(opts.episode.id).some(job => ['running','queued','cancelling'].includes(job.state)))
     throw new WorkflowError('Wait for other chapter jobs to finish before starting Director',409);
@@ -324,8 +324,12 @@ async function authorizeDirector(user:PublicUser,seriesId:string) {
 function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser,imageId:string,
   control:{abort:AbortController;child?:{kind:string;id?:string}}):AutomationContext {
   const transcriptionAttempts = new Set<string>();
+  const policy = directorPolicy(JSON.parse(run.policy));
+  const savedOnly = policy.savedProofreadsOnly;
   async function requestProofread(mode:'raw'|'critique',capture?:Awaited<ReturnType<typeof capturePageImages>>) {
-      const policy=directorPolicy(JSON.parse(run.policy));
+      if(savedOnly) throw new WorkflowError('This run uses saved proofreads only; no proofreader requests are allowed');
+      if(!policy.tasks.includes(mode==='raw'?'request-raw':'proof'))
+        throw new WorkflowError('This proofreader task was not selected; no request was made');
       const primary=JSON.parse(run.proofreader) as TaskEngine;
       const candidates=[primary,...policy.fallbacks.filter(model=>{
         try{return rowHasOperation(resolveLiveAssistant(model.engine,model.model).row,'pageImageProofread');}catch{return false;}
@@ -341,26 +345,47 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       throw last;
 
   }
-  async function rawReading() {
-    try { return await rawReadingOnce(); }
+  async function rawReading(allowRequest=false) {
+    try { return await rawReadingOnce(allowRequest); }
     catch(error) {
       // An outside edit can land while the proofreader works. Re-read once against the new page.
       if(!(error instanceof WorkflowError) || error.status!==409) throw error;
-      return rawReadingOnce();
+      return rawReadingOnce(allowRequest);
     }
   }
-  async function rawReadingOnce() {
+  async function rawReadingOnce(allowRequest=false) {
     const before=pageFingerprint(episode.id,imageId);
     const capture=await capturePageImages(series,episode,imageId,false);
     const raw=await storeAsset(capture.raw);
-    const find=()=>listJobs(episode.id).find(job=>job.kind==='page-proofread' && job.state==='completed' &&
-      job.payload.imageId===imageId && job.payload.mode==='raw' && !job.payload.followUpOf &&
-      (job.progress.snapshot as any)?.raw===raw && typeof job.progress.critique==='string' && job.progress.critique.trim());
-    let saved=find();
+    const existing=()=>listJobs(episode.id).filter(job=>job.kind==='page-proofread' && job.state==='completed' &&
+      (job.payload.imageId===imageId || (job.progress.pageGeometry as any)?.imageIds?.includes(imageId)) && job.payload.mode==='raw' && !job.payload.followUpOf &&
+      typeof job.progress.critique==='string' && job.progress.critique.trim());
+    const find=async()=>{
+      const jobs=existing().filter(job=>!(job.progress.pageGeometry as any)?.stale);
+      const exact=jobs.find(job=>(job.progress.snapshot as any)?.raw===raw);
+      if(exact) return exact;
+      // Encoding or metadata changes do not justify buying another reading of the same pixels.
+      const current=await sharp(capture.raw).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+      for(const job of jobs) {
+        const hash=(job.progress.snapshot as any)?.raw;
+        if(typeof hash!=='string') continue;
+        try {
+          const prior=await sharp(await readAsset(hash)).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+          if(current.info.width===prior.info.width && current.info.height===prior.info.height && current.data.equals(prior.data)) return job;
+        } catch { /* A missing snapshot requires review, never an automatic replacement request. */ }
+      }
+    };
+    let saved=await find();
+    let requested=false;
     if(!saved) {
+      const pageLabel=`Page ${capture.page.image.pageNumber ?? capture.page.image.sortOrder + 1}`;
+      if(existing().length) throw new WorkflowError(`${pageLabel}: a saved raw proofread exists but its source snapshot differs or is unavailable. Review it manually; no duplicate raw proofread was requested.`);
+      if(savedOnly || !allowRequest || !policy.tasks.includes('request-raw'))
+        throw new WorkflowError(`${pageLabel}: no completed saved raw proofread matches this source image. Select Request missing raw proofreads to obtain one; no new proofread was requested.`);
       await authorizeDirector(user,series.id);
       await requestProofread('raw',capture);
-      saved=find();
+      requested=true;
+      saved=await find();
     }
     if(pageFingerprint(episode.id,imageId)!==before) throw new WorkflowError('Page changed during raw proofreading; recheck it',409);
     if(!saved) throw new WorkflowError('A completed Proofread Raw response is required before applying translations');
@@ -383,15 +408,20 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
     const critique=[String(saved.progress.critique),...timeline.map(({job,kind})=>kind==='question'
       ? `Question: ${job.payload.prompt || ''}\nProofreader answer: ${job.progress.critique}`
       : `Later rendered-page proofreader critique (newer corrections take precedence):\n${job.progress.critique}\nScript shown in that captured version:\n${((job.progress.snapshot as any)?.script||[]).map((line:any)=>`Region ${line.id}: English shown: ${line.english}`).join('\n')}${appliedAfter(job)}`)].join('\n\n');
-    return {saved,raw,capture,critique};
+    return {saved,raw,capture,critique,requested};
   }
   return {run,series,episode,user,signal:control.abort.signal,authorize:()=>authorizeDirector(user,series.id),
+    ensureRawProofread:async()=>{
+      const {saved,raw,critique,requested}=await rawReading(true);
+      if(!requested) directorEvent(run.id,episode.id,imageId,'critique:reused',
+        {mode:'raw',jobId:saved.id,raw,critique,purpose:'raw-proofread-cache'});
+    },
     transcribe:async()=>{
       const selected=regionAiSettings(preferences(episode.id,series.id).regionAi).translate;
       const started=startAiTranscribe({series,episode,user,imageIds:[imageId],engine:selected.engine,model:selected.model});
       await waitChild(run,control,'transcribe',started.jobId);
     },
-    transcribeRegion:async(line)=>{
+    transcribeRegion:!policy.tasks.includes('transcribe') ? undefined : async(line)=>{
       // A failed read must not restart on every mapping retry in this run.
       const key=JSON.stringify([line.id,line.x,line.y,line.w,line.h]);
       if(transcriptionAttempts.has(key)) return;
@@ -400,6 +430,9 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       await waitChild(run,control,'region-ocr',started.jobId);
     },
     translationBrief:async()=>{
+      // Classification alone may use the saved region text without commissioning a raw reading.
+      if(!policy.tasks.includes('proofread-raw') && !policy.tasks.includes('request-raw') &&
+        !listJobs(episode.id).some(job=>job.kind==='page-proofread'&&job.state==='completed'&&job.payload.imageId===imageId&&job.payload.mode==='raw'&&!(job.progress.pageGeometry as any)?.stale)) return '';
       const {saved,raw,critique}=await rawReading();
       directorAsset(run.id,raw);
       directorEvent(run.id,episode.id,imageId,'critique:reused',
@@ -429,6 +462,7 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
         directorEvent(run.id,episode.id,imageId,'critique:reused',{mode:'raw-follow-up',parentJobId:saved.id,jobId:cached.id,lineId:line.id,critique:cached.progress.critique});
         return String(cached.progress.critique);
       }
+      if(savedOnly || !policy.tasks.includes('proofread-followups')) throw new WorkflowError(`Region ${line.id}: the saved proofread could not resolve this region. Left for manual review; no proofreader follow-up was requested.`);
       const engine=String(saved.payload.engine||'');
       if(isProofreaderId(engine)) assertProofreaderGrant(user,engine);
       const cropHash=await storeAsset(crop);directorAsset(run.id,cropHash);
@@ -469,20 +503,21 @@ export async function directorOverviewAsync(episodeId:string,runId?:string,after
   }
   return result;
 }
-export async function directorPreflight(series:Series,episode:Episode,user:PublicUser,model?:TaskEngine) {
+export async function directorPreflight(series:Series,episode:Episode,user:PublicUser,model?:TaskEngine,input?:Partial<DirectorPolicy>) {
   const issues:{stage:string;message:string}[]=[];
+  const policy=directorPolicy({...memorySettings(series.id).data.policy,...input});
   await authorizeDirector(user,series.id);
   const check=(stage:string,fn:()=>void)=>{try{fn();}catch(error){issues.push({stage,message:error instanceof Error?error.message:String(error)});}};
   if(model) check('all',()=>{const row=resolveLiveAssistant(model.engine,model.model).row;if(row.disabled||!rowHasOperation(row,'director')) throw new Error('Select a tested Director model');});
   const proofreader=regionAiSettings(preferences(episode.id,series.id).regionAi).proofread;
-  check('check',()=>{
+  if(policy.tasks.some(task=>['request-raw','proofread-followups','proof'].includes(task))) check('check',()=>{
     if(isProofreaderId(proofreader.engine)) assertProofreaderGrant(user,proofreader.engine);
     else {const row=resolveLiveAssistant(proofreader.engine,proofreader.model).row;if(row.disabled||!rowHasOperation(row,'pageImageProofread')) throw new Error('Configure a page image proofreader');}
   });
-  if(!listFonts(series.id).length) issues.push({stage:'typeset',message:'Upload a series font before lettering can be fitted'});
-  const policy=memorySettings(series.id).data.policy;
-  if(!['auto','flat','lama','aot','telea'].includes(policy.cleanMethod)&&!imageWorkflowModel(policy.cleanMethod)) issues.push({stage:'clean',message:'Configured cleaning model is unavailable'});
-  if(policy.cleanFallbackModel&&!cleaningFallbackModel(policy.cleanFallbackModel)) issues.push({stage:'clean',message:'Choose an available cleaning fallback model with a passing Cleaning test'});
+  if(policy.tasks.includes('typeset') && !listFonts(series.id).length) issues.push({stage:'typeset',message:'Upload a series font before lettering can be fitted'});
+  const cleaning=policy.tasks.some(task=>['clean-bubbles','clean-hard','clean-sfx'].includes(task));
+  if(cleaning && !['auto','flat','lama','aot','telea'].includes(policy.cleanMethod)&&!imageWorkflowModel(policy.cleanMethod)) issues.push({stage:'clean',message:'Configured cleaning model is unavailable'});
+  if(cleaning && policy.cleanFallbackModel&&!cleaningFallbackModel(policy.cleanFallbackModel)) issues.push({stage:'clean',message:'Choose an available cleaning fallback model with a passing Cleaning test'});
   for(const fallback of policy.fallbacks) check('fallback',()=>{const row=resolveLiveAssistant(fallback.engine,fallback.model).row;if(row.disabled||!rowHasOperation(row,'director'))throw new Error(`Fallback ${fallback.engine} is unavailable`);});
   for(const image of await listImages(episode.id)) {
     try { await capturePageImages(series,episode,image.id,false); }

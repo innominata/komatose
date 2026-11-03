@@ -5,6 +5,8 @@ import { exportJobPayload } from './exportRetention';
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { sqlite } from "./db";
+import {pageEditLocks} from './pageEditLock';
+import {WorkflowError} from './workflowStore';
 import { broadcast } from "./realtime";
 import { directorContext, directorJobLog } from './directorAudit';
 
@@ -278,6 +280,7 @@ function reserveJobModels(jobId: string, payload: unknown) {
 }
 
 export function createJob(episodeId: string, kind: string, payload: unknown) {
+  if(pageEditLocks.has(episodeId)) throw new WorkflowError('Page boundaries are being changed. Start the job after the edit finishes.',409);
   const id = randomUUID();
   reserveJobModels(id, payload);
   try {

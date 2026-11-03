@@ -28,9 +28,9 @@ page.on("pageerror", e => errors.push(e.message));
 const api = `${base}/api/episodes/fixture-episode`;
 const state = async () => (await context.request.get(`${api}/workflow`)).json();
 const previewAfter = async action => {
-  const response = page.waitForResponse(r => r.url() === `${api}/pages` && r.request().postDataJSON()?.op === "reslice-preview");
+  const response = page.waitForResponse(r => r.url() === `${api}/pages` && r.request().postDataJSON()?.op === "reslice-preview").then(r => r.json());
   await action();
-  const data = await (await response).json();
+  const data = await response;
   await expect(page.locator(".reslice-hint")).toContainText(`Target slice height: ${data.maxHeight}px`);
   return data;
 };
@@ -44,12 +44,15 @@ try {
   } });
   expect(upload.ok()).toBeTruthy();
   const before = await state();
+  const mode=await context.request.post(`${api}/workflow`,{data:{action:'preferences',scope:'series',expectedRevision:before.seriesDefaults.revision,data:{pageMode:'strip'}}});
+  expect(mode.ok()).toBeTruthy();
   await page.goto(`${base}/series/fixture-series/episodes/fixture-episode`);
   await page.getByRole("navigation", { name: "Chapter workflow" }).waitFor();
   await page.getByRole("complementary", { name: "Pages in chapter order" })
     .getByRole("button", { name: `Open page ${before.images.length}`, exact: true }).click();
   const size = page.getByRole("combobox", { name: "Strip slice size" });
-  await expect(size).toHaveValue("pages");
+  await expect(size).toHaveValue("strips");
+  await size.selectOption('pages');
   let preview = await previewAfter(() => page.getByRole("toolbar", { name: "Tools" })
     .getByRole("button", { name: "Reslice strips", exact: true }).click());
   expect(preview.maxHeight).toBe(1200);
@@ -105,13 +108,14 @@ try {
   expect(created.every(img => img.width === 800 && img.height <= 1320)).toBeTruthy();
   expect(created.reduce((total, img) => total + img.height, 0)).toBe(preview.height);
   const undoDetails = await (await context.request.get(`${api}/pages`)).json();
-  expect(undoDetails.undo.confirmation).toContain(`Remove ${created.length} sliced pages`);
+  expect(undoDetails.undo.confirmation).toContain("Restore the previous page boundaries");
   const undo = await context.request.post(`${api}/pages`, { data: { op: "undo", undoToken: undoDetails.undo.token } });
   expect(undo.ok()).toBeTruthy();
   expect((await state()).images.map(img => img.id)).toEqual(before.images.map(img => img.id));
 
   // The whole-chapter action carries the same size choice into its saved job.
   await page.reload();
+  await page.getByRole("combobox", { name: "Strip slice size" }).selectOption("pages");
   await page.getByRole("button", { name: "Split strips", exact: true }).click();
   await expect.poll(async () => (await state()).jobs.filter(j => j.kind === "reslice" && j.state === "completed").length,
     { timeout: 30000 }).toBe(2);
@@ -150,6 +154,7 @@ try {
   expect(noGapUpload.ok()).toBeTruthy();
   const unsplit = await state();
   await page.reload();
+  await page.getByRole("combobox", { name: "Strip slice size" }).selectOption("pages");
   await page.getByRole("button", { name: "Split strips", exact: true }).click();
   await expect.poll(async () => (await state()).jobs.find(j => j.kind === "reslice")?.progress?.manualRequired,
     { timeout: 30000 }).toBe(true);

@@ -26,8 +26,11 @@
   let followError = $state('');
 
   const pending = $derived(job && ['running', 'queued', 'cancelling'].includes(job.state));
-  const canFollow = $derived(!!onfollowup && !!job && !pending && !sending && !attaching);
-  const canAttach = $derived(canFollow && !!onattachpage && pasted.length < 8);
+  // The next question can be written (and images added) while a reply is still coming;
+  // only sending waits for it.
+  const canCompose = $derived(!!onfollowup && !!job);
+  const canFollow = $derived(canCompose && !pending && !sending && !attaching);
+  const canAttach = $derived(canCompose && !attaching && !!onattachpage && pasted.length < 8);
   const followUp = $derived(Boolean(job?.payload?.followUpOf || job?.progress?.prompt));
   const followImages = $derived(job?.progress?.snapshot?.followUpImages ?? []);
   const engineLabel = $derived(String(job?.payload?.engine ?? ''));
@@ -40,10 +43,13 @@
   $effect(() => {
     const id = job?.id;
     if (id === lastJobId) return;
+    // A follow-up sent from this window keeps whatever was written after sending it.
+    const continued = !!lastJobId && job?.payload?.followUpOf === lastJobId;
     lastJobId = id;
     imagesOpen = false;
-    prompt = '';
     followError = '';
+    if (continued) return;
+    prompt = '';
     for (const item of pasted) URL.revokeObjectURL(item.preview);
     pasted = [];
   });
@@ -132,10 +138,15 @@
     if (!canFollow || !onfollowup) return;
     const text = prompt.trim();
     if (!text && !pasted.length) return;
+    const sent = [...pasted];
     sending = true;
     followError = '';
     try {
-      await onfollowup(text, pasted.map(({ mime, data }) => ({ mime, data })));
+      await onfollowup(text, sent.map(({ mime, data }) => ({ mime, data })));
+      // Clear only what was sent; anything written or pasted meanwhile stays.
+      if (prompt.trim() === text) prompt = '';
+      for (const item of sent) URL.revokeObjectURL(item.preview);
+      pasted = pasted.filter((item) => !sent.includes(item));
     } catch (error) {
       followError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -197,6 +208,7 @@
         </div>
       </details>
     {/if}
+    {#if job?.progress?.pageGeometry?.stale}<p role="status">Stale — {job.progress.pageGeometry.reason.toLowerCase()}. This reply and its original snapshots are retained for reference.</p>{/if}
     {#if job?.progress?.snapshot && !followUp}
       <details bind:open={imagesOpen}>
         <summary>Images submitted · {new Date(job.progress.snapshot.capturedAt).toLocaleString()}</summary>
@@ -243,7 +255,7 @@
         bind:value={prompt}
         rows="3"
         placeholder="Ask a follow-up, or paste an image from the clipboard…"
-        disabled={!canFollow}
+        disabled={!canCompose}
         onkeydown={onComposerKey}
       ></textarea>
     </div>
@@ -256,7 +268,7 @@
           >{attaching === 'raw' ? 'Attaching…' : 'Attach raw source'}</button>
         <p class="hint">Working draft is the current typeset page. Paste or drop more images if needed. Ctrl+Enter sends.</p>
       </div>
-      <button type="button" class="primary" disabled={!canFollow || (!prompt.trim() && !pasted.length)} onclick={() => void sendFollowUp()}
+      <button type="button" class="primary" disabled={!canFollow || (!prompt.trim() && !pasted.length)} title={pending ? 'Waiting for the current reply; you can keep writing.' : undefined} onclick={() => void sendFollowUp()}
         >{sending ? 'Sending…' : 'Send follow-up'}</button>
     </div>
   </footer>

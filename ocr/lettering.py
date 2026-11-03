@@ -166,7 +166,7 @@ def _placement(placements, index):
     return value if value in ('inside', 'outside') else None
 
 
-def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
+def propose_koharu(image, regions, expansion=5, device='cpu', placements=None, force=False):
     import koharu_mask
     import mask_fit
     height, width = image.shape[:2]
@@ -182,7 +182,7 @@ def propose_koharu(image, regions, expansion=5, device='cpu', placements=None):
             continue
         placement = _placement(placements, index)
         if placement:
-            clipped = mask_fit.fit_region(gray, raw, allowed, placement, expansion, page)
+            clipped = mask_fit.fit_region(gray, raw, allowed, placement, expansion, page, force)
         else:
             # Unknown place: plain dilation, keeping glyphs that poke out of the box whole.
             clipped = mask_fit.fit_region(gray, raw, allowed, None, expansion, page)
@@ -281,10 +281,11 @@ def refine(probability, image, boxes):
     return mask, rejected
 
 
-def propose(image, regions, expansion=5, engine='auto', device='cpu', placements=None):
+def propose(image, regions, expansion=5, engine='auto', device='cpu', placements=None, force=False):
+    """`force`: the caller asked for this expansion on purpose; see mask_fit.fit_region."""
     resolved = resolve_engine(engine)
     if resolved == 'koharu':
-        return propose_koharu(image, regions, expansion, device, placements)
+        return propose_koharu(image, regions, expansion, device, placements, force)
     import detect
     import mask_fit
     height, width = image.shape[:2]
@@ -321,7 +322,7 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu', placements
             if page is None:
                 gray, page = mask_fit.page_statistics(image)
             local = {**page, 'strong': page['strong'][top:bottom, left:right]}
-            clipped = mask = mask_fit.fit_region(gray[top:bottom, left:right], mask, clip, placement, expansion, local)
+            clipped = mask = mask_fit.fit_region(gray[top:bottom, left:right], mask, clip, placement, expansion, local, force)
         else:
             radius = max(0, min(20, int(expansion)))
             if radius:
@@ -346,3 +347,26 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu', placements
         'revision': detect.CTD_FILE,
     }
     return result, diagnostics, meta
+
+
+def propose_page(image, expansion=5, engine='auto', device='cpu'):
+    """Whole-page lettering mask, with no saved regions or bubble fitting."""
+    resolved = resolve_engine(engine)
+    if resolved == 'koharu':
+        import koharu_mask
+        raw = koharu_mask.predict(image, device)
+        meta = {'engine': 'koharu', 'version': koharu_mask.VERSION,
+                'backend': koharu_mask.runtime_backend(device),
+                'repo': koharu_mask.REPO, 'revision': koharu_mask.REVISION}
+        uncertain = False
+    else:
+        import detect
+        boxes, probability = detect.detect_ctd(image, want_mask=True, device=device)
+        raw, uncertain = refine(probability, image, boxes)
+        meta = {'engine': 'ctd', 'version': VERSION + '+whole-page',
+                'backend': 'CPU ONNX' if device == 'cpu' else f'{device} · GPU · PyTorch',
+                'repo': detect.CTD_REPO, 'revision': detect.CTD_FILE}
+    mask = _apply_expansion(raw, expansion)
+    diagnostics = [{'region': 0, 'pixels': int(np.count_nonzero(mask)),
+                    'reasons': ['uncertain components'] if uncertain else []}]
+    return mask, diagnostics, meta

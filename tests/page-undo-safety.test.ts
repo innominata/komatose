@@ -79,7 +79,8 @@ test('undo refuses later cleaning and missing backup files before changing any s
   const empty = await fixture('missing');
   await reslicePages(empty, { cuts: [120] });
   const before = await readUndoLog(empty.series.slug, empty.episode.slug);
-  await rm((before.at(-1) as any).dir, { recursive: true });
+  const operation=before.at(-1) as any;
+  await rm(imagePath(empty.series.slug,empty.episode.slug,operation.previous[0].filename));
   await assert.rejects(undoPageOp(empty), /backup is missing/);
   assert.equal((await listImages(empty.episode.id)).length, 2);
   assert.deepEqual(await readUndoLog(empty.series.slug, empty.episode.slug), before);

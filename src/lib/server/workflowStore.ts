@@ -7,6 +7,7 @@ import { sqlite } from "./db";
 import { DATA_DIR } from "./paths";
 import { broadcast } from "./realtime";
 import { pageArtwork, type PageData, type WorkflowDoc } from "../workflow";
+import {toLine} from './queries';
 
 export class WorkflowError extends Error {
   constructor(
@@ -76,7 +77,27 @@ export function putDoc<T>(
   data: T,
   expected: number,
   action: "save" | "undo" | "redo" = "save",
+  linked = false,
 ): WorkflowDoc<T> {
+  if(!linked && action!=='save' && id.startsWith('page:')) {
+    const row=sqlite.prepare('SELECT undo,redo FROM workflow_docs WHERE id=?').get(id) as any;
+    const target=JSON.parse(row?.[action]??'[]').at(-1);
+    const group=target?.reframeHistory;
+    if(group) return sqlite.transaction(()=>{
+      if(getDoc(id,{}).revision!==expected) throw new WorkflowError('This page changed. Reload before undoing.',409);
+      const siblings=group.pageIds.map((imageId:string)=>`page:${imageId}`);
+      for(const sibling of siblings) {
+        const state=sqlite.prepare('SELECT undo,redo FROM workflow_docs WHERE id=? AND episode_id=?').get(sibling,episodeId) as any;
+        if(JSON.parse(state?.[action]??'[]').at(-1)?.reframeHistory?.eventId!==group.eventId)
+          throw new WorkflowError('Undo the later edits on the related pages first. This cleaning edit spans their current boundaries; no history was removed.',409);
+      }
+      for(const sibling of siblings) {
+        const doc=getDoc(sibling,{});
+        putDoc(episodeId,sibling,doc.data,doc.revision,action,true);
+      }
+      return getDoc<T>(id,data);
+    })();
+  }
   const result = sqlite.transaction(() => {
     const row = sqlite
       .prepare("SELECT * FROM workflow_docs WHERE id=?")
@@ -94,14 +115,37 @@ export function putDoc<T>(
     if (action === "undo") {
       if (!undo.length) throw new WorkflowError("Nothing to undo");
       next = undo.pop();
-      redo.push(current.data);
+      redo.push({...current.data,...((next as any)?.reframeHistory?{reframeHistory:(next as any).reframeHistory}:{})});
     } else if (action === "redo") {
       if (!redo.length) throw new WorkflowError("Nothing to redo");
       next = redo.pop();
-      undo.push(current.data);
+      undo.push({...current.data,...((next as any)?.reframeHistory?{reframeHistory:(next as any).reframeHistory}:{})});
     } else {
       undo.push(current.data);
       redo = [];
+    }
+    if(id.startsWith('page:') && next && typeof next==='object') {
+      next={...next as any};delete (next as any).reframeHistory;
+    }
+    if(id.startsWith('region:') && next && typeof next==='object') {
+      const region=next as any;
+      if(action!=='save' && region.geometryFrameId) {
+        const points=region.resliceStalePolygon?[]:(region.polygon??[]);
+        const b=region.historyBounds;
+        if(points.some((p:any)=>p.x < -0.00001||p.y < -0.00001||p.x > 1.00001||p.y > 1.00001)||
+          (b&&(b.x < -0.00001||b.y < -0.00001||b.x+b.w > 1.00001||b.y+b.h > 1.00001)))
+          throw new WorkflowError('This historical region would cross the current page boundary. Adjust the boundary first, then undo again. Your history is unchanged.',409);
+        if(b&&episodeId) {
+          const line=sqlite.prepare('SELECT revision FROM lines WHERE id=? AND episode_id=?').get(id.slice(7),episodeId) as any;
+          if(line) {
+            sqlite.prepare('UPDATE lines SET x=?,y=?,w=?,h=?,updated_at=? WHERE id=? AND episode_id=?').run(b.x,b.y,b.w,b.h,Date.now(),id.slice(7),episodeId);
+            sqlite.prepare("UPDATE suggestions SET base_revision=? WHERE line_id=? AND episode_id=? AND base_revision=? AND state='pending'").run(line.revision+1,id.slice(7),episodeId,line.revision);
+            const row=sqlite.prepare('SELECT * FROM lines WHERE id=? AND episode_id=?').get(id.slice(7),episodeId) as Record<string,unknown>;
+            const camel=Object.fromEntries(Object.entries(row).map(([key,value])=>[key.replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase()),value]));
+            broadcast(episodeId,{type:'line:upsert',line:toLine(camel as any)});
+          }
+        }
+      }
     }
     const revision = current.revision + 1;
     sqlite

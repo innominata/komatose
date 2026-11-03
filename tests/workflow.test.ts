@@ -5495,7 +5495,8 @@ test("reslice preserves cleaning layers, masks, lettering, approvals, regions, c
   assert.equal(unplaced.placed, false);
   assert.equal(unplaced.x, null);
   assert.equal(unplaced.y, null);
-  assert.deepEqual(getDoc<any>("region:kept-unplaced", {}).data, { locked: true });
+  assert.equal(getDoc<any>("region:kept-unplaced", {}).data.locked, true);
+  assert.ok(getDoc<any>("region:kept-unplaced", {}).data.geometryFrameId);
   assert.equal((await listComments(ep.id)).length, 2);
   assert.equal((sqlite.prepare("SELECT base_revision FROM suggestions WHERE id='kept-suggestion'").get() as any).base_revision, moved.revision);
   assert.equal((sqlite.prepare("SELECT base_revision FROM suggestions WHERE id='kept-stale'").get() as any).base_revision, 2);
@@ -5505,9 +5506,7 @@ test("reslice preserves cleaning layers, masks, lettering, approvals, regions, c
     assert.equal(doc.data.cleanApproved, true);
     assert.equal(doc.data.preparedAt, image.updatedAt);
     const lines = (await listLines(ep.id)).filter(l => l.imageId === image.id);
-    for (const step of PAGE_STEPS) assert.equal(doc.data.completed?.[step], pageStepStamp(step, doc.data, lines,
-      (await listComments(ep.id)).filter(c => lines.some(l => l.id === c.lineId)),
-      lines.map(l => ({ id: l.id, data: getDoc<any>(`region:${l.id}`, {}).data }))));
+    assert.equal(doc.data.completed,undefined,'A new page composition always needs fresh completion checks');
     await preparePage(series, ep, image);
     assert.deepEqual(getDoc<PageData>(doc.id, {}).data, doc.data, "preparing the new page keeps its saved work");
   }
@@ -5526,7 +5525,7 @@ test("reslice preserves cleaning layers, masks, lettering, approvals, regions, c
     assert.deepEqual(getDoc<any>(`region:kept-r${snap.image.sortOrder}`, {}).data, snap.region);
   }
   assert.equal((await listLines(ep.id)).find(l => l.id === "kept-unplaced")!.imageId, "kept-p1");
-  assert.deepEqual(getDoc<any>("region:kept-unplaced", {}).data, { locked: true });
+  assert.deepEqual(getDoc<any>("region:kept-unplaced", {}).data, {locked:true});
   // The automatic no-gap fallback also keeps every saved layer and rendered
   // letter intact, while flagging only the oversized output for manual work.
   const automatic = await reslicePages(ctx, { sizing: "custom", maxHeight: 600 });
@@ -5753,7 +5752,7 @@ test("reslice retains unsplittable art as an oversized page for manual splitting
   assert.deepEqual(auto.forced, []);
   assert.deepEqual(auto.manualSlices, [{ imageId: auto.images[0].id, top: 0, bottom: 16100, height: 16100 }]);
   assert.deepEqual(await sharp((await readWorkingOrOrig(series.slug, ep.slug, auto.images[0].filename))!).removeAlpha().raw().toBuffer(), raw);
-  assert.equal((await readUndoLog(series.slug, ep.slug)).length, 1);
+  assert.equal((await readUndoLog(series.slug, ep.slug)).length, 0,'An unchanged oversized page needs no undo entry');
   // Only an explicit manual request may cut through art.
   const result = await reslicePages(ctx, { imageIds: [auto.images[0].id], sizing: "custom", maxHeight: 1200, cuts: [8000] });
   assert.deepEqual(result.forced, [8000]);

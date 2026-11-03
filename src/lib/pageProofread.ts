@@ -46,6 +46,7 @@ export type PageProofreadJob = {
   payload?: Record<string, unknown>;
   created_at?: number;
   progress?: {
+    pageGeometry?: {imageIds:string[];stale:boolean;reason:string};
     message?: string;
     critique?: string;
     prompt?: string;
