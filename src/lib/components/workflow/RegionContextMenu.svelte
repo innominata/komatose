@@ -41,7 +41,6 @@
     selectLine: (id: string) => void;
     switchStep: (next: string) => void | Promise<void>;
     pageOperation: (body: Record<string, unknown>) => void;
-    loadReslicePreview: () => void;
     insertAt: (id: string, before: boolean) => void;
     reorder: (delta: number) => void;
     deletePage: (id: string) => void;
@@ -449,10 +448,10 @@
           role="menuitem"
           disabled={!canUpload || busy}
           onclick={() => {
-            // The tool reacts to the selection and stitches the window around this page.
-            pageTool = "reslice";
+            // Edit page shows the chapter strip; the + tool adds breaks on it.
+            pageTool = "add-break";
             menu = null;
-          }}>Reslice strips…</button
+          }}>Add page breaks…</button
         >{/if}
         <button
           role="menuitem"

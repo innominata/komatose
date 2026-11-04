@@ -17,8 +17,6 @@
     oncompletepolygon,
     onapplycrop,
     onapplysplit,
-    onapplyreslice,
-    hasReslicePreview = false,
     onstopstyle,
     showNudge = false,
     onnudge,
@@ -39,8 +37,6 @@
     oncompletepolygon?: () => void;
     onapplycrop?: () => void;
     onapplysplit?: () => void;
-    onapplyreslice?: () => void;
-    hasReslicePreview?: boolean;
     onstopstyle?: () => void;
     showNudge?: boolean;
     onnudge?: (dx: number, dy: number) => void;
@@ -50,7 +46,7 @@
     'assign-character': { icon: 'bi-person-badge', label: 'Assign character', hint: 'Choose a character, then click dialogue or thought regions. Esc stops.' },
     crop: { icon: "bi-crop", label: "Crop", hint: "Drag the crop box, then Apply." },
     split: { icon: "bi-vr", label: "Split page", hint: "Drag the line to where the page should split, then Apply." },
-    reslice: { icon: "bi-hr", label: "Reslice strips", hint: "Automatic cuts use solid-color gaps. Click to adjust, then Apply." },
+    "add-break": { icon: "bi-plus-lg", label: "Add page break", hint: "Click the strip to add a break. It snaps to solid-colour gaps; hold Alt to place it freely." },
     reorder: { icon: "bi-arrow-down-up", label: "Reorder reading flow", hint: "Click a starting region, then each following region in reading order." },
     brush: { icon: "bi-brush", label: "Mask brush", hint: "Paint over lettering to add it to the mask." },
     erase: { icon: "bi-eraser", label: "Erase mask", hint: "Paint to remove areas from the mask." },
@@ -71,7 +67,7 @@
       tool === "polygon" ||
       tool === "crop" ||
       tool === "split" ||
-      tool === "reslice" ||
+      tool === "add-break" ||
       tool === "reorder" ||
       tool === "style-brush" ||
       tool === 'assign-character' ||
@@ -134,10 +130,6 @@
     {#if tool === "split"}
       <span>Place the split, then apply.</span>
       <button type="button" onclick={() => onapplysplit?.()}>Apply split</button>
-    {/if}
-    {#if tool === "reslice"}
-      <span>Click to add or remove manual cuts.</span>
-      <button type="button" aria-label="Apply reslice cuts" disabled={!hasReslicePreview} onclick={() => onapplyreslice?.()}>Apply reslice cuts</button>
     {/if}
     {#if tool === "reorder"}
       <span>Click a starting region, then each following region in reading order.</span>

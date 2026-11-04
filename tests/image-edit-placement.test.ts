@@ -43,3 +43,27 @@ test('a module that fits on no card stays on the chosen one', () => {
 	assert.equal(plan.backend.includes('Vulkan0'), false);
 	assert.equal(plan.maxVram, 'Vulkan0=-1024');
 });
+
+test('a module that fits nowhere runs on the CPU when the chosen card has no room to compute', () => {
+	// FLUX 3 Klein on a card another program had filled; GPU 2 took the diffusion model and VAE.
+	const flux = { diffusion: 5866, te: 4076, vae: 320 };
+	const plan = placeImageEditModules('Vulkan1', flux, cards({ igpu: 28612, gpu1: 96, gpu2: 12290 }));
+	assert.equal(plan.backend, 'diffusion=Vulkan2,vae=Vulkan2,te=cpu');
+	assert.equal(plan.maxVram, 'Vulkan0=-1024');
+});
+
+test('a rejected edit is explained from the sd-server log', async () => {
+	const { editFailureReason } = await import('../src/lib/server/imageEdit');
+	const log = '[W] model manager cannot make enough memory available on Vulkan1: need 909.25 MB device / 397.25 MB budget, available 96.50 MB device / unlimited budget\n[E] failed to encode prompt';
+	assert.match(editFailureReason('flux-3-image-klein', 'x', log), /^Vulkan1 is out of memory: an edit needs 909 MB and only 97 MB is free/);
+	assert.match(editFailureReason('flux-3-image-klein', 'x', '[E] failed to encode prompt'), /text encoder could not run/);
+	assert.equal(editFailureReason('flux-3-image-klein', 'The local image editor returned HTTP 500: busy', ''), 'Edits fail: HTTP 500: busy');
+});
+
+test('GPU memory from DRM fdinfo counts each client once per card', async () => {
+	const { parseDrmFdinfo } = await import('../src/lib/server/computeDevices');
+	const fd = (client: number, pdev: string, kib: number) => `drm-driver:\tamdgpu\ndrm-client-id:\t${client}\ndrm-pdev:\t${pdev}\ndrm-memory-vram:\t${kib} KiB\n`;
+	const used = parseDrmFdinfo([fd(1, '0000:03:00.0', 2048 * 1024), fd(1, '0000:03:00.0', 2048 * 1024), fd(2, '0000:07:00.0', 1024)]);
+	assert.equal(used.get('0000:03:00'), 2048);
+	assert.equal(used.get('0000:07:00'), 1);
+});

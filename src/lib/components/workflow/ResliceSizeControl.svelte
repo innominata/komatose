@@ -16,6 +16,8 @@
   <label>Slice size
     <select bind:value={sizing} {disabled} aria-label="Strip slice size">
       <option value="pages">Normal pages (1.5× width)</option>
+      <option value="2500">2,500 px</option>
+      <option value="4000">4,000 px</option>
       <option value="custom">Custom height</option>
       <option value="strips">Tall strips (16,000 px)</option>
     </select>

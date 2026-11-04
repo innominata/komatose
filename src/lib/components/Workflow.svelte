@@ -12,7 +12,8 @@
   import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
   import { isProofreaderId } from '$lib/proofreaders';
   import { copyPngToClipboard } from '$lib/clipboardImage';
-  import { lastProofreadPageId, pageProofreadCall } from '$lib/pageProofread';
+  import { currentRawProofread, lastProofreadPageId, pageProofreadCall } from '$lib/pageProofread';
+  import { cleanDroppedText, dropFieldFor } from '$lib/regionTextDrop';
   import PageProofreadDialog from './PageProofreadDialog.svelte';
   import SavedProofreadWindow from './SavedProofreadWindow.svelte';
   import ScriptProofreadDialog from './ScriptProofreadDialog.svelte';
@@ -54,10 +55,15 @@
   import PagesSidebar from "./workflow/PagesSidebar.svelte";
   import PrepareChapterPanel from "./workflow/PrepareChapterPanel.svelte";
   import ResliceSizeControl from "./workflow/ResliceSizeControl.svelte";
-  import { validSliceHeight, manualSliceRanges, type ManualSlice, type ResliceSizing } from "$lib/reslice";
+  import StripBreaksCanvas, { type StripLayoutView } from "./workflow/StripBreaksCanvas.svelte";
+  import { breakChanges, currentBreaks, sameBreaks } from "$lib/stripBreaks";
+  import { isCreditsPage } from "$lib/credits";
+  import { validSliceHeight, type ResliceSizing } from "$lib/reslice";
   import TranslateChapterPanel from "./workflow/TranslateChapterPanel.svelte";
   import ExportPanel from "./workflow/ExportPanel.svelte";
   import TranslateInspector from "./workflow/TranslateInspector.svelte";
+  import CleanAssetsPanel from "./workflow/CleanAssetsPanel.svelte";
+  import type {CleanAsset,PlacedAsset} from "$lib/cleanAssets";
   import CleanInspector from "./workflow/CleanInspector.svelte";
   import TypesetInspector from "./workflow/TypesetInspector.svelte";
   import RegionGeometryPanel from "./workflow/RegionGeometryPanel.svelte";
@@ -201,6 +207,10 @@
   /** Region whose cleaning methods are being compared (the comparison dialog is open). */
   let compareLineId = $state("");
   let postprocessOpen = $state(false);
+  let selectedAssetId=$state('');
+  const pageAssets=$derived.by(()=>{void saveVersion;return (page?saves.drafts.get(`page-assets:${page.id}`)?.patch.placements as PlacedAsset[]|undefined:undefined)??pageDoc?.data.placedAssets??[];});
+  function changePageAssets(placements:PlacedAsset[]){if(!page||!pageDoc||!canClean||busy)return;saves.queue(`page-assets:${page.id}`,{placements},pageDoc.revision,200);}
+  function insertPageAsset(a:CleanAsset,x?:number,y?:number){if(!page||!canClean||busy)return;openAssetsTab();const scale=Math.min(1,page.width*.6/a.width,page.height*.5/a.height);const id=crypto.randomUUID();selectedAssetId=id;changePageAssets([...pageAssets,{...a,id,assetId:a.id,x:x??page.width/2,y:y??page.height/2,width:a.width*scale,height:a.height*scale,rotation:0,opacity:1}]);}
   let boundaryOpen=$state(false);
   async function openBoundary() {
     if(!page||busy||aiRunning||directorLocked||reviewImageBusy||!canUpload) return;
@@ -384,20 +394,9 @@
   let resliceSizing = $state<ResliceSizing>("strips");
   let resliceMaxHeight = $state<number | undefined>(2048);
   const resliceSizeValid = $derived(resliceSizing !== "custom" || validSliceHeight(resliceMaxHeight));
-  let reslicePreview = $state<null | {
-    preview: string;
-    width: number;
-    height: number;
-    maxHeight: number;
-    cuts: number[];
-    forced: number[];
-    manualRequired: boolean;
-    manualSlices: ManualSlice[];
-    bands: { top: number; bottom: number }[];
-    imageIds: string[];
-    /** Each stitched source page's band, so the canvas can label the boundaries. */
-    pages: { id: string; number: number; top: number; height: number }[];
-  }>(null);
+  /** The long-strip break editor: the chapter as one strip, and the breaks being edited. */
+  let stripLayout = $state<StripLayoutView | null>(null);
+  let stripBreaks = $state<number[]>([]);
   let previewCopied = $state(false);
   let pagesOpen = $state(false);
   let inspectorOpen = $state(false);
@@ -905,7 +904,8 @@
         scope: 'chapter', mode: 'raw', model: aiModels.proofread,
       });
       await refresh();
-      notify(`Proofreading ${result.total} unfinished Review page${result.total === 1 ? '' : 's'} in order. Replies will be saved in each page’s Replies tab and Jobs.`);
+      const skipped = result.skipped ? ` Skipped ${result.skipped} page${result.skipped === 1 ? '' : 's'} that already ${result.skipped === 1 ? 'has' : 'have'} a raw proofreading reply.` : '';
+      notify(`Proofreading ${result.total} unfinished Review page${result.total === 1 ? '' : 's'} in order. Replies will be saved in each page’s Replies tab and Jobs.${skipped}`);
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
@@ -959,7 +959,7 @@
   }
   const pageMode = $derived(studioState?.preferences.pageMode ?? "pages");
   $effect(() => {
-    if (step === "Prepare" && (pageMode === "strip" ? pageTool === "split" : pageTool === "reslice"))
+    if (step === "Prepare" && (pageMode === "strip" ? pageTool === "split" : pageTool === "add-break"))
       pageTool = "select";
   });
   const canCombinePages = $derived(selectedPageIds.length === 2 && !!studioState &&
@@ -1122,24 +1122,6 @@
         force: true,
         at: point.x,
       });
-      return;
-    }
-    if (pageTool === "reslice" && reslicePreview) {
-      const y = Math.round(point.y * reslicePreview.height);
-      if (y <= 0 || y >= reslicePreview.height) return;
-      const near = reslicePreview.cuts.find(
-        (c) => Math.abs(c - y) < Math.max(8, reslicePreview!.maxHeight * 0.02),
-      );
-      const cuts = near != null
-        ? reslicePreview.cuts.filter((c) => c !== near)
-        : [...reslicePreview.cuts, y].sort((a, b) => a - b);
-      reslicePreview = {
-        ...reslicePreview,
-        cuts,
-        forced: cuts.filter(c => !reslicePreview!.bands.some(b => c >= b.top && c < b.bottom)),
-        manualSlices: manualSliceRanges(reslicePreview.height, cuts, reslicePreview.maxHeight),
-        manualRequired: manualSliceRanges(reslicePreview.height, cuts, reslicePreview.maxHeight).length > 0,
-      };
       return;
     }
     if (pageTool === "crop") {
@@ -1446,6 +1428,12 @@
   const saves = new SaveQueue(
     chapterDraftKey(user.id, episode.id),
     async (id, d) => {
+      if(id.startsWith('page-assets:')) {
+        const imageId=id.slice(12);
+        const result=await request(`${apiBase}/workflow`,{action:'placed-assets',imageId,placements:d.patch.placements,expectedRevision:d.revision});
+        if(studioState)studioState.pages={...studioState.pages,[imageId]:result.doc};
+        return {revision:result.doc.revision};
+      }
       const commentId = id.startsWith("comment:") ? id.slice(8) : null;
       const captionId = id.startsWith("caption:") ? id.slice(8) : null;
       const res = await fetch(
@@ -1758,6 +1746,37 @@
           : s,
       );
   }
+  /**
+   * Text dropped on a region (from a proofreader reply, or anywhere) replaces its source or its
+   * English, by writing system: Japanese or Korean letters are source, Latin letters English.
+   */
+  function dropTextOnRegion(target: LineRow | string, raw: string) {
+    const line = typeof target === "string" ? studioState?.lines.find((l) => l.id === target) : target;
+    if (!line || !canEdit || busy) return;
+    const text = cleanDroppedText(raw);
+    const field = dropFieldFor(text);
+    if (!field) { notify("That selection has no Japanese, Korean or English letters to use."); return; }
+    if (line.sourceState === "ignored") { notify("This region is excluded. Restore it before giving it text."); return; }
+    const number = pageLines.findIndex((l) => l.id === line.id) + 1;
+    const label = number ? `Region ${number}` : "The region";
+    const previous = field === "source"
+      ? { source: line.source ?? "", sourceState: line.sourceState }
+      : { body: line.body ?? "" };
+    const patch = field === "source" ? { source: text, sourceState: "read" } : { body: text };
+    if (Object.entries(patch).every(([key, value]) => (line as Record<string, unknown>)[key] === value)) {
+      notify(`${label} already has that ${field === "source" ? "source" : "English"}.`);
+      return;
+    }
+    edit(line, patch);
+    selectLine(line.id, "page");
+    notify(`${label}: ${field === "source" ? "source" : "English"} set from the dropped text.`, {
+      label: "Undo",
+      run: () => {
+        const now = studioState?.lines.find((l) => l.id === line.id);
+        if (now) edit(now, previous);
+      },
+    });
+  }
   const canChangeType = $derived(canEdit || canClean);
   const regionKinds = $derived(activeRegionKinds(studioState?.seriesDefaults.data.regionKinds));
   /** Series types plus ids saved regions still use, so removed types stay colorable. */
@@ -1879,6 +1898,7 @@
     if (step === "Prepare") prepView = "page";
     if (pageId && strokes.length) persistMaskDraft(pageId);
     maskJobId = null;
+    selectedAssetId = "";
     pageId = id;
     if (selected?.imageId !== id) lineId = "";
     polygonDraft = [];
@@ -3228,95 +3248,108 @@
       /* ignore quota / private mode */
     }
   }
-  /** Newest preview request wins, so a page picked mid-stitch cannot be overwritten by the
-   *  one it replaced. */
-  let reslicePreviewRequest = 0;
-  async function loadReslicePreview() {
-    if (!studioState?.images.length) return;
-    const imgs = studioState.images;
-    const idx = page ? imgs.findIndex((p) => p.id === page.id) : 0;
-    // The window straddles the current page so a bubble that crosses either file boundary
-    // can be moved whole. It also means the stitch opens on the previous page's tail, so the
-    // canvas is scrolled to the current page's band and the boundaries are labelled.
-    const imageIds = imgs
-      .slice(Math.max(0, idx - 1), Math.min(imgs.length, idx + 2))
-      .map((p) => p.id);
-    const token = ++reslicePreviewRequest;
-    reslicePreview = null;
+  /** Prepare › Edit page on a long-strip chapter shows the whole chapter with its breaks. */
+  const stripEditor = $derived(step === "Prepare" && prepView === "page" && pageMode === "strip" && canUpload);
+  /** The breaks last sent to Reslice strip; the reload after that job is expected, not a conflict. */
+  let stripApplied: number[] | null = null;
+  /** Everything the layout is computed from, so it reloads after any page or region change. */
+  const stripLayoutKey = $derived(stripEditor && studioState && resliceSizeValid
+    ? JSON.stringify([
+        studioState.images.map((i) => [i.id, i.updatedAt, i.width, i.height, i.role]),
+        studioState.lines.map((l) => [l.id, l.imageId, l.y, l.h, l.revision]),
+        resliceSizing, resliceMaxHeight,
+      ])
+    : "");
+  const stripOriginal = $derived(stripLayout ? currentBreaks(stripLayout.pages) : []);
+  const stripEdited = $derived(!!stripLayout && !sameBreaks(stripBreaks, stripOriginal));
+  const stripChangeCount = $derived.by(() => {
+    if (!stripLayout) return 0;
+    const { added, removed } = breakChanges(stripLayout.pages, stripBreaks);
+    return added.length + removed.length;
+  });
+  const stripBlocked = $derived(!!stripLayout && stripBreaks.some((y) =>
+    !stripOriginal.includes(y) && stripLayout!.protected.some((r) => y > r.top && y < r.bottom)));
+  /** Newest layout request wins, so a slow load cannot overwrite a newer one. */
+  let stripLayoutRequest = 0;
+  async function loadStripLayout() {
+    const token = ++stripLayoutRequest;
     try {
-      const data = await request(`${apiBase}/pages`, {
-        op: "reslice-preview",
-        imageIds,
+      const data = (await request(`${apiBase}/pages`, {
+        op: "strip-layout",
         sizing: resliceSizing,
         maxHeight: resliceMaxHeight,
-      });
-      if (token !== reslicePreviewRequest) return;
-      reslicePreview = {
-        ...data,
-        // Number the markers the way the page sidebar does, so "Page 8" means the page the
-        // operator opened and not the chapter's stored, possibly stale, page number.
-        pages: (data.pages as { id: string; top: number; height: number }[]).map((entry) => ({
-          ...entry,
-          number: imgs.findIndex((p) => p.id === entry.id) + 1,
-        })),
-      };
-      await tick();
-      const current = data.pages.find((p: { id: string }) => p.id === page?.id);
-      if (current) scrollCanvasToStitch(current.top / data.height);
+      })) as StripLayoutView;
+      if (token !== stripLayoutRequest) return null;
+      const previous = stripLayout;
+      const kept = previous && previous.revisionToken === data.revisionToken;
+      // A size change only refreshes the automatic cuts; the breaks being edited stay. When
+      // the pages themselves changed, positions on the old strip no longer mean the same
+      // place, so the edits are dropped with a notice rather than applied somewhere else.
+      if (!kept) {
+        const ownApply = !!stripApplied && sameBreaks(stripBreaks, stripApplied);
+        if (previous && stripEdited && !ownApply) notify("The chapter changed, so the unapplied page-break edits were cleared.");
+        if (ownApply && sameBreaks(currentBreaks(data.pages), stripApplied!)) stripApplied = null;
+        stripBreaks = currentBreaks(data.pages);
+      }
+      stripLayout = data;
+      return data;
     } catch (e) {
-      if (token === reslicePreviewRequest) error = String(e);
+      if (token === stripLayoutRequest) error = String(e);
+      return null;
     }
   }
-  /** Put a stitched-preview fraction at the top of the canvas, clear of the page label. */
-  function scrollCanvasToStitch(y: number) {
-    const scroller = canvasScrollEl;
-    if (!scroller) return;
-    const canvas = scroller.querySelector(".canvas-page");
-    if (!(canvas instanceof HTMLElement)) return;
-    const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-    scroller.scrollTo({ top: Math.max(0, padTop + y * canvas.offsetHeight - 8) });
-  }
-  /**
-   * The stitched window belongs to one page, so the preview follows the selection: opening
-   * the tool loads it, picking another page reloads it, and leaving the tool drops it. That
-   * keeps the canvas from showing a strip around a page the operator has moved on from.
-   */
-  let reslicePreviewFor = $state<string | null>(null);
+  let stripLayoutFor = "";
   $effect(() => {
-    const id = step === "Prepare" && pageTool === "reslice" && page && resliceSizeValid
-      ? `${page.id}:${resliceSizing}:${resliceMaxHeight}` : null;
-    if (reslicePreviewFor === id) return;
-    reslicePreviewFor = id;
-    if (id) void loadReslicePreview();
-    else {
-      ++reslicePreviewRequest;
-      reslicePreview = null;
-    }
+    const key = stripLayoutKey;
+    if (key === stripLayoutFor) return;
+    stripLayoutFor = key;
+    if (key) void loadStripLayout();
+    else ++stripLayoutRequest;
   });
-  async function applyReslice(cuts?: number[]) {
+  /** Split strips proposes breaks on the strip; nothing changes until Reslice strip. */
+  async function splitStrips() {
+    if (!resliceSizeValid) return;
+    step = "Prepare";
+    prepView = "page";
+    await tick();
+    const data = await loadStripLayout();
+    if (!data) return;
+    if (sameBreaks(data.autoCuts, currentBreaks(data.pages))) {
+      stripBreaks = currentBreaks(data.pages);
+      notify("The current page breaks already match the automatic split.");
+      return;
+    }
+    stripBreaks = [...data.autoCuts];
+    const over = data.autoCuts.length + 1;
+    notify(`Proposed ${over} page${over === 1 ? "" : "s"}. Review the breaks, then click Reslice strip.`);
+  }
+  async function applyStripBreaks() {
+    if (!stripLayout || !stripEdited || stripBlocked) return;
     const result = await pageOperation({
-      op: "reslice",
-      imageIds: cuts ? reslicePreview?.imageIds : undefined,
-      cuts,
-      sizing: resliceSizing,
-      maxHeight: resliceMaxHeight,
+      op: "apply-breaks",
+      breaks: stripBreaks,
+      revisionToken: stripLayout.revisionToken,
     });
-    if (!result) return;
+    if (!result) {
+      // A stale strip is the usual reason; reload so the editor shows the chapter as it is.
+      void loadStripLayout();
+      return;
+    }
+    stripApplied = [...stripBreaks];
     flashJobs();
-    notify(cuts ? "Manual reslice started." : "Auto-reslice started.");
+    notify("Applying page breaks. Undo page edit restores the previous breaks.");
   }
   function openManualReslice(jobId: string, imageId?: string) {
     const job = studioState?.jobs.find(j => j.id === jobId);
     if (!job) return;
-    if (["pages", "custom", "strips"].includes(job.payload.sizing)) resliceSizing = job.payload.sizing;
+    if (["pages", "custom", "strips", "2500", "4000"].includes(job.payload.sizing)) resliceSizing = job.payload.sizing;
     if (validSliceHeight(job.payload.maxHeight)) resliceMaxHeight = job.payload.maxHeight;
     step = "Prepare";
     prepView = "page";
     inspectorOpen = true;
     const id = imageId || job.progress?.manualImageId || job.payload.imageIds?.[0] || pageId;
     if (id) choosePage(id);
-    reslicePreviewFor = null;
-    pageTool = "reslice";
+    pageTool = "add-break";
   }
   async function previewShare(body: Record<string, unknown> = {}) {
     const data = await request(`${apiBase}/preview`, body);
@@ -3658,6 +3691,8 @@
   }
 
   function choosePalette(id: PaletteId, opts?: { showBrushSize?: boolean }) {
+    // A painting tool needs the cleaning controls; Select and Zoom keep asset editing.
+    if (assetsOpen && id !== "select" && id !== "zoom") inspectorTab = "clean";
     if(id==='boundary') {void openBoundary();return;}
     if (id === 'assign-character') {
       if (step !== 'Review' || !canEdit || busy) return;
@@ -3737,7 +3772,7 @@
     cancelPolygon();
     setBrushSizeOpen(opts?.showBrushSize !== false && usesBrushSize(id));
     if (step === "Prepare") {
-      pageTool = id === "crop" || id === "split" || id === "reslice" ? id : "select";
+      pageTool = id === "crop" || id === "split" || id === "add-break" ? id : "select";
       tool = "select";
       return;
     }
@@ -3960,8 +3995,11 @@
       ? nextUnfinishedPage(studioState?.images ?? [], pageId, (id) => pageStepDone(id, step.toLowerCase() as PageStep))?.id
       : undefined,
   );
+  const rawBatchRunning = $derived(studioState?.jobs.some(job => job.kind === 'page-proofread-batch' && ['running','queued','cancelling'].includes(job.state)) ?? false);
+  /** Unfinished Review pages with regions and no current Proofread Raw reply, as the server picks them. */
   const rawBatchCount = $derived(studioState?.images.filter(image =>
-    studioState!.lines.some(line => line.imageId === image.id) && !pageStepDone(image.id, 'review')).length ?? 0);
+    studioState!.lines.some(line => line.imageId === image.id) && !pageStepDone(image.id, 'review') &&
+    !currentRawProofread(studioState!.jobs, image.id)).length ?? 0);
   function pageMark(imageId: string): "done" | "check" | "todo" | "running" {
     const jobs = studioState?.jobs ?? [];
     const live = jobs.some((job) => {
@@ -3999,6 +4037,13 @@
     inspectorTab ||
       (step === "Prepare" ? "page" : step === "Review" ? "queue" : step === "Clean" ? "clean" : step === "Typeset" ? "text" : "regions"),
   );
+  /** Placed graphics are edited on the canvas while the Clean inspector's Assets tab is open. */
+  const assetsOpen = $derived(step === "Clean" && activeTab === "assets");
+  function openAssetsTab() {
+    inspectorOpen = true;
+    inspectorTab = "assets";
+    compare = false;
+  }
   let dismissedJobId = $state("");
   const statusJob = $derived(
     latestTranslation && latestTranslation.id !== dismissedJobId &&
@@ -4152,6 +4197,8 @@
     if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
       choosePalette("zoom");
     }
+    if ((e.key === "a" || e.key === "A") && !shortcut && stripEditor && canUpload)
+      choosePalette("add-break");
     if ((e.key === "b" || e.key === "B") && step === "Clean" && canClean)
       choosePalette("brush");
     if ((e.key === "e" || e.key === "E") && step === "Clean" && canClean)
@@ -4277,7 +4324,6 @@
       selectLine,
       switchStep,
       pageOperation,
-      loadReslicePreview,
       insertAt,
       reorder,
       deletePage,
@@ -4334,7 +4380,12 @@
   >
     <DirectorPanel {apiBase} {scope} pageId={page?.id??null} canEdit={canUpload} {busy} bind:open={directorOpen} bind:models={directorModels} bind:locked={directorLocked} onsettings={()=>settingsSection="director"}
       onnavigate={(id,region,stage)=>{choosePage(id);void switchStep(stage==='clean'?'Clean':stage==='classify'||stage==='typeset'?'Typeset':stage==='prepare'?'Prepare':'Review');if(region)selectLine(region);}} />
+    {#if pageMode === "strip"}
+      <!-- Long strips edit every break on the chapter strip, so this opens it at the current page. -->
+      <button class="ed-btn" type="button" data-find="edit-page-breaks" aria-label="Edit page breaks" title="Edit page breaks on the chapter strip" disabled={busy||!canUpload} onclick={()=>{ step = "Prepare"; prepView = "page"; pageTool = "select"; tool = "select"; if (page) choosePage(page.id); }}><i class="bi bi-arrows-collapse-vertical" aria-hidden="true"></i><span class="txt">Breaks</span></button>
+    {:else}
     <button class="ed-btn" type="button" data-find="move-boundary" aria-label="Move page boundary" disabled={!page||busy||aiRunning||directorLocked||reviewImageBusy||!canUpload} onclick={()=>void openBoundary()}><i class="bi bi-arrows-collapse-vertical" aria-hidden="true"></i><span class="txt">Boundary</span></button>
+    {/if}
     <button class="ed-btn" type="button" data-find="palette" aria-label="Find an action" onclick={() => (finderOpen = true)}><i class="bi bi-search" aria-hidden="true"></i><span class="txt">Find an action</span><kbd aria-hidden="true">Ctrl K</kbd></button>
   </StudioTopBar>
   <StudioToasts {error} {toasts} ondismisserror={() => (error = "")} ondismiss={dismissToast} />
@@ -4424,16 +4475,16 @@
             <button type="button" class="ed-btn" data-find="auto-align" disabled={busy || !canUpload} onclick={() => pageOperation({ op: "auto-align" })}>Auto-align</button>
             {#if pageMode === "strip"}
               <ResliceSizeControl bind:sizing={resliceSizing} bind:maxHeight={resliceMaxHeight} disabled={busy || aiRunning || !canUpload} />
-              <button type="button" class="ed-btn" data-find="auto-reslice" disabled={busy || aiRunning || !canUpload || !resliceSizeValid} onclick={() => applyReslice()}>Split strips</button>
+              <button type="button" class="ed-btn" data-find="auto-reslice" title="Propose automatic breaks on the strip. Nothing changes until you click Reslice strip." disabled={busy || aiRunning || !canUpload || !resliceSizeValid} onclick={() => void splitStrips()}>Split strips</button>
             {/if}
           {:else if step === "Translate"}
             <button type="button" class="ed-btn primary" data-find="transcribe" aria-label={scope === "chapter" ? "Transcribe chapter" : "Transcribe page"} disabled={busy || !canUpload || (scope === "page" && !page)} onclick={() => scope === "chapter" || !page ? runAI("transcribe") : transcribePage(page.id)}><i class="bi bi-chat-square-text" aria-hidden="true"></i> Transcribe</button>
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
             <button type="button" class="ed-btn" data-find="fill-missing" aria-label="Fill missing source &amp; English" title="Transcribe empty sources and fill empty English. Never overwrites." disabled={busy || !canEdit} onclick={() => fillMissing(scope === "page" ? page?.id : undefined)}><i class="bi bi-plus-square" aria-hidden="true"></i> Fill missing</button>
             {#if scope === "chapter"}
-              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount} title={rawProofreadGate.reason || 'Send unfinished Review pages with regions to the proofreader, one at a time.'} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
+              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount || rawBatchRunning} title={rawProofreadGate.reason || (rawBatchRunning ? 'A raw proofreading batch is already running. Open Jobs to view progress.' : (rawBatchCount ? 'Send unfinished Review pages with regions to the proofreader, one at a time. Pages that already have a raw proofreading reply are skipped.' : 'Every unfinished Review page with regions already has a raw proofreading reply.'))} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
             {:else}
-              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || aiRunning || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
+              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}
           {:else if step === "Review"}
             {#if scope === "chapter"}
@@ -4659,8 +4710,6 @@
             polygonCount={polygonDraft.length}
             canCompletePolygon={polygonDraft.length >= 3}
             oncompletepolygon={() => void completePolygon()}
-            onapplyreslice={() => reslicePreview && void applyReslice(reslicePreview.cuts)}
-            hasReslicePreview={!!reslicePreview && !busy && !aiRunning && canUpload}
             onstopstyle={() => (styleBrush = null)}
           />
           <div class="canvas-and-panel">
@@ -4676,7 +4725,53 @@
               onselect={choosePalette}
             />
             <div class="canvas-stage">
+            {#if stripEditor && (!page || !isCreditsPage(page))}
+              {#if stripLayout}
+                <StripBreaksCanvas
+                  layout={stripLayout}
+                  bind:breaks={stripBreaks}
+                  tool={pageTool}
+                  {zoom}
+                  {zooming}
+                  disabled={busy || aiRunning || !canUpload}
+                  selectedId={page?.id ?? ""}
+                  pageSrc={(p) => asset(p.prepared) || `/api/images/${p.id}?v=${p.updatedAt}`}
+                  pageNumber={(id) => (studioState?.images.findIndex((i) => i.id === id) ?? -1) + 1}
+                  onselectpage={choosePage}
+                  oncrop={(r) => void pageOperation({ op: "crop", imageId: r.imageId, x: r.x, y: r.y, w: r.w, h: r.h })}
+                  onzoom={nudgeZoom}
+                  bind:scrollEl={canvasScrollEl}
+                  scrollAction={canvasScroll}
+                />
+              {:else}
+                <div class="strip-loading" aria-live="polite">Loading the chapter strip…</div>
+              {/if}
+              {#if stripLayout && stripEdited}
+                <div class="floating-strip-actions" data-find="floating-reslice-strip">
+                  <span class="strip-summary">{stripChangeCount} break change{stripChangeCount === 1 ? "" : "s"} · {stripLayout.pages.length} → {stripBreaks.length + 1} pages{stripBlocked ? " · a break crosses a region" : ""}</span>
+                  <button type="button" class="floating-apply-clean secondary" aria-label="Reset page breaks"
+                    title="Discard the unapplied break edits" disabled={busy}
+                    onclick={() => (stripBreaks = [...stripOriginal])}>
+                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Reset</span>
+                  </button>
+                  <button type="button" class="floating-apply-clean" aria-label="Reslice strip"
+                    title={stripBlocked ? "Move the red breaks outside regions and their lettering first" : "Apply the edited page breaks. Saved cleaning, regions and lettering move with the pixels."}
+                    disabled={busy || aiRunning || !canUpload || stripBlocked}
+                    onclick={() => void applyStripBreaks()}>
+                    <i class="bi bi-scissors" aria-hidden="true"></i><span>Reslice strip</span>
+                  </button>
+                </div>
+              {/if}
+            {:else}
             <WorkflowCanvas
+              graphicAsset={h=>pageDoc?.data.placedAssets?.some(g=>g.hash===h)?asset(h):`/api/series/${series.id}/clean-assets?hash=${h}`}
+              placedAssets={pageAssets}
+              selectedAssetId={selectedAssetId}
+              editAssets={assetsOpen}
+              onassetselect={id=>selectedAssetId=id}
+              onassetschange={changePageAssets}
+              onassetdrop={insertPageAsset}
+              ontextdrop={dropTextOnRegion}
               drawTextPath={drawingTextPath}
               ondrawtextpath={setDrawingTextPath}
               {page}
@@ -4720,7 +4815,6 @@
               bind:svgEl
               bind:prepElement
               bind:canvasScrollEl
-              {reslicePreview}
               {selectedPolygon}
               scrollAction={canvasScroll}
               regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:livePaint(id, studioState?.regions[id]?.data.layout)}
@@ -4757,6 +4851,7 @@
               onact={act}
               onnotify={notify}
             />
+            {/if}
             {#if step === 'Clean' && pageDoc?.data.cleaned}
               <button type="button" class="floating-apply-clean" data-find="floating-apply-clean"
                 aria-label="Apply cleaning and start another pass"
@@ -4854,6 +4949,7 @@
               <button type="button" role="tab" aria-selected={activeTab === "replies"} data-find="tab-proofread-replies" onclick={() => (inspectorTab = "replies")}>Replies <span class="badge">{pageProofreadReplies.length}</span></button>
             {:else if step === "Clean"}
               <button type="button" role="tab" aria-selected={activeTab === "clean"} onclick={() => (inspectorTab = "clean")}>Clean page {pageNo}</button>
+              {#if canClean}<button type="button" role="tab" aria-selected={activeTab === "assets"} data-find="clean-assets" onclick={openAssetsTab}>Assets{#if pageAssets.length} <span class="badge">{pageAssets.length}</span>{/if}</button>{/if}
             {:else if step === "Typeset"}
               <button type="button" role="tab" aria-selected={activeTab === "text"} data-find="tab-text" onclick={() => (inspectorTab = "text")}>Text</button>
               <button type="button" role="tab" aria-selected={activeTab === "style"} data-find="tab-style" onclick={() => (inspectorTab = "style")}>Style</button>
@@ -4903,12 +4999,13 @@
               <button type="button" class="icon-only" aria-label="Nudge down" title="Nudge down" disabled={busy || !page} onclick={() => page && pageOperation({ op: "nudge", imageId: page.id, dx: 0, dy: nudgeAmount })}><i class="bi bi-arrow-down" aria-hidden="true"></i></button>
             </div>
           </section>
-          {#if pageTool === "reslice"}
-            <p>Automatic cuts only use solid-color gaps. Page height is a target; small overflows stay together. Click to adjust cuts manually, then apply from the tool bar. Orange marks your cuts through artwork.</p>
-            {#if reslicePreview}
-              <p>{reslicePreview.cuts.length + 1} pages · target height {reslicePreview.maxHeight}px.</p>
-              {#if reslicePreview.manualRequired}<p class="warning">{reslicePreview.manualSlices.length} oversized page(s) need manual splitting. No nearby solid-color gap is available. Apply to keep the safe splits.</p>{/if}
-            {/if}
+          {#if stripEditor && stripLayout}
+            <section class="sec" data-find="strip-breaks-help">
+              <h3>Page breaks</h3>
+              <p>The chapter is shown as one strip. Drag a break to move it, use the + tool to add one, and × or Delete to remove one. Breaks snap to solid-colour gaps; hold Alt to place freely.</p>
+              <p>{stripBreaks.length + 1} pages · {stripLayout.width} px wide · Split strips target {stripLayout.maxHeight.toLocaleString()} px.</p>
+              <p class="legend"><span class="swatch added"></span>New <span class="swatch forced"></span>Through artwork <span class="swatch blocked"></span>Crosses a region</p>
+            </section>
           {/if}
         {:else if step === "Review" && activeTab === "glossary"}
           {@render translationSettings("glossary")}
@@ -4932,6 +5029,7 @@
         {:else if step === "Translate" || step === "Review"}
           <TranslateInspector
             {colorFor}
+            ontextdrop={dropTextOnRegion}
             view={step === "Review" ? (activeTab === "page" ? "page" : "queue") : activeTab === "page" ? "page" : "regions"}
             queueLines={reviewLines}
             bind:subtab={detailTab}
@@ -5051,6 +5149,8 @@
               edit(selected!, { ...patch, status: "needs_work" });
             }}
           />
+        {:else if step === "Clean" && activeTab === "assets"}
+          <CleanAssetsPanel seriesId={series.id} placements={pageAssets} selectedId={selectedAssetId} {canClean} {busy} oninsert={insertPageAsset} onselect={id=>selectedAssetId=id} onchange={changePageAssets} onlibrarychange={()=>void refresh()}/>
         {:else if step === "Clean"}
           <CleanInspector
             {showMask}
@@ -5219,7 +5319,7 @@
       onreorder={reorder}
       onrenumber={() => act({ action: "renumber" })}
       onpageop={pageOperation}
-      onreslice={() => applyReslice()}
+      onreslice={() => void splitStrips()}
       ondescribe={() => describe(undefined, true)}
       onsaveregionai={saveRegionAi}
       onsaveseriesprefs={(data) => act({ action: "preferences", scope: "series", expectedRevision: studioState!.seriesDefaults.revision, data })}
@@ -5831,6 +5931,41 @@
     filter: none;
   }
   .floating-apply-clean:disabled { opacity: .55; cursor: default; }
+  .floating-strip-actions {
+    position: absolute;
+    right: 24px;
+    bottom: 58px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: calc(100% - 48px);
+  }
+  .floating-strip-actions .floating-apply-clean { position: static; }
+  .floating-apply-clean.secondary { font-weight: 600; padding: 14px; }
+  .strip-summary {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--hud-bg-2);
+    border: 1px solid var(--hud-line);
+    color: var(--hud-muted);
+    font: 600 12px Inter, system-ui, sans-serif;
+  }
+  .strip-loading {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    background: var(--hud-canvas);
+    color: var(--hud-muted);
+    font: 13px Inter, system-ui, sans-serif;
+  }
+  .legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
+  .swatch.added { background: var(--hud-teal-ink, #3fc2a4); }
+  .swatch.forced { background: #ff9d2e; }
+  .swatch.blocked { background: #ff3355; }
   .ed-main {
     position: relative;
     min-width: 0;
@@ -6204,26 +6339,6 @@
     to {
       transform: rotate(360deg);
     }
-  }
-  .reslice-cut {
-    position: absolute;
-    left: 0;
-    width: 100%;
-    border-top: 2px dashed #68dac5;
-    pointer-events: none;
-  }
-  .reslice-cut.forced {
-    border-top-color: #ff7050;
-  }
-  .reslice-hint {
-    position: absolute;
-    left: 8px;
-    bottom: 8px;
-    margin: 0;
-    padding: 6px 8px;
-    background: var(--hud-panel);
-    font-size: 12px;
-    pointer-events: none;
   }
   .page-commands {
     position: sticky;

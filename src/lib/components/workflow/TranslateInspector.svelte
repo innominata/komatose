@@ -51,6 +51,7 @@
     onactions,
     onsettype,
     onedit,
+    ontextdrop,
     onreview,
     onrevise,
     onenquire,
@@ -112,6 +113,7 @@
     onactions: (event: MouseEvent, imageId: string, lineId: string) => void;
     onsettype: (line: LineRow, type: string) => void;
     onedit: (line: LineRow, patch: Record<string, unknown>) => void;
+    ontextdrop?: (line: LineRow, text: string) => void;
     onreview: (line: LineRow) => void;
     onrevise: (line: LineRow) => void;
     onenquire: (line: LineRow) => void;
@@ -165,6 +167,13 @@
     }
     return [...groups];
   });
+  /** A collapsed row takes a dropped text selection too, like the open card. */
+  let rowDrop = $state("");
+  function rowAcceptsText(e: DragEvent, l: LineRow) {
+    const types = e.dataTransfer?.types ?? [];
+    return !!ontextdrop && canEdit && !busy && l.sourceState !== "ignored" &&
+      types.includes("text/plain") && !types.includes("Files");
+  }
 </script>
 
 {#snippet row(l: LineRow, queue: boolean)}
@@ -176,6 +185,21 @@
     aria-label={`#${pageLines.indexOf(l) + 1} ${l.source?.trim() || "no source yet"}`}
     onclick={() => onselect(l.id, "list")}
     oncontextmenu={(e) => l.imageId && onactions(e, l.imageId, l.id)}
+    class:text-drop={rowDrop === l.id}
+    ondragover={(e) => {
+      if (!rowAcceptsText(e, l)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      rowDrop = l.id;
+    }}
+    ondragleave={() => { if (rowDrop === l.id) rowDrop = ""; }}
+    ondrop={(e) => {
+      rowDrop = "";
+      const text = e.dataTransfer?.getData("text/plain") ?? "";
+      if (!rowAcceptsText(e, l) || !text.trim()) return;
+      e.preventDefault();
+      ontextdrop?.(l, text);
+    }}
   >
     <span class="rnum" style={`--c:${colorFor(l.lineType)}`}>{pageLines.indexOf(l) + 1 || "·"}</span>
     <span class="rtext">
@@ -212,6 +236,7 @@
     {onactions}
     {onsettype}
     {onedit}
+    {ontextdrop}
     {onreview}
     {onrevise}
     {onenquire}
@@ -335,6 +360,7 @@
 </div>
 
 <style>
+  .rrow.text-drop { outline: 3px solid var(--hud-teal-ink, #3fc2a4); outline-offset: -3px; }
   .insp-pane { font-size: 13px; }
   .muted { color: var(--hud-muted); }
   .small { font-size: 11.5px; }

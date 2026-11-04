@@ -68,9 +68,8 @@ try {
   await page.getByRole("navigation", { name: "Chapter workflow" }).waitFor();
   await expect(page.getByRole("button", { name: "Rebuild and restart", exact: true })).toBeVisible();
   {
-    // The reslice preview stitches the selected page with its neighbours. Its resolution is
-    // the point: scaling by the long edge (the old rule) collapsed a tall strip to a few
-    // dozen pixels across, and the canvas then stretched that over the whole column.
+    // Strip mode's Edit page is the whole chapter as one strip, drawn from the page images at
+    // their native width (never a downscaled stitch), opened on the selected page.
     const state = await (await context.request.get(`${base}/api/episodes/fixture-episode/workflow`)).json();
     const setMode = async (pageMode, expectedRevision) => {
       const response = await context.request.post(`${base}/api/episodes/fixture-episode/workflow`, {
@@ -84,30 +83,23 @@ try {
     await page.waitForFunction(() => document.body.dataset.studioReady === "1");
     const source = state.images[1];
     await page.getByRole("complementary", { name: "Pages in chapter order" }).getByRole("button", { name: "Open page 2", exact: true }).click();
-    await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Reslice strips", exact: true }).click();
-    const artwork = page.locator(".canvas-page img.artwork");
-    await expect.poll(async () => (await artwork.getAttribute("src"))?.slice(0, 22)).toBe("data:image/jpeg;base64");
-    const preview = await artwork.evaluate((el) => ({ w: el.naturalWidth, h: el.naturalHeight }));
-    if (preview.w !== source.width)
-      throw new Error(`reslice preview is ${preview.w}px wide, expected the native ${source.width}px`);
-    if (preview.h < source.height * 2)
-      throw new Error(`reslice preview only stitched ${preview.h}px of ${source.height * 2}px`);
-    await expect(page.locator(".reslice-current-band span")).toHaveText(`This page · 2`);
-    // The window opens on the pages' boundary, so the tool scrolls to the selected page.
-    const aligned = await page.locator(".canvas-scroll").evaluate((sc) => {
-      const band = sc.querySelector(".reslice-current-band");
-      const pad = parseFloat(getComputedStyle(sc).paddingTop) || 0;
-      return Math.round(pad + band.offsetTop - sc.scrollTop);
+    const selectedImg = page.locator(".strip-page.selected");
+    await expect(selectedImg).toHaveCount(1);
+    await expect(page.locator(".strip-page")).toHaveCount(state.images.filter((i) => !/credits/.test(i.role || "")).length);
+    await expect.poll(async () => (await selectedImg.getAttribute("src")) || "").not.toContain("data:image");
+    await expect.poll(() => selectedImg.evaluate((el) => el.complete && el.naturalWidth)).toBe(source.width);
+    // The strip scrolls to the selected page's top.
+    const aligned = await page.locator(".strip-scroll").evaluate((sc) => {
+      const img = sc.querySelector(".strip-page.selected");
+      return Math.round(img.getBoundingClientRect().top - sc.getBoundingClientRect().top);
     });
-    if (aligned < 0 || aligned > 24)
-      throw new Error(`the reslice preview opened ${aligned}px away from the selected page`);
-    // Leaving the tool must hand the canvas back to the plain page image.
-    await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Select (V)", exact: true }).click();
-    await expect.poll(async () => (await artwork.getAttribute("src"))?.slice(0, 22)).not.toBe("data:image/jpeg;base64");
-    await expect(page.locator(".reslice-current-band")).toHaveCount(0);
+    if (aligned < 0 || aligned > 40)
+      throw new Error(`the strip opened ${aligned}px away from the selected page`);
+    // Pages mode never shows the strip.
     await setMode('pages', stripRevision);
     await page.reload();
     await page.waitForFunction(() => document.body.dataset.studioReady === "1");
+    await expect(page.locator(".strip")).toHaveCount(0);
   }
   await page.getByRole("navigation", { name: "Chapter workflow" }).getByRole("button", { name: "Translate", exact: true }).click();
   await page.locator(".pages > button").first().click();

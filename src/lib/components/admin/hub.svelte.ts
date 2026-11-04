@@ -77,6 +77,8 @@ export type ImageEditRow = {
 	displaced: string[];
 	evicted: string[];
 	foreign: { pid: number; label: string }[];
+	/** The loaded server rejected its last edit. */
+	failing?: string;
 	models: { id: string; label: string; method: string; installed: boolean; quant?: string; active: boolean }[];
 	busy?: boolean;
 };
@@ -743,8 +745,11 @@ export function entryStatus(data: HubData | null, entry: ListEntry): ModelStatus
 	if (install?.job?.state === 'failed')
 		return { key: 'attention', tone: 'bad', label: 'Install failed', detail: install.job.error };
 	if (install?.installed) {
-		if (entry.id.startsWith('qwen-image')) {
+		// Every editor has a service record (Qwen quants, Lightning and FLUX alike).
+		if (data?.editors.some((item) => item.id === entry.id)) {
 			const editor = data?.editors.find((item) => item.id === entry.id);
+			if (editor?.state === 'running' && editor.failing)
+				return { key: 'attention', tone: 'bad', label: 'Loaded · edits failing', detail: editor.failing, running: true };
 			if (editor?.state === 'running') return { key: 'ready', tone: 'ok', dot: 'ok', label: 'Loaded', running: true };
 			if (editor?.state === 'starting' || editor?.state === 'stopping')
 				return { key: 'ready', tone: 'busy', label: editor.state === 'starting' ? 'Starting…' : 'Stopping…', running: true };

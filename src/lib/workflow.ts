@@ -420,6 +420,7 @@ export const MASK_GROW_MIN = 1;
 export const MASK_GROW_MAX = 50;
 export const MASK_GROW_DEFAULT = 10;
 export type PageData = {
+  placedAssets?: import("./cleanAssets").PlacedAsset[];
   geometryFrameId?: string;
   sourcePageIds?: string[];
   contentApprovals?: { frameId: string; x: number; y: number; width: number; height: number; maskApproved: boolean; cleanApproved: boolean }[];
@@ -500,6 +501,7 @@ export function pageStepStamp(
       page.mask ?? "",
       page.maskApproved ? "1" : "0",
       page.cleanApproved ? "1" : "0",
+      ...(page.placedAssets?.length ? [JSON.stringify(page.placedAssets)] : []),
     ].join("\t");
   if (step === "typeset") {
     return [...regions]

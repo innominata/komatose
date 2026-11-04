@@ -1,3 +1,4 @@
+import {compositePageAssets} from './cleanAssets';
 import JSZip from "jszip";
 import sharp from "sharp";
 import { writePsdBuffer, type Layer, type PixelData, type Psd } from "ag-psd";
@@ -80,7 +81,7 @@ async function pixels(bytes: Buffer): Promise<PixelData> {
   };
 }
 export async function renderPage(page: ExportPage, options: { includeOverflow?: boolean; base?: Buffer } = {}) {
-  const base = options.base ?? await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!);
+  const base = options.base ?? await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source);
   const renderable = page.regions.filter(
     (r) =>
       r.line.sourceState !== "ignored" &&
@@ -239,7 +240,7 @@ export async function pagePng(
   if (!artwork) throw new WorkflowError("This page has no image to export", 422);
   const bytes =
     variant === "clean"
-      ? await sharp(await readAsset(artwork)).withMetadata({ density: page.dpi }).png().toBuffer()
+      ? await sharp(await compositePageAssets(await readAsset(artwork), page.source)).withMetadata({ density: page.dpi }).png().toBuffer()
       : (
           await renderPage(page, {
             // The canvas still draws text that does not fit. This file matches that page.
@@ -666,7 +667,7 @@ export async function buildExport(
     if (snapshot.format === "clean")
       zip.file(
         `${stem}.png`,
-        await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!),
+        await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source),
       );
     else if (["png", "jpg", "psd"].includes(snapshot.format)) {
       if (

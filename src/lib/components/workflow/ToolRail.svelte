@@ -12,7 +12,7 @@
     reorder: { id: "reorder", icon: "bi-arrow-down-up", title: "Reorder reading flow (O)", group: "" },
     crop: { id: "crop", icon: "bi-crop", title: "Crop", group: "" },
     split: { id: "split", icon: "bi-vr", title: "Split page", group: "" },
-    reslice: { id: "reslice", icon: "bi-hr", title: "Reslice strips", group: "" },
+    "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (A)", group: "" },
     boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary',group:''},
     brush: { id: "brush", icon: "bi-brush", title: "Mask brush (B)", group: "Mask" },
     erase: { id: "erase", icon: "bi-eraser", title: "Erase mask (E)", group: "Mask" },
@@ -54,7 +54,10 @@
   const tools = $derived.by((): ToolDef[] => {
     const zoom = ALL.zoom;
     if (step === "Prepare")
-      return [ALL.select, ...(canUpload ? [ALL.crop, pageMode === "strip" ? ALL.reslice : ALL.split,ALL.boundary] : []), zoom];
+      return pageMode === "strip"
+        // The strip view edits breaks directly, replacing the reslice and boundary tools.
+        ? [ALL.select, ...(canUpload ? [ALL["add-break"], ALL.crop] : []), zoom]
+        : [ALL.select, ...(canUpload ? [ALL.crop, ALL.split, ALL.boundary] : []), zoom];
     if (step === "Translate" || step === "Review")
       return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), zoom] : [ALL.select, zoom];
     if (step === "Clean")
@@ -112,7 +115,7 @@
             title={item.title}
             aria-label={item.title}
             aria-pressed={tool === item.id}
-            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "reslice" ? "tool-reslice" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : ""}
+            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "add-break" ? "tool-add-break" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : ""}
             disabled={(["polygon", "rectangle", "oval"].includes(item.id) && !canClean) ||
               (item.id === "style-brush" && tool !== item.id && !canCopyStyle)}
             onclick={() => onselect(item.id)}

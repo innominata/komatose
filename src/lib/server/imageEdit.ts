@@ -52,6 +52,8 @@ export type ImageEditStatus = {
   foreign: { pid: number; label: string }[];
   /** Style LoRAs SCAN_IMAGE_LORAS asks the server to apply. */
   loras: string[];
+  /** The loaded server rejected its last edit; why, from its log when it says. */
+  failing?: string;
   /** Both editors, so the panel can offer either without a second request. */
   models: ImageEditModelStatus[];
   busy: boolean;
@@ -76,6 +78,8 @@ type ModelState = {
   explicit?: boolean;
   evicted?: string[];
   idle?: NodeJS.Timeout;
+  /** Set when the loaded server rejects an edit, cleared by the next one it completes. */
+  failing?: string;
 };
 type States = Record<ImageEditModelId, ModelState>;
 
@@ -356,9 +360,14 @@ export function placeImageEditModules(
       return b[1] - a[1];
     });
     const fit = candidates.find(([, free]) => free >= need);
-    // Leave a module that fits nowhere on the chosen card. Auto-fit may then
-    // stream it from RAM; it must not also be charged against that card.
-    if (!fit) continue;
+    if (!fit) {
+      // A module that fits nowhere stays on the chosen card, which streams its weights
+      // from RAM; it must not also be charged against that card. That still needs the
+      // card's compute scratch. A card another program has filled has none, and every
+      // request would fail there, so the module runs on the CPU instead.
+      if ((budget.get(card) ?? 0) < MODULE_RESERVE_MIB[key]) assigned[key] = 'cpu';
+      continue;
+    }
     assigned[key] = fit[0];
     const left = budget.get(fit[0]);
     if (left !== undefined && Number.isFinite(left)) budget.set(fit[0], left - size);
@@ -427,6 +436,28 @@ function logPath(id: ImageEditModelId) {
   const dir = join(root(), 'data/logs');
   mkdirSync(dir, { recursive: true });
   return join(dir, `image-${id}.log`);
+}
+
+/**
+ * Why a loaded editor rejected an edit. sd-server answers with a bare error, while its log
+ * names the cause; a device without memory for a module is the usual one, and a restart
+ * (which re-plans the placement) is the fix.
+ */
+export function editFailureReason(id: ImageEditModelId, fallback: string, logText?: string): string {
+  let text = logText;
+  if (text === undefined) {
+    try {
+      const raw = readFileSync(logPath(id), 'utf8');
+      text = raw.slice(-20_000);
+    } catch {
+      text = '';
+    }
+  }
+  const memory = [...text.matchAll(/cannot make enough memory available on (\S+): need ([\d.]+) MB device.*?available ([\d.]+) MB/g)].at(-1);
+  if (memory)
+    return `${memory[1]} is out of memory: an edit needs ${Math.round(Number(memory[2]))} MB and only ${Math.round(Number(memory[3]))} MB is free. Restart the editor to place it again, or free that card.`;
+  if (/failed to encode prompt/.test(text)) return 'The text encoder could not run, so every prompt fails. Restart the editor.';
+  return fallback.replace(/^The local image editor returned /, 'Edits fail: ');
 }
 
 /** sd-server exposes no /health; /v1/models only answers once the weights are loaded. */
@@ -689,9 +720,11 @@ export function imageEditStatus(id: ImageEditModelId = requireImageEditModel()):
     return { ...base, state: 'error', pid: occ.pid, error: occupiedBy(occ, listenPort) };
   if (state.state === 'starting' || state.state === 'stopping')
     return { ...base, state: state.state, pid: occ?.pid, error: state.error };
-  const resident = liveService(id);
-  if (resident && occ && ownsPort(occ, id) && installedImageEdit(id))
-    return { ...base, state: 'running', pid: occ.pid };
+  // An sd-server on this port loading our weights is ours even when this process did not
+  // start it (e.g. it outlived an app restart). Report it so Stop and Restart are offered;
+  // Start adopts it and Stop already ends it by port.
+  if (occ && ownsPort(occ, id) && installedImageEdit(id))
+    return { ...base, state: 'running', pid: occ.pid, failing: siblingIds(id).map((other) => modelState(other).failing).find(Boolean) };
   if (state.state === 'error') return { ...base, state: 'error', error: state.error };
   return { ...base, state: 'stopped' };
 }
@@ -747,6 +780,7 @@ export function operateImageEditServer(
     throw failure('A cleaning run is in progress. Finish or cancel it first.', 409);
   state.operationId = randomUUID();
   state.error = undefined;
+  for (const other of siblingIds(id)) modelState(other).failing = undefined;
   state.state = action === 'stop' ? 'stopping' : 'starting';
   state.explicit = action !== 'stop';
   clearTimeout(state.idle);
@@ -772,6 +806,21 @@ export function operateImageEditServer(
   return imageEditStatus(id);
 }
 
+/**
+ * A device choice only takes effect when an editor starts. When the editors sharing these
+ * weights are running, restart the one in use so the choice applies now. A cleaning run is
+ * never interrupted: the choice then waits for the next start.
+ */
+export function applyImageEditDevice(weightHost: string): 'restarting' | 'next-start' | 'not-running' {
+  const ids = IMAGE_EDIT_MODELS.map((entry) => entry.id).filter((id) => imageEditWeightHost(id) === weightHost);
+  const running = ids.find((id) => imageEditStatus(id).state === 'running');
+  if (!running) return 'not-running';
+  if (ids.some((id) => modelState(id).activeRuns > 0 || ['starting', 'stopping'].includes(modelState(id).state)))
+    return 'next-start';
+  operateImageEditServer('restart', running);
+  return 'restarting';
+}
+
 export async function waitImageEditOperation(id: ImageEditModelId = requireImageEditModel()) {
   await modelState(id).promise;
 }
@@ -790,8 +839,16 @@ export async function withImageEdit<T>(
     const signal = AbortSignal.any([...(abort ? [abort] : []), AbortSignal.timeout(30 * 60_000)]);
     const host = await service(signal, id);
     state.activeRuns++;
-    try { return await run(host.url); }
-    finally {
+    try {
+      const result = await run(host.url);
+      state.failing = undefined;
+      return result;
+    } catch (error) {
+      // Only the server's own refusals: a cancelled or timed-out run says nothing about it.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!signal.aborted && /local image editor returned/i.test(message)) state.failing = editFailureReason(id, message);
+      throw error;
+    } finally {
       state.activeRuns = Math.max(0, state.activeRuns - 1);
       scheduleIdleStop(id);
     }

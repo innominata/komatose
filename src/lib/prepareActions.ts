@@ -25,6 +25,7 @@ export function prepareActionConfirmation(body: Record<string, unknown>, images:
     case 'combine': return `Combine ${target} into one spread? Their pixels, regions, and lettering will be moved onto one page.`;
     case 'join-strip': return `Join ${target} into one vertical strip? Their pixels, regions, and lettering will be moved onto one image.`;
     case 'reslice': return `Split ${target} into ${Array.isArray(body.cuts) ? `${body.cuts.length + 1} page${body.cuts.length ? 's' : ''} using the previewed cuts` : 'new pages using automatic cuts'}? This replaces the current pages and changes boundaries, order, and region positions. Saved cleaning and lettering will be carried across. Later work can prevent Undo from safely restoring the old pages.`;
+    case 'apply-breaks': return `Apply the edited page breaks? Pages next to a changed break are reframed; their regions, cleaning, lettering and edit history move with the pixels. Other pages are not touched. Undo page edit restores the previous breaks.`;
     case 'delete': return `Delete ${target} and all their regions, comments, cleaning and typesetting? This cannot be undone.`;
     default: return null;
   }

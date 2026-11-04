@@ -25,6 +25,31 @@ export function lastProofreadPageId(
   return typeof hit?.payload?.imageId === "string" ? hit.payload.imageId : "";
 }
 
+type ProofreadJobLike = {
+  kind?: string;
+  state?: string;
+  payload?: Record<string, unknown> | null;
+  progress?: Record<string, unknown> | null;
+};
+
+/**
+ * The page's current Proofread Raw reply, by the rule the Director uses to reuse one: a
+ * completed raw reading (not a follow-up) with a reply, still about this page's boundaries.
+ * A reply made stale by a boundary edit no longer counts.
+ */
+export function currentRawProofread<T extends ProofreadJobLike>(jobs: readonly T[], imageId: string): T | undefined {
+  return jobs.find((job) => {
+    if (job.kind !== "page-proofread" || job.state !== "completed") return false;
+    if (job.payload?.mode !== "raw" || job.payload?.followUpOf) return false;
+    const critique = job.progress?.critique;
+    if (typeof critique !== "string" || !critique.trim()) return false;
+    const geometry = job.progress?.pageGeometry as { stale?: boolean; imageIds?: unknown } | undefined;
+    if (geometry?.stale) return false;
+    return job.payload?.imageId === imageId ||
+      (Array.isArray(geometry?.imageIds) && geometry.imageIds.includes(imageId));
+  });
+}
+
 export function latestPageProofreadJob<T extends { kind?: string }>(jobs: T[]): T | undefined {
   return jobs.find((job) => job.kind === "page-proofread");
 }

@@ -1,3 +1,5 @@
+import {storePageThumbnail} from '$lib/server/pageThumbnail';
+import {seriesAssetHashes, validatePlacements, compositePageAssets} from '$lib/server/cleanAssets';
 import { startChapterMask, cancelChapterMask } from '$lib/server/chapterMask';
 import { normalizeCharRuns } from "$lib/charStyles";
 import { restoreDeletion } from "$lib/server/regionTrash";
@@ -1304,6 +1306,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         409,
         doc,
       );
+    if (action === 'placed-assets') {
+      assertEpisodeIdle(episode.id);
+      const placedAssets=validatePlacements(b.placements);
+      const allowed=new Set([...seriesAssetHashes(series.id),...(doc.data.placedAssets??[]).map(a=>a.hash)]);
+      if(placedAssets.some(a=>!allowed.has(a.hash)))throw new WorkflowError('Choose a graphic from this series asset library');
+      const thumbnail=await storePageThumbnail(await compositePageAssets(await readAsset(pageArtwork(doc.data)!),{placedAssets}));
+      return json({doc:putDoc(episode.id,doc.id,{...doc.data,placedAssets,thumbnail,thumbnailAt:img.updatedAt,cleaned:doc.data.cleaned||(placedAssets.length?pageArtwork(doc.data):undefined),cleanApproved:false,completed:{...doc.data.completed,clean:undefined}},doc.revision)});
+    }
     if (action === "apply-clean")
       return json({
         doc: applyCleaning(episode.id, img.id, b.expectedRevision),

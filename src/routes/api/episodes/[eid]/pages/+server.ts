@@ -30,7 +30,8 @@ import {
 	startDescribePages,
 	undoPageOp
 } from '$lib/server/pageEdit';
-import { previewReslice, startReslice, parseResliceSize, ResliceError } from '$lib/server/reslice';
+import { previewReslice, startReslice, startStripBreaks, parseResliceSize, ResliceError } from '$lib/server/reslice';
+import { stripLayout } from '$lib/server/stripBreaks';
 import { readUndoLog, pageUndoSummary } from '$lib/server/pageUndo';
 import { listImages } from '$lib/server/queries';
 import { previewBoundary, moveBoundary } from '$lib/server/pageBoundary';
@@ -89,6 +90,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				),
 				{ status: 202 }
 			);
+		}
+		if (op === 'strip-layout') {
+			requireUpload(user);
+			return json(await stripLayout(ctx, parseResliceSize(body)));
+		}
+		if (op === 'apply-breaks') {
+			requireUpload(user);
+			return json(await startStripBreaks(ctx, body.breaks, body.revisionToken), { status: 202 });
 		}
 		if (op === 'reslice-preview') {
 			requireUpload(user);

@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync } from 'node:fs';
@@ -26,12 +27,18 @@ try {
       .map(task => [task, { engine: 'qwen', model: 'proofreader-fixture' }])), reviewers: [] } },
   } });
   assert.ok(preferences.ok());
+  // The real transcription worker is deliberately not invoked: keep its job active
+  // to verify both controls and the raw proofreading API allow concurrency.
+  const db = new Database(join(process.env.SCAN_TEST_DATA, 'scan.db'));
+  db.prepare("INSERT INTO workflow_jobs(id,episode_id,kind,state,payload,progress,created_at,updated_at) VALUES('concurrent-transcription','fixture-episode','transcribe','running','{}','{}',?,?)").run(Date.now(),Date.now());
+  db.close();
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${base}/series/fixture-series/episodes/fixture-episode`);
   await page.waitForFunction(() => document.body.dataset.studioReady === '1');
   await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: 'Translate', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Proofread Raw', exact: true })).toBeEnabled();
   await page.getByRole('group', { name: 'Run on' }).getByRole('button', { name: 'Whole chapter', exact: true }).click();
   const allRaw = page.getByRole('button', { name: 'Proofread All Raw', exact: true });
   await expect(allRaw).toBeEnabled();
@@ -40,12 +47,14 @@ try {
   const after = await state();
   const batch = after.jobs.find(job => job.kind === 'page-proofread-batch');
   assert.equal(batch.progress.completed, 2);
+  assert.equal(after.jobs.find(job => job.id === 'concurrent-transcription')?.state, 'running', 'raw proofreading did not cancel transcription');
   assert.deepEqual(batch.pages.map(entry => entry.state), ['completed', 'completed']);
   assert.deepEqual(after.jobs.filter(job => job.kind === 'page-proofread' && job.payload.mode === 'raw')
     .map(job => job.payload.imageId).sort(), ['fixture-page-0', 'fixture-page-1']);
   // Each step's Replies tab opens a saved reply docked left at full height and
   // returns the inspector to its first tab.
   await page.getByRole('group', { name: 'Run on' }).getByRole('button', { name: /^Page \d+$/ }).click();
+  await expect(page.getByRole('button', { name: 'Proofread Raw', exact: true })).toBeEnabled();
   const tabs = page.getByRole('tablist', { name: 'Inspector' });
   for (const [step, first] of [['Translate', /^Regions/], ['Review', /^To review/]]) {
     await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: step, exact: true }).click();

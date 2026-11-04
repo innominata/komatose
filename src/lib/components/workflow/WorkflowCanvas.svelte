@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PlacedAssetsCanvas from "./PlacedAssetsCanvas.svelte";
+  import {ASSET_DRAG_TYPE,type CleanAsset,type PlacedAsset} from "$lib/cleanAssets";
   import type { ImageRow, LineRow } from "$lib/types";
   import { missingRegionCopy, missingRegionCopyLabel } from "$lib/exceptions";
   import { builtinRegionKinds, regionColor, regionKindLabel } from "$lib/regionCatalog";
@@ -7,6 +9,7 @@
   import { interpolateBrushPixels } from "$lib/cloneStamp";
   import { blurSigma } from "$lib/blurBrush";
   import { regionTextPaths, smoothPath } from "$lib/textPath";
+  import { regionAtPoint } from "$lib/regionTextDrop";
   import type {
     FittedLayout,
     MaskStroke,
@@ -77,13 +80,20 @@
     svgEl = $bindable(),
     prepElement = $bindable(),
     canvasScrollEl = $bindable(),
-    reslicePreview,
     selectedPolygon,
     scrollAction,
     regionLayout,
     regionTextMask,
     overlayStyle,
     adjustedBounds,
+    graphicAsset,
+    placedAssets = [],
+    selectedAssetId = "",
+    editAssets = false,
+    onassetselect = () => {},
+    onassetschange = () => {},
+    onassetdrop = () => {},
+    ontextdrop,
     rotationCenter,
     rotationAngle,
     skewAngle,
@@ -155,22 +165,21 @@
     svgEl?: SVGSVGElement;
     prepElement?: HTMLDivElement;
     canvasScrollEl?: HTMLDivElement;
-    reslicePreview: {
-      preview: string;
-      width: number;
-      height: number;
-      maxHeight: number;
-      cuts: number[];
-      forced: number[];
-      manualRequired: boolean;
-      pages: { id: string; number: number; top: number; height: number }[];
-    } | null;
     selectedPolygon: Point[];
     scrollAction: ScrollAction;
     regionLayout: (id: string) => FittedLayout | undefined;
     regionTextMask: (id: string) => string | undefined;
     overlayStyle: (line: LineRow, layout: { style: TextStyle }) => string | undefined;
     adjustedBounds: (d: StudioDrawing) => { x: number; y: number; w: number; h: number };
+    graphicAsset?: (hash:string)=>string;
+    placedAssets?: PlacedAsset[];
+    selectedAssetId?: string;
+    editAssets?: boolean;
+    onassetselect?: (id:string)=>void;
+    onassetschange?: (list:PlacedAsset[])=>void;
+    onassetdrop?: (asset:CleanAsset,x:number,y:number)=>void;
+    /** Text dropped on a region, e.g. a selection dragged from a proofreader reply. */
+    ontextdrop?: (lineId: string, text: string) => void;
     rotationCenter: (line: LineRow) => Point;
     rotationAngle: (d: StudioDrawing) => number;
     skewAngle: (d: StudioDrawing) => number;
@@ -389,6 +398,16 @@
     if (!hash) return "";
     const url = asset(hash);
     return `mask-image:url("${url}");-webkit-mask-image:url("${url}");mask-size:100% 100%;-webkit-mask-size:100% 100%;mask-mode:luminance;-webkit-mask-source-type:luminance`;
+  }
+  /** The region a dragged text selection would land in, outlined while dragging. */
+  let textDropId = $state("");
+  const textDropLine = $derived(pageLines.find((l) => l.id === textDropId));
+  function textDropTarget(e: DragEvent) {
+    if (!ontextdrop || !canEdit || busy || compare || step === "Clean" || step === "Prepare") return undefined;
+    const types = e.dataTransfer?.types ?? [];
+    if (!types.includes("text/plain") || types.includes(ASSET_DRAG_TYPE) || types.includes("Files")) return undefined;
+    const point = pagePointFromEvent(e);
+    return point ? regionAtPoint(pageLines.filter((l) => l.sourceState !== "ignored"), point) : undefined;
   }
   function pagePointFromEvent(e: MouseEvent): Point | null {
     if (!svgEl) return null;
@@ -713,10 +732,9 @@
     return `M ${x1} ${y1} Q ${(x1 + x2) / 2 - (dy / len) * pull} ${(y1 + y2) / 2 + (dx / len) * pull} ${x2} ${y2}`;
   }
   // The page sits in a gutter of empty canvas so its edges and corners can be scrolled clear
-  // of the floating toolbars. Not for side-by-side review (two pages share the row) or the
-  // reslice preview (a stitched strip scrolled to exact page tops). Entering a view or
-  // changing page centres the view back on the page.
-  const gutter = $derived(step === "Prepare" ? pageTool !== "reslice" : !reviewSideBySide);
+  // of the floating toolbars. Not for side-by-side review (two pages share the row).
+  // Entering a view or changing page centres the view back on the page.
+  const gutter = $derived(step === "Prepare" || !reviewSideBySide);
   let overscrollFor = "";
   $effect(() => {
     const key = gutter && page ? `${step}:${page.id}` : "";
@@ -746,7 +764,7 @@
       class="canvas-page prepare-page"
       class:overscroll={gutter}
       class:zoom-tool={zooming}
-      style={pageTool === "reslice" && reslicePreview ? `aspect-ratio:${reslicePreview.width}/${reslicePreview.height};width:${zoom}%` : `aspect-ratio:${page.width}/${page.height};--page-w:${zoom}%;width:var(--page-w)`}
+      style={`aspect-ratio:${page.width}/${page.height};--page-w:${zoom}%;width:var(--page-w)`}
       role="application"
       aria-label="Page preparation canvas"
       oncontextmenu={(e) => openActions(e, page.id)}
@@ -761,45 +779,13 @@
     >
       <img
         class="artwork"
-        src={pageTool === "reslice" && reslicePreview
-          ? reslicePreview.preview
-          : pageImage || `/api/images/${page.id}?v=${page.updatedAt}`}
+        src={pageImage || `/api/images/${page.id}?v=${page.updatedAt}`}
         alt={page.originalName}
         draggable="false"
       />
       {#if pageTool === "split"}<div
           style={`position:absolute;left:${splitPosition * 100}%;top:0;height:100%;border-left:2px dashed #ff7050;pointer-events:none`}
         ></div>{/if}
-      {#if pageTool === "reslice" && reslicePreview}
-        {#each reslicePreview.pages as entry, i}
-          {#if i > 0 && entry.id !== page.id}
-            <div
-              class="reslice-page-edge"
-              style={`top:${(entry.top / reslicePreview.height) * 100}%`}
-            >
-              <span class="reslice-page-label">Page {entry.number} starts</span>
-            </div>
-          {/if}
-        {/each}
-        {#each reslicePreview.pages as entry}
-          {#if entry.id === page.id}
-            <div
-              class="reslice-current-band"
-              style={`top:${(entry.top / reslicePreview.height) * 100}%;height:${(entry.height / reslicePreview.height) * 100}%`}
-            >
-              <span class="reslice-page-label current">This page · {entry.number}</span>
-            </div>
-          {/if}
-        {/each}
-        {#each reslicePreview.cuts as cut}
-          <div
-            class="reslice-cut"
-            class:forced={reslicePreview.forced.includes(cut)}
-            style={`top:${(cut / reslicePreview.height) * 100}%`}
-          ></div>
-        {/each}
-        <p class="reslice-hint">Automatic cuts only use solid-color gaps. Target slice height: {reslicePreview.maxHeight}px. {reslicePreview.manualRequired ? "Safe splits are ready. Oversized pages need manual splitting." : "Click to adjust cuts, then Apply."} Orange marks manual cuts through artwork.</p>
-      {/if}
       {#if cropDraft}<div
           style={`position:absolute;left:${Math.min(cropDraft.start.x, cropDraft.end.x) * 100}%;top:${Math.min(cropDraft.start.y, cropDraft.end.y) * 100}%;width:${Math.abs(cropDraft.start.x - cropDraft.end.x) * 100}%;height:${Math.abs(cropDraft.start.y - cropDraft.end.y) * 100}%;border:2px solid #68dac5;background:#68dac533;pointer-events:none`}
         ></div>{/if}
@@ -821,6 +807,11 @@
       class:style-brush-tool={tool === "style-brush"}
       style={`aspect-ratio:${page.width}/${page.height};--page-w:${reviewSideBySide ? `calc(${zoom / 2}% - 8px)` : `${zoom}%`};width:var(--page-w)`}
       oncontextmenu={handleContext}
+      ondragover={e=>{if(step==='Clean'&&canClean&&e.dataTransfer?.types.includes(ASSET_DRAG_TYPE)){e.preventDefault();e.dataTransfer.dropEffect='copy';return;}
+        const target=textDropTarget(e);textDropId=target?.id??'';if(target&&e.dataTransfer){e.preventDefault();e.dataTransfer.dropEffect='copy';}}}
+      ondragleave={e=>{if(!(e.relatedTarget instanceof Node&&e.currentTarget.contains(e.relatedTarget)))textDropId='';}}
+      ondrop={e=>{const data=e.dataTransfer?.getData(ASSET_DRAG_TYPE);if(step==='Clean'&&canClean&&!busy&&data&&page){e.preventDefault();try{const a=JSON.parse(data);const r=e.currentTarget.getBoundingClientRect();onassetdrop(a,(e.clientX-r.left)/r.width*page.width,(e.clientY-r.top)/r.height*page.height);}catch{}return;}
+        const target=textDropTarget(e);textDropId='';const text=e.dataTransfer?.getData('text/plain')??'';if(target&&text.trim()){e.preventDefault();ontextdrop?.(target.id,text);}}}
       role="group"
     >
       <img
@@ -830,6 +821,7 @@
         draggable="false"
       />
       {#if reviewSideBySide}<span class="review-page-label">Normal</span>{/if}
+      {#if !compare}<PlacedAssetsCanvas width={page.width} height={page.height} placements={placedAssets} selectedId={selectedAssetId} editable={step==='Clean'&&editAssets&&canClean&&!busy} asset={graphicAsset??asset} onselect={onassetselect} onchange={onassetschange}/>{/if}
       {#if step === "Clean" && (tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
         <canvas
           bind:this={cloneOverlay}
@@ -845,6 +837,11 @@
               src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(layout.svg)}`}
               alt=""
             /></div>{/if}{/each}{/if}
+      {#if textDropLine && textDropLine.x != null && textDropLine.y != null}<div
+          class="text-drop-target"
+          aria-hidden="true"
+          style={`left:${textDropLine.x * 100}%;top:${textDropLine.y * 100}%;width:${(textDropLine.w ?? 0) * 100}%;height:${(textDropLine.h ?? 0) * 100}%`}
+        ></div>{/if}
       <svg
         bind:this={svgEl}
         viewBox={`0 0 ${page.width} ${page.height}`}
@@ -1403,6 +1400,14 @@
 </div>
 
 <style>
+  .text-drop-target {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    border: 3px solid var(--hud-teal-ink, #3fc2a4);
+    background: color-mix(in srgb, var(--hud-teal-ink, #3fc2a4) 22%, transparent);
+    border-radius: 4px;
+  }
   .canvas-scroll {
     flex: 1;
     min-width: 0;
@@ -1507,57 +1512,6 @@
   .region-missing text {
     fill: #10161f;
     font: 700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  .reslice-cut {
-    position: absolute;
-    left: 0;
-    width: 100%;
-    border-top: 2px dashed #68dac5;
-    pointer-events: none;
-  }
-  .reslice-cut.forced {
-    border-top-color: #ff7050;
-  }
-  /* The preview stitches the surrounding pages, so label where each one starts and tint the
-     band belonging to the page the operator actually opened the tool on. */
-  .reslice-page-edge {
-    position: absolute;
-    left: 0;
-    width: 100%;
-    border-top: 1px solid rgba(104, 218, 197, 0.55);
-    pointer-events: none;
-  }
-  .reslice-current-band {
-    position: absolute;
-    left: 0;
-    width: 100%;
-    background: rgba(104, 218, 197, 0.07);
-    border-top: 1px solid rgba(104, 218, 197, 0.75);
-    border-bottom: 1px solid rgba(104, 218, 197, 0.75);
-    pointer-events: none;
-  }
-  .reslice-page-label {
-    position: absolute;
-    top: 0;
-    left: 0;
-    padding: 1px 6px;
-    background: rgba(16, 22, 31, 0.85);
-    color: #9fe9d8;
-    font: 700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  .reslice-page-label.current {
-    color: #10161f;
-    background: #68dac5;
-  }
-  .reslice-hint {
-    position: absolute;
-    left: 8px;
-    bottom: 8px;
-    margin: 0;
-    padding: 6px 8px;
-    background: var(--hud-panel);
-    font-size: 12px;
-    pointer-events: none;
   }
   .zoom-tool,
   .zoom-tool :global(*) {

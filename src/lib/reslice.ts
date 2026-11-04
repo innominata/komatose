@@ -16,7 +16,7 @@ export function manualSliceRanges(height: number, cuts: number[], target: number
     return bottom - top > allowedSliceHeight(target) ? [{ top, bottom, height: bottom - top }] : [];
   });
 }
-export type ResliceSizing = "pages" | "strips" | "custom";
+export type ResliceSizing = "pages" | "strips" | "custom" | "2500" | "4000";
 export type ResliceSizeOptions = { sizing?: ResliceSizing; maxHeight?: number };
 
 export function validSliceHeight(height: unknown): height is number {
@@ -25,6 +25,7 @@ export function validSliceHeight(height: unknown): height is number {
 }
 
 export function sliceHeight(width: number, opts: ResliceSizeOptions = {}): number {
+  if (opts.sizing === "2500" || opts.sizing === "4000") return Number(opts.sizing);
   if (opts.sizing === "pages") {
     return Math.min(MAX_SLICE_HEIGHT, Math.max(MIN_SLICE_HEIGHT, Math.round(width * PAGE_HEIGHT_RATIO)));
   }

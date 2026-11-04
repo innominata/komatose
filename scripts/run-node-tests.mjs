@@ -31,6 +31,7 @@ const groups = {
     "tests/mmproj-device.test.ts",
     "tests/gpu-names.test.ts",
     "tests/image-edit-placement.test.ts",
+    "tests/region-text-drop.test.ts",
   ],
   integration: [
     "tests/series-backups.test.ts",
@@ -40,7 +41,9 @@ const groups = {
     "tests/clean-style-workflow.test.ts",
     "tests/page-undo-safety.test.ts",
     "tests/page-reframe.test.ts",
+    "tests/strip-breaks.test.ts",
     "tests/chapter-mask.test.ts",
+    "tests/clean-assets.test.ts",
     "tests/transcription-decider.test.ts",
     "tests/model-packages.test.ts",
     "tests/model-capabilities.test.ts",

@@ -7,6 +7,7 @@ import {
   unwrapProofreadCritique,
   type ProofreadCursor,
   type PageProofreadSnapshot,
+  currentRawProofread,
 } from '../pageProofread';
 import { regionAiSettings } from '../regionAi';
 import { rowHasOperation } from '../modelRegistry';
@@ -213,7 +214,20 @@ export function startPageProofread(opts: Parameters<typeof runPageProofread>[0])
   return { jobId: runPageProofread(opts).jobId };
 }
 
+/** Unfinished Review pages with regions; `proofread` lists those already holding a current raw reply. */
 export async function chapterRawProofreadPages(episodeId: string): Promise<string[]> {
+  return (await chapterRawProofreadPlan(episodeId)).pending;
+}
+
+export async function chapterRawProofreadPlan(episodeId: string): Promise<{ pending: string[]; proofread: string[] }> {
+  const unfinished = await unfinishedReviewPages(episodeId);
+  const jobs = listJobs(episodeId);
+  // Like the Director, a page with a current Proofread Raw reply is not read again.
+  const proofread = unfinished.filter(id => currentRawProofread(jobs, id));
+  return { pending: unfinished.filter(id => !proofread.includes(id)), proofread };
+}
+
+async function unfinishedReviewPages(episodeId: string): Promise<string[]> {
   const [images, lines, comments] = await Promise.all([
     listImages(episodeId), listLines(episodeId), listComments(episodeId),
   ]);
@@ -230,11 +244,14 @@ export async function chapterRawProofreadPages(episodeId: string): Promise<strin
 
 export async function startChapterRawProofread(opts: { series: Series; episode: Episode; model?: TaskEngine;
   imageIds?: string[]; completedIds?: string[] }) {
-  const eligible = await chapterRawProofreadPages(opts.episode.id);
+  const plan = await chapterRawProofreadPlan(opts.episode.id);
   const requested = opts.imageIds ? new Set(opts.imageIds) : null;
   const completed = new Set(opts.completedIds ?? []);
-  const imageIds = eligible.filter(id => (!requested || requested.has(id)) && !completed.has(id));
-  if (!imageIds.length) throw new WorkflowError('No unfinished Review pages with regions to proofread.', 400);
+  const imageIds = plan.pending.filter(id => (!requested || requested.has(id)) && !completed.has(id));
+  const skipped = plan.proofread.filter(id => !requested || requested.has(id)).length;
+  if (!imageIds.length) throw new WorkflowError(skipped
+    ? `All ${skipped} unfinished Review page${skipped === 1 ? ' already has' : 's already have'} a raw proofreading reply. Open a page's Replies tab, or proofread one page again from its Review toolbar.`
+    : 'No unfinished Review pages with regions to proofread.', 400);
   const model = validateModel(opts.model ?? regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi).proofread);
   if (!isProofreaderId(model.engine)) {
     const row = resolveLiveAssistant(model.engine, model.model).row;
@@ -288,7 +305,7 @@ export async function startChapterRawProofread(opts: { series: Series; episode: 
       }, error instanceof Error ? error.message : String(error));
     } finally { activeBatches.delete(jobId); }
   });
-  return { jobId, total: imageIds.length };
+  return { jobId, total: imageIds.length, skipped };
 }
 
 

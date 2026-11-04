@@ -1,3 +1,4 @@
+import { projectPageAssets, compositePageAssets } from "./cleanAssets";
 /** Lossless page boundaries. Rasters and edit histories are projected separately. */
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
@@ -32,6 +33,7 @@ import { imagePath } from "./storage";
 import { maskRegion } from "../maskRegions";
 import { storePageThumbnail } from "./pageThumbnail";
 import { pushUndo, popUndo } from "./pageUndo";
+import { jobContext } from "./jobs";
 import { broadcast } from "./realtime";
 import { isCreditsPage } from "../credits";
 import {
@@ -491,6 +493,17 @@ async function renderPage(
       contributors.some((c) => !!c.page[key])
         ? await raster(key, (p) => layerHash(p, key), key === "mask")
         : undefined;
+  const placed = await Promise.all(
+    contributors.map(({ p, page }) =>
+      projectPageAssets(
+        page.placedAssets,
+        p.rect,
+        p.x - p.rect.x,
+        p.y - p.rect.y,
+      ),
+    ),
+  );
+  page.placedAssets = placed.flat();
   page.contentApprovals = contributors.flatMap(({ p, s, page }) =>
     (
       page.contentApprovals ?? [
@@ -634,7 +647,10 @@ async function renderPage(
       };
   }
   page.thumbnail = await storePageThumbnail(
-    await readAsset(page.cleaned ?? page.cleanBase ?? page.prepared!),
+    await compositePageAssets(
+      await readAsset(page.cleaned ?? page.cleanBase ?? page.prepared!),
+      page,
+    ),
   );
   return page;
 }
@@ -913,15 +929,22 @@ export async function executeReframe(
   abort?: AbortSignal,
   allowedJobId?: string,
 ) {
-  if (
-    sqlite
-      .prepare(
-        "SELECT 1 FROM workflow_jobs WHERE episode_id=? AND state IN ('running','queued','cancelling') AND id<>? LIMIT 1",
-      )
-      .get(ctx.episode.id, allowedJobId ?? "")
-  )
+  // Resolve the running reslice from AsyncLocalStorage as well: adapter-node's
+  // second bundling pass can specialize away arguments passed through a dynamic re-export.
+  const running = jobContext();
+  const ownJobId =
+    allowedJobId ??
+    (running?.step === "reslice" ? running.jobId : undefined) ??
+    "";
+  const blocking = sqlite
+    .prepare(
+      "SELECT kind,state FROM workflow_jobs WHERE episode_id=? AND state IN ('running','queued','cancelling') AND id<>? LIMIT 1",
+    )
+    .get(ctx.episode.id, ownJobId) as
+    { kind: string; state: string } | undefined;
+  if (blocking)
     throw new WorkflowError(
-      "Wait for active chapter jobs to finish before changing page boundaries",
+      `Wait for active chapter jobs to finish before changing page boundaries (${blocking.kind}: ${blocking.state})`,
       409,
     );
   if (locks.has(ctx.episode.id))

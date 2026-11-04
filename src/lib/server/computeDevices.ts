@@ -1,6 +1,6 @@
 import { pythonRuntimePath } from './pythonRuntimeMaintenance';
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, freemem, totalmem } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
 	isAutoChoice,
 	isCpuChoice,
 	looksIntegrated,
+	formatMiB,
 	MIB,
 	pciKey,
 	type DeviceRuntime,
@@ -514,6 +515,83 @@ function titled(name: string, card: string): string {
 	return gpuTitles({ llama: { devices: ggml }, torch }).get(name) || `${name} · ${card}`;
 }
 
+export type ForeignVram = { mib: number; owners: string[] };
+const FOREIGN_TTL_MS = 5_000;
+let foreignCache: { at: number; byPdev: Map<string, ForeignVram> } | undefined;
+
+/** `0000:03:00.0` and `0000:03:00` name the same card. */
+const pciSlot = (pdev: string) => pdev.replace(/\.\d+$/, '').toLowerCase();
+
+/**
+ * Parse one process's DRM fdinfo files into VRAM per card. Each client id is counted once:
+ * a process holds several descriptors to the same client.
+ */
+export function parseDrmFdinfo(files: string[]): Map<string, number> {
+	const clients = new Map<string, { pdev: string; kib: number }>();
+	for (const text of files) {
+		const field = (key: string) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(text)?.[1].trim();
+		const pdev = field('drm-pdev'), client = field('drm-client-id'), vram = field('drm-memory-vram');
+		if (!pdev || !vram) continue;
+		const kib = Number(/^(\d+)/.exec(vram)?.[1] || 0) * (/MiB/.test(vram) ? 1024 : /GiB/.test(vram) ? 1024 * 1024 : 1);
+		const key = `${pciSlot(pdev)}:${client ?? text}`;
+		const seen = clients.get(key);
+		clients.set(key, { pdev: pciSlot(pdev), kib: Math.max(seen?.kib ?? 0, kib) });
+	}
+	const out = new Map<string, number>();
+	for (const { pdev, kib } of clients.values()) out.set(pdev, (out.get(pdev) ?? 0) + kib / 1024);
+	return out;
+}
+
+/**
+ * VRAM per card held by programs other than Komatose and the model servers it runs.
+ * Komatose can unload its own models to make room; it can never reclaim these.
+ */
+export function foreignVram(): Map<string, ForeignVram> {
+	if (foreignCache && Date.now() - foreignCache.at < FOREIGN_TTL_MS) return foreignCache.byPdev;
+	const byPdev = new Map<string, ForeignVram>();
+	const root = process.env.SCAN_ROOT || ROOT;
+	let pids: string[] = [];
+	try {
+		pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
+	} catch {
+		/* not Linux */
+	}
+	for (const pid of pids) {
+		if (Number(pid) === process.pid) continue;
+		let args = '';
+		const files: string[] = [];
+		try {
+			const dir = `/proc/${pid}/fdinfo`;
+			for (const fd of readdirSync(dir)) {
+				const text = readFileSync(`${dir}/${fd}`, 'utf8');
+				if (text.includes('drm-memory-vram')) files.push(text);
+			}
+			if (!files.length) continue;
+			args = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
+		} catch {
+			continue; // gone, or another user's process
+		}
+		// Komatose's servers are launched from its own tree (binaries, models, venvs).
+		if (args.includes(root)) continue;
+		const owner = (args.split(' ')[0] || `pid ${pid}`).split('/').pop()!;
+		for (const [pdev, mib] of parseDrmFdinfo(files)) {
+			if (mib < 64) continue; // a compositor or browser context, not a resident model
+			const entry = byPdev.get(pdev) ?? { mib: 0, owners: [] };
+			entry.mib += mib;
+			if (!entry.owners.includes(owner)) entry.owners.push(owner);
+			byPdev.set(pdev, entry);
+		}
+	}
+	foreignCache = { at: Date.now(), byPdev };
+	return byPdev;
+}
+
+/** Room a card can offer once Komatose has unloaded everything of its own. */
+export function reclaimableMiB(device: { totalMiB: number; pdev?: string }): { mib: number; held?: ForeignVram } {
+	const held = device.pdev ? foreignVram().get(pciSlot(device.pdev)) : undefined;
+	return { mib: device.totalMiB - (held?.mib ?? 0), held };
+}
+
 function resolveGgml(choice: string, needMiB: number, legacy?: string): ResolvedDevice {
 	const off = disabledDevices();
 	const all = ggmlDevices().devices;
@@ -536,9 +614,22 @@ function resolveGgml(choice: string, needMiB: number, legacy?: string): Resolved
 	if (legacy) {
 		if (isCpuChoice(legacy)) return cpu('Pinned to CPU by the host configuration');
 		const known = devices.find((device) => device.name === legacy);
-		if (known)
+		// The pin is the card Komatose shares between its models, unloading one for another.
+		// Memory another program holds cannot be freed that way, so a pin that cannot fit
+		// this model next to it falls through to the card with the most room.
+		const room = known && !known.integrated ? reclaimableMiB(known) : undefined;
+		if (known && (!room?.held || room.mib >= needMiB))
 			return { kind: 'gpu', runtime: 'llama', name: known.name, backend: known.backend, label: titled(known.name, known.label), reason: 'Host configuration' };
+		if (known && room?.held) {
+			const others = devices.filter((device) => device.name !== known.name);
+			const next = resolveGgmlAuto(others, needMiB);
+			return { ...next, reason: `${titled(known.name, known.label)} is held by ${room.held.owners.join(', ')} (${formatMiB(room.held.mib)}); ${next.kind === 'gpu' ? `using ${next.label}` : next.reason}` };
+		}
 	}
+	return resolveGgmlAuto(devices, needMiB);
+}
+
+function resolveGgmlAuto(devices: GgmlDevice[], needMiB: number): ResolvedDevice {
 	const discrete = devices.filter((device) => !device.integrated && device.totalMiB >= needMiB);
 	if (!discrete.length)
 		return cpu(devices.some((device) => !device.integrated) ? `No GPU has ${Math.ceil(needMiB / 1024)} GB` : 'No GPU found');

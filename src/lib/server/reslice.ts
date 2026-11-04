@@ -25,6 +25,7 @@ import { broadcast } from "./realtime";
 import { getDoc, putDoc, readAsset } from "./workflowStore";
 import { captureResliceWork, protectedResliceRanges, sliceCompletion, slicePageWork, sliceRegionWork } from "./resliceWork";
 import { pushUndo, popUndo } from "./pageUndo";
+import { sliceOutputs } from "../stripBreaks";
 import { createJob, pageResult, runWithJob, updateJob } from "./jobs";
 
 export const RESLICE_MAX_H = STITCH_TARGET_H;
@@ -55,28 +56,22 @@ export class ResliceError extends Error {
 /** Validate before starting a background job, and retain sizing when retrying it. */
 export function parseResliceSize(body: Record<string, unknown>): ResliceSizeOptions {
   if (body.sizing === undefined) return {};
-  if (typeof body.sizing !== "string" || !["pages", "strips", "custom"].includes(body.sizing))
-    throw new ResliceError("Choose normal pages, custom height, or tall strips.");
+  if (typeof body.sizing !== "string" || !["pages", "strips", "custom", "2500", "4000"].includes(body.sizing))
+    throw new ResliceError("Choose normal pages, 2,500 px, 4,000 px, custom height, or tall strips.");
   const opts = { sizing: body.sizing, maxHeight: body.maxHeight } as ResliceSizeOptions;
   try { sliceHeight(800, opts); }
   catch (e) { throw new ResliceError(e instanceof Error ? e.message : String(e)); }
   return opts;
 }
 
-export function findSolidRowBands(
-  data: Buffer,
-  width: number,
-  height: number,
-  ch: number,
-): WhiteBand[] {
-  const bands: WhiteBand[] = [];
-  let run = -1;
-  let low = [255, 255, 255], high = [0, 0, 0];
-  const finish = (bottom: number) => {
-    if (run >= 0 && bottom - run >= MIN_WHITE_RUN)
-      bands.push({ top: run, bottom, y: Math.round((run + bottom) / 2) });
-    run = -1;
-  };
+/**
+ * Per-row colour summary: [solid, lowR, lowG, lowB, highR, highG, highB] for each row.
+ * Summaries of separately decoded pages can be concatenated and scanned with
+ * `bandsFromRowSummary`, which gives exactly the bands of the stitched strip.
+ */
+export const ROW_SUMMARY_STRIDE = 7;
+export function rowSummary(data: Buffer, width: number, height: number, ch: number): Uint8Array {
+  const out = new Uint8Array(height * ROW_SUMMARY_STRIDE);
   for (let y = 0; y < height; y++) {
     const rowLow = [255, 255, 255], rowHigh = [0, 0, 0];
     let solid = true;
@@ -90,7 +85,39 @@ export function findSolidRowBands(
         if (rowHigh[c] - rowLow[c] > SOLID_COLOR_RANGE) solid = false;
       }
     }
-    if (!solid) { finish(y); continue; }
+    const at = y * ROW_SUMMARY_STRIDE;
+    out[at] = solid ? 1 : 0;
+    out.set(rowLow, at + 1);
+    out.set(rowHigh, at + 4);
+  }
+  return out;
+}
+
+/** A page narrower than the chapter is centred on white, as `compositeVertical` does. */
+export function padRowSummary(summary: Uint8Array): Uint8Array {
+  const out = new Uint8Array(summary);
+  for (let at = 0; at < out.length; at += ROW_SUMMARY_STRIDE) {
+    for (let c = 0; c < 3; c++) out[at + 4 + c] = 255;
+    if (out[at] && [1, 2, 3].some(c => 255 - out[at + c] > SOLID_COLOR_RANGE)) out[at] = 0;
+  }
+  return out;
+}
+
+export function bandsFromRowSummary(summary: Uint8Array): WhiteBand[] {
+  const height = summary.length / ROW_SUMMARY_STRIDE;
+  const bands: WhiteBand[] = [];
+  let run = -1;
+  let low = [255, 255, 255], high = [0, 0, 0];
+  const finish = (bottom: number) => {
+    if (run >= 0 && bottom - run >= MIN_WHITE_RUN)
+      bands.push({ top: run, bottom, y: Math.round((run + bottom) / 2) });
+    run = -1;
+  };
+  for (let y = 0; y < height; y++) {
+    const at = y * ROW_SUMMARY_STRIDE;
+    if (!summary[at]) { finish(y); continue; }
+    const rowLow = [summary[at + 1], summary[at + 2], summary[at + 3]];
+    const rowHigh = [summary[at + 4], summary[at + 5], summary[at + 6]];
     if (run >= 0 && rowLow.some((value, c) =>
       Math.max(high[c], rowHigh[c]) - Math.min(low[c], value) > SOLID_COLOR_RANGE)) {
       finish(y);
@@ -110,10 +137,19 @@ export function findSolidRowBands(
   return bands;
 }
 
+export function findSolidRowBands(
+  data: Buffer,
+  width: number,
+  height: number,
+  ch: number,
+): WhiteBand[] {
+  return bandsFromRowSummary(rowSummary(data, width, height, ch));
+}
+
 /** Kept for callers of the original white-only detector. */
 export const findWhiteRowBands = findSolidRowBands;
 
-function protectBands(bands: WhiteBand[], ranges: { top: number; bottom: number }[]): WhiteBand[] {
+export function protectBands(bands: WhiteBand[], ranges: { top: number; bottom: number }[]): WhiteBand[] {
   return bands.flatMap(band => {
     let parts = [{ top: band.top, bottom: band.bottom }];
     for (const range of ranges) parts = parts.flatMap(part => {
@@ -371,7 +407,7 @@ export function isResliceRunning(episodeId: string) {
  * user-named upload meant; a trailing number group (`page-1`, `pages-001-003`) is the source
  * page's own name and is kept, so two different pages never collapse onto one slice name.
  */
-function sliceNameBase(img: ImageRow) {
+export function sliceNameBase(img: ImageRow) {
   const stem = img.filename.replace(/\.[^.]+$/, "").replace(/^\d+-/, "");
   return stem || "page";
 }
@@ -414,17 +450,10 @@ export async function reslicePages(
   if (!slices.length) throw new ResliceError("No slices to write");
 
   const { executeReframe } = await import('./pageReframe');
-  const counters=new Map<string,number>();
-  const outputs=slices.map(slice=>{
-    const source=work.sources.find(s=>s.top<slice.bottom&&s.top+s.image.height>slice.top)!;
-    const n=(counters.get(source.image.id)??0)+1;counters.set(source.image.id,n);
-    return {id:nid(),width:slice.width,height:slice.height,originalName:`${sliceNameBase(source.image)}-${n}.png`,
-      placements:work.sources.flatMap(s=>{
-        const top=Math.max(s.top,slice.top),bottom=Math.min(s.top+s.image.height,slice.bottom);
-        return bottom>top?[{imageId:s.image.id,rect:{x:0,y:top-s.top,width:s.image.width,height:bottom-top},
-          x:Math.floor((slice.width-s.image.width)/2),y:top-slice.top}]:[];
-      })};
-  });
+  // One placement implementation for reslicing and break editing; a full reslice pads every
+  // page to the chapter width, as the stitch it was planned on.
+  const outputs=sliceOutputs(work.sources.map(s=>({id:s.image.id,top:s.top,width:s.image.width,height:s.image.height,name:sliceNameBase(s.image)})),
+    slices,{newId:nid,width:stitch.width});
   if(imgs.length===1&&outputs.length===1&&outputs[0].width===imgs[0].width&&outputs[0].height===imgs[0].height) outputs[0].id=imgs[0].id;
   const result=await executeReframe(ctx,imgs.map(i=>i.id),outputs,'Reslice pages',undefined,opts.abort,opts.jobId);
   if(opts.jobId) for(const output of outputs) pageResult(opts.jobId,output.id,'completed');
@@ -483,6 +512,41 @@ export function startReslice(
           manualImageId: e instanceof ResliceError ? e.manualImageId : undefined },
         e instanceof Error ? e.message : String(e),
       );
+    } finally {
+      resliceAborts.delete(ctx.episode.id);
+    }
+  })();
+  return { jobId };
+}
+
+/** Apply edited strip breaks as a background job, gated like a reslice. */
+export async function startStripBreaks(ctx: PageEditCtx, breaks: unknown, revisionToken: unknown) {
+  const { planStripBreaks, applyStripBreaks } = await import("./stripBreaks");
+  const plan = await planStripBreaks(ctx, breaks, revisionToken);
+  const abort = new AbortController();
+  resliceAborts.set(ctx.episode.id, abort);
+  const jobId = createJob(ctx.episode.id, "reslice", { breaks: plan.breaks, mode: "breaks" });
+  const total = plan.runs.length;
+  updateJob(jobId, "running", { message: "Applying page breaks…", completed: 0, total });
+  void (async () => {
+    try {
+      await runWithJob({ jobId, step: "reslice" }, async () => {
+        const result = await applyStripBreaks(ctx, plan, {
+          jobId,
+          abort: abort.signal,
+          onRun: (completed) => updateJob(jobId, "running", { message: "Applying page breaks…", completed, total }),
+        });
+        for (const id of result.changedIds) pageResult(jobId, id, "completed");
+        updateJob(jobId, abort.signal.aborted ? "cancelled" : "completed", {
+          message: abort.signal.aborted ? "Cancelled" : `Applied page breaks (${result.changedIds.length} page${result.changedIds.length === 1 ? "" : "s"} changed).`,
+          completed: total,
+          total,
+        });
+      });
+    } catch (e) {
+      updateJob(jobId, abort.signal.aborted ? "cancelled" : "failed",
+        { message: e instanceof Error ? e.message : String(e) },
+        e instanceof Error ? e.message : String(e));
     } finally {
       resliceAborts.delete(ctx.episode.id);
     }

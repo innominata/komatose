@@ -715,3 +715,27 @@ test("a crop between boundary edits keeps older artwork history in the current f
     ],
   );
 });
+
+test("the running reslice context excludes itself while still blocking other chapter jobs", async () => {
+  const f = await seed(),
+    [a] = f.images;
+  const preview = await previewBoundary(f.ctx, a.id, 300);
+  const { runWithJob } = await import("../src/lib/server/jobs");
+  const ownJob = createJob(f.ctx.episode.id, "reslice", {});
+  const otherJob = createJob(f.ctx.episode.id, "mask", {});
+  await assert.rejects(
+    runWithJob({ jobId: ownJob, step: "reslice" }, () =>
+      moveBoundary(f.ctx, a.id, 300, preview.revisionToken),
+    ),
+    /mask: running/,
+  );
+  updateJob(otherJob, "completed", {});
+  await runWithJob({ jobId: ownJob, step: "reslice" }, () =>
+    moveBoundary(f.ctx, a.id, 300, preview.revisionToken),
+  );
+  updateJob(ownJob, "completed", {});
+  assert.deepEqual(
+    (await listImages(f.ctx.episode.id)).map((i) => i.height),
+    [300, 500],
+  );
+});

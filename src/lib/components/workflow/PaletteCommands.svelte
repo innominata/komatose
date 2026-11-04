@@ -13,7 +13,6 @@
 
   export type PaletteCommandOps = {
     describe: (ids: string[], overwrite: boolean) => void;
-    applyReslice: (cuts?: number[]) => void;
     deletePage: (id: string) => void;
     transcribePage: (id: string) => void;
     translatePage: (id: string) => void;
@@ -48,8 +47,6 @@
     busy,
     aiRunning,
     reviewImageBusy,
-    hasReslicePreview,
-    resliceCuts,
     pageDoc,
     strokes = $bindable([]),
     hasMaskRegions,
@@ -77,8 +74,6 @@
     busy: boolean;
     aiRunning: boolean;
     reviewImageBusy: boolean;
-    hasReslicePreview: boolean;
-    resliceCuts?: number[];
     pageDoc: WorkflowDoc<PageData> | undefined;
     strokes?: MaskStroke[];
     hasMaskRegions: boolean;
@@ -122,17 +117,7 @@
       onclick={() => ops.describe([pageId], true)}
       ><i class="bi bi-card-text" aria-hidden="true"></i></button
     >
-    {#if pageTool === "reslice"}
-      <button
-        class="palette-command"
-        type="button"
-        title="Apply reslice cuts"
-        aria-label="Apply reslice cuts"
-        disabled={!canUpload || busy || !hasReslicePreview}
-        onclick={() => ops.applyReslice(resliceCuts)}
-        ><i class="bi bi-scissors" aria-hidden="true"></i></button
-      >
-    {/if}
+
     <button
       class="palette-command"
       type="button"

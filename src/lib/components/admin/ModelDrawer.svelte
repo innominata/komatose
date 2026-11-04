@@ -16,6 +16,7 @@
 		type PublicRow,
 	} from '$lib/components/admin/hub.svelte';
 	import { deviceOptions, formatMiB, type DeviceRuntime } from '$lib/computeDevices';
+	import { IMAGE_EDIT_MODELS, imageEditWeightHost } from '$lib/imageEdit';
 	import { INSTALL_TARGETS, formatDisk, formatMemory } from '$lib/installCatalog';
 	import { CHAT_AND_CLI_OPERATIONS } from '$lib/modelRegistry';
 	import type { ProviderOperation } from '$lib/providerCatalog';
@@ -46,8 +47,11 @@
 			return { runtime: 'llama', env: 'env-review', key: entry.id, label: 'Device' };
 		if (entry.id === 'imsbee-ko-en-translator' || entry.id === 'opus-mt-ja-en' || entry.id === 'sugoi-v4-ja-en')
 			return { runtime: 'torch', env: 'env-review', key: entry.id, label: 'GPU' };
-		if (entry.id.startsWith('qwen-image'))
-			return { runtime: 'llama', env: 'env-review', key: 'qwen-image-edit-2511', label: 'Device' };
+		// Every image editor (Qwen quants, Lightning, FLUX) runs on sd-server. Key the choice the
+		// way the server reads it: by the editor whose weights it loads, so Lightning shares 2511's.
+		const editor = IMAGE_EDIT_MODELS.find((model) => model.id === entry.id);
+		if (editor)
+			return { runtime: 'llama', env: 'env-review', key: imageEditWeightHost(editor.id), label: 'Device' };
 		if (['rtdetr', 'ctd', 'koharu', 'coo', 'aot', 'lama-manga'].includes(entry.id))
 			return { runtime: 'torch', env: 'env-workflow', key: 'cleaning-worker', label: 'Cleaning worker GPU' };
 		return null;
@@ -124,8 +128,10 @@
 	async function setDevice(choice: string) {
 		if (!entry || !deviceKind) return;
 		await run(async () => {
-			await apiPost('/api/admin/model-hub', { action: 'set-device', id: deviceKind!.key, choice });
-			toast(`${entry!.name} → ${choice === 'auto' ? 'Auto' : choice}`);
+			const result = (await apiPost('/api/admin/model-hub', { action: 'set-device', id: deviceKind!.key, choice })) as { applied?: string };
+			const name = `${entry!.name} → ${choice === 'auto' ? 'Auto' : choice}`;
+			toast(result?.applied === 'restarting' ? `${name}. Restarting to apply.`
+				: result?.applied === 'next-start' ? `${name}. Applies after the current cleaning run, on the next start.` : name);
 			await refreshHub();
 		});
 	}
@@ -466,8 +472,8 @@
 			{/if}
 
 			<!-- runtime (rows with a launch recipe drive Start/Stop/Restart from the Launch editor) -->
-			{#if (!row?.managedLaunch && (data.reviewServers.some((s) => s.id === entry.id) || entry.id.startsWith('qwen-image'))) && st.key !== 'missing'}
-				{@const live = Boolean(st.running && st.tone === 'ok')}
+			{#if (!row?.managedLaunch && (data.reviewServers.some((s) => s.id === entry.id) || IMAGE_EDIT_MODELS.some((model) => model.id === entry.id))) && st.key !== 'missing'}
+				{@const live = Boolean(st.running && st.tone !== 'busy')}
 				<div class="d-sec">
 					<h4>Runtime</h4>
 					<div class="row">

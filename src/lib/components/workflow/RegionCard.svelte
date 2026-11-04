@@ -53,6 +53,7 @@
     onactions,
     onsettype,
     onedit,
+    ontextdrop,
     onreview,
     onrevise,
     onenquire,
@@ -86,6 +87,8 @@
     onactions: (event: MouseEvent, imageId: string, lineId: string) => void;
     onsettype: (line: LineRow, type: string) => void;
     onedit: (line: LineRow, patch: Record<string, unknown>) => void;
+    /** Text dropped on the card outside its fields; the page decides source or English. */
+    ontextdrop?: (line: LineRow, text: string) => void;
     onreview: (line: LineRow) => void;
     onrevise: (line: LineRow) => void;
     onenquire: (line: LineRow) => void;
@@ -112,6 +115,12 @@
     return sfxEnglishChoices(line.source ?? "", suggestion.body, line.lineType);
   }
   const distinctSourceReadings = $derived(shown.filter((item) => isSourceSuggestion(item.kind)).length);
+  let textDrop = $state(false);
+  function acceptsTextDrop(e: DragEvent) {
+    const types = e.dataTransfer?.types ?? [];
+    return !!ontextdrop && canEdit && !busy && line.sourceState !== "ignored" &&
+      types.includes("text/plain") && !types.includes("Files");
+  }
 </script>
 
 {#snippet suggestionList()}
@@ -172,6 +181,25 @@
   role="group"
   aria-label={`Bilingual region ${index + 1}${overflow ? ", text overflow" : ""}`}
   oncontextmenu={(e) => onactions(e, line.imageId!, line.id)}
+  class:text-drop={textDrop}
+  ondragover={(e) => {
+    // A drop into the source or English box inserts at the caret, as any text field does.
+    if (!acceptsTextDrop(e) || (e.target as HTMLElement).closest("textarea, input")) { textDrop = false; return; }
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    textDrop = true;
+  }}
+  ondragleave={(e) => {
+    if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) textDrop = false;
+  }}
+  ondrop={(e) => {
+    textDrop = false;
+    if (!acceptsTextDrop(e) || (e.target as HTMLElement).closest("textarea, input")) return;
+    const text = e.dataTransfer?.getData("text/plain") ?? "";
+    if (!text.trim()) return;
+    e.preventDefault();
+    ontextdrop?.(line, text);
+  }}
 >
   <header>
     <div class="type-col">
@@ -301,6 +329,7 @@
 </article>
 
 <style>
+  .rcard.text-drop { outline: 3px solid var(--hud-teal-ink, #3fc2a4); outline-offset: -3px; }
   .rcard {
     margin: 8px;
     border: 1px solid var(--hud-line);

@@ -1,3 +1,4 @@
+import {transformPageAssets, compositePageAssets} from './cleanAssets';
 import { mapTextPaths } from "../textPath";
 import sharp, { type OverlayOptions } from "sharp";
 import type { ImageRow, LineRow } from "../types";
@@ -129,9 +130,9 @@ export async function applyPageGeometry(episodeId: string, oldPage: ImageRow, ne
     return cache.get(key)!;
   };
   const pageState=async(saved:PageData):Promise<PageData>=>{
-    const page:PageData={...saved,geometryFrameId:frameId,completed:undefined,maskDiagnostics:undefined};
+    const page:PageData={...saved,placedAssets:await transformPageAssets(saved.placedAssets,t),geometryFrameId:frameId,completed:undefined,maskDiagnostics:undefined};
     for(const key of ['prepared','original','cleaned','cleanBase','previousArtwork','mask'] as const) if(saved[key]) page[key]=await raster(saved[key]!,key==='mask');
-    if(page.prepared) {page.preparedAt=newPage.updatedAt;page.thumbnail=await storePageThumbnail(await readAsset(page.cleaned??page.cleanBase??page.prepared));page.thumbnailAt=newPage.updatedAt;}
+    if(page.prepared) {page.preparedAt=newPage.updatedAt;page.thumbnail=await storePageThumbnail(await compositePageAssets(await readAsset(page.cleaned??page.cleanBase??page.prepared),page));page.thumbnailAt=newPage.updatedAt;}
     if(saved.strokes) page.strokes=saved.strokes.map(s=>({...s,radius:s.radius*Math.sqrt(t.sx*t.sy),points:s.points.map(p=>({x:(p.x*oldPage.width*t.sx+t.dx)/t.width,y:(p.y*oldPage.height*t.sy+t.dy)/t.height}))}));
     if(saved.contentApprovals) page.contentApprovals=saved.contentApprovals.flatMap(a=>{
       const x=Math.max(0,a.x*t.sx+t.dx),y=Math.max(0,a.y*t.sy+t.dy),right=Math.min(t.width,(a.x+a.width)*t.sx+t.dx),bottom=Math.min(t.height,(a.y+a.height)*t.sy+t.dy);

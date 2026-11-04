@@ -36,7 +36,8 @@ import { listRegistryRows, findRegistryRow, updateRegistryRow, catalogCache, rea
 import { CLI_ADAPTER_IDS } from '$lib/modelRegistry';
 import { listManagedStatuses, managedModelStatus } from '$lib/server/managedModels';
 import { listReviewServerStatuses } from '$lib/server/localReview';
-import { imageEditStatuses } from '$lib/server/imageEdit';
+import { applyImageEditDevice, imageEditStatuses } from '$lib/server/imageEdit';
+import { IMAGE_EDIT_MODELS, imageEditWeightHost } from '$lib/imageEdit';
 import { listCliToolAdminStatus } from '$lib/server/cliToolStatus';
 import { loadSetupReport } from '$lib/server/setupLive';
 import { readModelDefaults, setModelDefault, type DefaultJob } from '$lib/server/modelDefaultStore';
@@ -172,7 +173,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			// Only the cleaning worker is the resident workflow process. Other device
 			// choices apply the next time that model starts.
 			if (id === 'cleaning-worker') restartWorkflowWorker();
-			return json({ ok: true, rows: listRegistryRows().map(publicRow), managed: listManagedStatuses(), ...deviceState() });
+			// A running image editor restarts onto the new device instead of keeping the old one.
+			const applied = IMAGE_EDIT_MODELS.some((model) => imageEditWeightHost(model.id) === id)
+				? applyImageEditDevice(id)
+				: undefined;
+			return json({ ok: true, applied, rows: listRegistryRows().map(publicRow), managed: listManagedStatuses(), ...deviceState() });
 		}
 		if (action === 'set-device-disabled') {
 			const disabled = setDeviceDisabled(String(body.pdev || ''), body.disabled === true);

@@ -34,6 +34,8 @@ test('every destructive page operation describes its scope and asks confirmation
     assert.ok(message?.includes('?'), op);
     assert.ok(message?.includes('page 2 (second.png)'), op);
   }
+  // Break edits span the chapter strip rather than one page.
+  assert.match(prepareActionConfirmation({ op: 'apply-breaks', breaks: [10] }, images)!, /page breaks\?.*Undo page edit/s);
   // Reordering is undoable and happens on every drag, so it does not ask.
   assert.equal(prepareActionConfirmation({ op: 'reorder', order: [] }, images), null);
   assert.match(prepareActionConfirmation({ op: 'delete', imageIds: ['b', 'c'] }, images)!, /page 2.*page 3.*cannot be undone/);

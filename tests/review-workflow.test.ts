@@ -500,6 +500,22 @@ test('Proofread All Raw skips done and regionless pages and waits for each saved
       ['batch-first', 'batch-second']);
     assert.deepEqual(jobs.find(job => job.id === jobId)?.pages.map(page => page.state), ['completed', 'completed']);
     assert.equal(jobs.find(job => job.id === jobId)?.progress.completed, 2);
+
+    // Like the Director, a page with a current raw reply is not proofread again.
+    assert.deepEqual(await chapterRawProofreadPages('batch-e'), []);
+    await assert.rejects(startChapterRawProofread({ series, episode: batchEpisode,
+      model: { engine: 'qwen', model: 'proofreader-fixture' } }), /All 2 unfinished Review pages already have a raw proofreading reply/);
+    // A reply made stale by a boundary edit no longer counts.
+    const first = jobs.find(job => job.kind === 'page-proofread' && job.payload.imageId === 'batch-first')!;
+    sqlite.prepare(`UPDATE workflow_jobs SET progress=json_set(progress,'$.pageGeometry',json('{"stale":true}')) WHERE id=?`).run(first.id);
+    assert.deepEqual(await chapterRawProofreadPages('batch-e'), ['batch-first']);
+    const again = await startChapterRawProofread({ series, episode: batchEpisode,
+      model: { engine: 'qwen', model: 'proofreader-fixture' } });
+    assert.equal(again.total, 1);
+    assert.equal(again.skipped, 1);
+    await waitFor(() => sent.length === 3);
+    sent[2].resolve(Response.json({ choices: [{ message: { content: JSON.stringify({ critique: 'Fresh reply' }) } }] }));
+    await waitFor(() => listJobs('batch-e').find(job => job.id === again.jobId)?.state === 'completed');
   } finally { globalThis.fetch = originalFetch; }
 });
 

@@ -21,7 +21,7 @@
     | "oval"
     | "crop"
     | "split"
-    | "reslice"
+    | "add-break"
     | "boundary"
     | "zoom";
 
@@ -109,7 +109,7 @@
     oval: { id: "oval", icon: "bi-circle", title: "Draw oval" },
     crop: { id: "crop", icon: "bi-crop", title: "Crop" },
     split: { id: "split", icon: "bi-vr", title: "Split page" },
-    reslice: { id: "reslice", icon: "bi-hr", title: "Reslice strips" },
+    "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (A)" },
     boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary'},
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", key: "Z" },
   };
@@ -161,7 +161,7 @@
     const zoom = ALL.zoom;
     if (step === "Prepare")
       return [
-        ...[ALL.select, ALL.crop, ALL.split, ALL.reslice, ALL.boundary].filter(
+        ...[ALL.select, ALL.crop, ALL.split, ALL["add-break"], ALL.boundary].filter(
           (t) => t.id === "select" || canUpload,
         ),
         zoom,
