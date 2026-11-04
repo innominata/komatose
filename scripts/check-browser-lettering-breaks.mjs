@@ -72,6 +72,31 @@ try {
   await fit.click();
   expect((await traced).postDataJSON()).toMatchObject({ lineId: line.id, method: "opencv" });
   await expect(page.locator(".ts-insp")).toContainText("English · manual breaks");
+  // Changing the region type refits the lettering in the same save; the browser sends no
+  // separate fit that could race it and fit the old type.
+  const fits = [];
+  page.on("request", r => { if (r.url() === `${api}/workflow` && r.method() === "POST" && r.postDataJSON()?.action === "fit") fits.push(r); });
+  const hadLayout = !!(await state()).regions[line.id]?.data.layout;
+  console.log("type change on a region", hadLayout ? "with" : "without", "a fitted layout");
+  const typeSave = page.waitForResponse(r => r.url().endsWith(`/lines/${line.id}`) && r.request().method() === "PATCH" &&
+    JSON.parse(r.request().postData() || "{}").lineType === "()");
+  await page.locator(".ts-insp").getByRole("combobox", { name: "Region type" }).selectOption("()");
+  const saved = await (await typeSave).json();
+  expect(saved.line.lineType).toBe("()");
+  // The fixture's thought style names a font this series lacks, so the refit reports why it
+  // could not run; with the font present the save returns the refitted region instead.
+  if (!hadLayout) {
+    // Nothing is fitted yet, so the type change only re-bases the style for the first fit.
+    expect(saved.doc).toBeUndefined();
+    expect(saved.fitError).toBeUndefined();
+  } else if (saved.doc) {
+    expect(saved.doc.data.layout).toBeTruthy();
+    await expect.poll(async () => (await state()).regions[line.id].revision).toBe(saved.doc.revision);
+  } else {
+    expect(saved.fitError).toMatch(/font/i);
+    await expect(page.getByText(`Saved, but the lettering was not refitted: ${saved.fitError}`)).toBeVisible();
+  }
+  expect(fits).toEqual([]);
   await page.screenshot({ path: "/tmp/komatose-lettering-breaks.png" });
   // Without a selected region there is nothing to fit, so the buttons go away.
   await page.keyboard.press("Escape");

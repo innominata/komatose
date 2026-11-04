@@ -1523,6 +1523,8 @@
           regionStyle = shownStyle(data.line.lineType, data.doc.data);
         }
       }
+      // The text or type was saved, but its lettering could not be refitted: say why.
+      if (data.fitError) notify(`Saved, but the lettering was not refitted: ${data.fitError}`);
       return { revision: data.line.revision };
     },
     () => {
@@ -1849,30 +1851,15 @@
     if (!result?.doc) throw new Error(error || "Could not save series region types");
   }
   async function setLineType(line: LineRow, lineType: string) {
-    if (!canChangeType || busy || line.lineType === lineType) return;
+    if (!canChangeType || line.lineType === lineType) return;
+    // The server switches the saved style to the new type and refits a fitted region in the
+    // same save, whose region comes back with it. Save at once rather than after the typing
+    // delay, so the new lettering shows straight away.
     edit(line, { lineType });
     const region = studioState?.regions[line.id];
-    const hasLayout = !!region?.data.layout;
-    if (canClean && (step === "Typeset" || (hasLayout && !region?.data.locked))) {
-      await resetRegionStyle({ ...line, lineType: lineType as LineType });
-      return;
-    }
-    if (hasLayout && canEdit && !region?.data.locked) {
-      const result = await act({
-        action: "fit",
-        id: line.id,
-        expectedRevision: region.revision,
-        resetStyle: true,
-      });
-      if (result?.doc && selected?.id === line.id) {
-        styleRevision = result.doc.revision;
-        regionStyle = shownStyle(lineType, result.doc.data);
-      }
-      return;
-    }
-    if (selected?.id === line.id) {
+    if (selected?.id === line.id && !region?.data.layout)
       regionStyle = shownStyle(lineType, region?.data);
-    }
+    if (!(await saves.flushAll())) notify("The region type is saved once the other unsaved edits are resolved.");
   }
   function selectLine(id: string, origin: "page" | "list" | "nav" = "nav") {
     const l = studioState?.lines.find((row) => row.id === id);
@@ -4622,7 +4609,7 @@
             <button type="button" class="ed-btn" data-find="translate" aria-label={scope === "chapter" ? "Translate chapter" : "Translate page"} disabled={busy || !canUpload || !translateGate.ok || (scope === "page" && !page)} title={translateGate.reason || undefined} onclick={() => scope === "chapter" || !page ? runAI("translate") : translatePage(page.id)}><i class="bi bi-translate" aria-hidden="true"></i> Translate</button>
             <button type="button" class="ed-btn" data-find="fill-missing" aria-label="Fill missing source &amp; English" title="Transcribe empty sources and fill empty English. Never overwrites." disabled={busy || !canEdit} onclick={() => fillMissing(scope === "page" ? page?.id : undefined)}><i class="bi bi-plus-square" aria-hidden="true"></i> Fill missing</button>
             {#if scope === "chapter"}
-              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount || rawBatchRunning} title={rawProofreadGate.reason || (rawBatchRunning ? 'A raw proofreading batch is already running. Open Jobs to view progress.' : (rawBatchCount ? 'Send unfinished Review pages with regions to the proofreader, one at a time. Pages that already have a raw proofreading reply are skipped.' : 'Every unfinished Review page with regions already has a raw proofreading reply.'))} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
+              <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount || rawBatchRunning} title={rawProofreadGate.reason || (rawBatchRunning ? 'A raw proofreading batch is already running. Open Jobs to view progress.' : (rawBatchCount ? 'Send unfinished Review pages with regions to the proofreader, one at a time. Pages without regions, and pages that already have a raw proofreading reply, are skipped.' : (studioState.lines.length ? 'Every unfinished Review page with regions already has a raw proofreading reply. Pages without regions are not sent.' : 'Transcribe the chapter first. Pages without regions are not sent.')))} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
             {:else}
               <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || reviewImageBusy || !canEdit || !page || (!rawProofreadGate.ok && !currentRawProofread(studioState.jobs, page.id))} title={page && currentRawProofread(studioState.jobs, page.id) ? 'Open this page’s saved raw reply. Its notice offers Proofread again.' : rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}

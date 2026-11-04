@@ -3571,6 +3571,10 @@ test("fitting with resetStyle drops region overrides and uses the current type",
     const restyled = getDoc<any>("region:type-refit", {}).data.style;
     assert.equal(restyled.size, 16, "the old type's size gives way to the new type's");
     assert.equal(restyled.leading, 1.4, "a changed field survives the type change");
+    // The fitted lettering follows in the same save: no separate refit is needed.
+    const retyped = await retype.json();
+    assert.equal(retyped.doc?.data.layout?.style.size, 16, "the layout is refitted with the new type's style");
+    assert.equal(getDoc<any>("region:type-refit", {}).data.layout.style.size, 16);
   } finally {
     sqlite.prepare("DELETE FROM lines WHERE id='type-refit'").run();
     sqlite.prepare("DELETE FROM workflow_docs WHERE id='region:type-refit'").run();

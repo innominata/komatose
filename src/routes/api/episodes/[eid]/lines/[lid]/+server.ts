@@ -185,7 +185,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
     // A new type brings its series style. The region's saved style is usually a stamped copy
     // of the old type's default (or a fit of it), so only fields someone changed survive;
     // the rest follow the new type, and the next fit uses them.
-    if ("lineType" in body && line.lineType !== existing.lineType) {
+    const retyped = "lineType" in body && line.lineType !== existing.lineType;
+    if (retyped) {
       const region = getDoc<RegionData>(`region:${line.id}`, {});
       if (!region.data.locked && region.data.style)
         putDoc(episode.id, region.id, {
@@ -213,7 +214,10 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
     }
     // Save and reflow in one round trip. A missing font or concurrent geometry
     // edit must never turn an already-saved text edit into a failed save.
-    if (body.refit === true && "body" in body) {
+    // A type change refits here, in the same request, so the lettering shows the new type's
+    // style at once. A separate refit from the browser raced this save and could fit the old type.
+    const refitForType = retyped && !!getDoc<RegionData>(`region:${line.id}`, {}).data.layout && !!line.body.trim();
+    if ((body.refit === true && "body" in body) || refitForType) {
       const region = getDoc<RegionData>(`region:${line.id}`, {});
       if (!region.data.locked && (line.placed || region.data.layout)) {
         try {
