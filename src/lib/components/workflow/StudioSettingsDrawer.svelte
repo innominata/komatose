@@ -5,6 +5,7 @@
     ["series", "Series", "Format, language & reading"],
     ["chapter", "Chapter", "This chapter"],
     ["detection", "Text detection", "This chapter"],
+    ["clean", "Cleaning", "Just you"],
     ["models", "AI models", "Series"],
     ["director", "Director", "Series"],
     ["guide", "Translation guide", "Chapter + series"],

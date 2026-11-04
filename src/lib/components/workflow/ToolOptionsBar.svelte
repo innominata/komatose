@@ -51,6 +51,7 @@
     brush: { icon: "bi-brush", label: "Mask brush", hint: "Paint over lettering to add it to the mask." },
     erase: { icon: "bi-eraser", label: "Erase mask", hint: "Paint to remove areas from the mask." },
     "mask-grow": { icon: "bi-arrows-angle-expand", label: "Grow mask", hint: "Click one continuous mask section to expand it by the set amount." },
+    "rect-fill": { icon: "bi-square-half", label: "Fill rectangle", hint: "Drag a rectangle. It is filled with the colour sampled around it and applied at once; Undo steps back." },
     "bubble-fill": { icon: "bi-paint-bucket", label: "Fill speech bubble", hint: "Click inside an enclosed balloon. Fills it with the sampled background, leaving the outline." },
     "clone-stamp": { icon: "bi-copy", label: "Clone stamp", hint: "Right-click to set the source, click to lock the offset, then drag to paint." },
     blur: { icon: "bi-droplet-half", label: "Blur", hint: "Paint to blend an inpainted patch into the surrounding gradient." },
@@ -68,6 +69,7 @@
       tool === "crop" ||
       tool === "split" ||
       tool === "add-break" ||
+      tool === "rect-fill" ||
       tool === "reorder" ||
       tool === "style-brush" ||
       tool === 'assign-character' ||

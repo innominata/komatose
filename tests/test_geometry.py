@@ -91,6 +91,33 @@ class Geometry(unittest.TestCase):
         result = workflow.geometry(filled, {'box': [50 / 200, 50 / 200, 80 / 200, 50 / 200], 'kind': 'bubble'})
         self.assertFalse(result.get('boxed', False))
 
+    def test_solid_black_balloons_fit_their_silhouette(self):
+        """White lettering on a black balloon: the balloon is the ink, not artwork inside it."""
+        for name, bg, outline, text in [
+            ('white page', 255, None, 'WHAT?!'),
+            ('grey page', 150, None, 'WHAT?!'),
+            ('white outline', 150, (255, 255, 255), 'WHAT?!'),
+            ('heavy lettering', 255, None, "OH NO, DON'T!"),
+        ]:
+            with self.subTest(name):
+                img = np.full((500, 600, 3), bg, np.uint8)
+                cv2.rectangle(img, (0, 420), (600, 500), (90, 90, 90), -1)
+                cv2.ellipse(img, (300, 220), (170, 110), 0, 0, 360, (0, 0, 0), -1)
+                if outline is not None:
+                    cv2.ellipse(img, (300, 220), (170, 110), 0, 0, 360, outline, 4)
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.4, 3)
+                org = (300 - tw // 2, 220 + th // 2)
+                cv2.putText(img, text, org, cv2.FONT_HERSHEY_DUPLEX, 1.4, (255, 255, 255), 3, cv2.LINE_AA)
+                box = [(org[0] - 10) / 600, (org[1] - th - 10) / 500, (tw + 20) / 600, (th + 20) / 500]
+                result = workflow.geometry(img, {'box': box, 'kind': 'bubble', 'method': 'opencv'})
+                self.assertGreaterEqual(len(result['polygon']), 3, result.get('message'))
+                found = np.zeros((500, 600), np.uint8)
+                cv2.fillPoly(found, [np.array([[p['x'] * 600, p['y'] * 500] for p in result['polygon']], np.int32)], 255)
+                truth = np.zeros((500, 600), np.uint8)
+                cv2.ellipse(truth, (300, 220), (170, 110), 0, 0, 360, 255, -1)
+                iou = np.count_nonzero(found & truth) / np.count_nonzero(found | truth)
+                self.assertGreater(iou, .9)
+
     def test_manhwa_caption_boxes(self):
         pages = json.loads((ROOT / 'fixtures/manhwa-pages/gold.json').read_text())
         expect = {

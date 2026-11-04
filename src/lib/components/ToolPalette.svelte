@@ -22,6 +22,7 @@
     | "crop"
     | "split"
     | "add-break"
+    | "rect-fill"
     | "boundary"
     | "zoom";
 
@@ -110,6 +111,7 @@
     crop: { id: "crop", icon: "bi-crop", title: "Crop" },
     split: { id: "split", icon: "bi-vr", title: "Split page" },
     "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (A)" },
+    "rect-fill": { id: "rect-fill", icon: "bi-square-half", title: "Fill rectangle (sampled flat fill) (Q)" },
     boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary'},
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", key: "Z" },
   };

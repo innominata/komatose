@@ -9,7 +9,21 @@ export type UserSettings = {
    * granted per user from Admin -> Users. Ids are validated against the known set.
    */
   proofreaders: ProofreaderId[];
+  /** Cleaning methods whose result is applied as soon as it finishes, as Keep result would. */
+  autoApplyClean: string[];
 };
+
+/** Method ids are short tokens (flat, lama, qwen-image-edit, a model id); anything else is dropped. */
+export function parseAutoApplyClean(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const id = String(item ?? "").trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9:._@/-]{0,120}$/.test(id) && !out.includes(id)) out.push(id);
+    if (out.length >= 100) break;
+  }
+  return out;
+}
 
 function parseProofreaders(raw: unknown): ProofreaderId[] {
   if (!Array.isArray(raw)) return [];
@@ -39,6 +53,7 @@ export function readUserSettings(userId: string): UserSettings {
   return {
     regionColors: parseColorMap(raw.regionColors),
     proofreaders: parseProofreaders(raw.proofreaders),
+    autoApplyClean: parseAutoApplyClean(raw.autoApplyClean),
   };
 }
 
@@ -47,6 +62,15 @@ export function saveUserRegionColors(userId: string, colors: unknown): UserSetti
   const regionColors = parseColorMap(colors);
   sqlite.prepare("UPDATE users SET settings=? WHERE id=?").run(
     JSON.stringify({ ...current, regionColors }),
+    userId,
+  );
+  return readUserSettings(userId);
+}
+
+export function saveUserAutoApplyClean(userId: string, methods: unknown): UserSettings {
+  const current = readRaw(userId);
+  sqlite.prepare("UPDATE users SET settings=? WHERE id=?").run(
+    JSON.stringify({ ...current, autoApplyClean: parseAutoApplyClean(methods) }),
     userId,
   );
   return readUserSettings(userId);

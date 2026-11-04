@@ -3334,6 +3334,23 @@ test("series type settings apply per text type and reset clears region overrides
     const reset = resetRegionStyles("e", { imageId: "p" });
     assert.ok(reset.cleared >= 1);
     assert.equal(getDoc<{ style?: unknown }>("region:type-reset", {}).data.style, undefined);
+    // A studio load between the reset and the refit must not stamp the old fitted
+    // layout's style back. That layout was fitted under the region's previous type.
+    {
+      const { ensureOwnRegionStyles } = await import("../src/lib/server/workflowService");
+      const current = getDoc<any>("region:type-reset", {});
+      putDoc("e", current.id, { ...current.data, layout: { style: { ...DEFAULT_STYLE, fontId: ttf.font.id, size: 12 } } }, current.revision);
+      sqlite.prepare("UPDATE lines SET line_type='::' WHERE id='type-reset'").run();
+      ensureOwnRegionStyles("s", "e", [{ id: "type-reset", lineType: "::" }]);
+      const after = getDoc<any>("region:type-reset", {}).data;
+      assert.equal(after.style, undefined, "the reset is not undone by a studio load");
+      assert.equal(after.styleFromSeries, true);
+      assert.equal(resolveStyle((await listLines("e")).find((l) => l.id === "type-reset")!, after, "e", "s").size, 7,
+        "fits with the new type's series style");
+      sqlite.prepare("UPDATE lines SET line_type='\"\"' WHERE id='type-reset'").run();
+      const restored = getDoc<any>("region:type-reset", {});
+      putDoc("e", restored.id, { ...restored.data, layout: undefined }, restored.revision);
+    }
     assert.equal(
       resolveStyle(
         (await listLines("e")).find((l) => l.id === "type-reset")!,
@@ -3538,6 +3555,22 @@ test("fitting with resetStyle drops region overrides and uses the current type",
     assert.equal(result.line.body, "NEW TEXT");
     assert.ok(result.doc.data.layout.rows.map((row: {text: string}) => row.text).join(" ").includes("NEW TEXT"));
     assert.equal(result.doc.revision, changed.revision + 1);
+
+    // Changing the type (here before any refit) re-bases the saved style: a stamped copy of
+    // the old type's default follows the new type, and a field someone changed is kept.
+    const stamped = getDoc<any>("region:type-refit", {});
+    putDoc("e", stamped.id, { ...stamped.data, style: { ...stamped.data.style, size: 8, leading: 1.4 } }, stamped.revision);
+    const typed = (await listLines("e")).find(l => l.id === "type-refit")!;
+    const retype = await PATCH({
+      locals: { user: { id: "u", username: "test", role: "admin" } },
+      params: { eid: "e", lid: typed.id },
+      request: new Request("http://local/lines/type-refit", { method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lineType: '""', expectedRevision: typed.revision }) }),
+    } as any);
+    assert.equal(retype.status, 200);
+    const restyled = getDoc<any>("region:type-refit", {}).data.style;
+    assert.equal(restyled.size, 16, "the old type's size gives way to the new type's");
+    assert.equal(restyled.leading, 1.4, "a changed field survives the type change");
   } finally {
     sqlite.prepare("DELETE FROM lines WHERE id='type-refit'").run();
     sqlite.prepare("DELETE FROM workflow_docs WHERE id='region:type-refit'").run();

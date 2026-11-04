@@ -494,8 +494,11 @@ export function resetRegionStyles(
       locked += 1;
       continue;
     }
-    if (!doc.data.style || !Object.keys(doc.data.style).length) continue;
-    putDoc(episodeId, doc.id, { ...doc.data, style: undefined }, doc.revision);
+    if (doc.data.styleFromSeries && !doc.data.style) continue;
+    // Mark the region as following its type's series style. Without this, the next studio
+    // load (ensureOwnRegionStyles) would stamp the old fitted layout's style straight back,
+    // e.g. the typeface of the type a region had before it was changed.
+    putDoc(episodeId, doc.id, { ...doc.data, style: undefined, styleFromSeries: true }, doc.revision);
     cleared += 1;
   }
   let chapterCleared = false;

@@ -126,8 +126,8 @@
       {/each}
     </div>
     {#if oncompare}
-      <button type="button" class="method compare" disabled={!canClean || busy || !pageDoc?.data.mask}
-        title={pageDoc?.data.mask ? "Run several methods on the selected region and pick the best" : "Paint or detect a mask first"}
+      <button type="button" class="method compare" disabled={!canClean || busy || !(pageDoc?.data.mask || strokeCount)}
+        title={pageDoc?.data.mask || strokeCount ? "Run several methods on the selected region and pick the best. Approves the mask, as cleaning does." : "Paint or detect a mask first"}
         onclick={() => oncompare?.()}><i class="bi bi-layout-split" aria-hidden="true"></i> <span><b>Compare methods on this region…</b></span></button>
     {/if}
     {#if onpostprocess && pageDoc?.data.cleanFinish && pageDoc.data.cleanFinish.result === pageDoc.data.cleaned}

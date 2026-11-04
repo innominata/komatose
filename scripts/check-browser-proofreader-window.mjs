@@ -61,9 +61,29 @@ try {
   assert.ok(resized.width > beforeResize.width + 25 && resized.height > beforeResize.height + 20,
     'Window should resize from its lower right corner');
   await expect(window.getByRole('textbox', { name: 'Follow-up', exact: true })).toBeVisible();
+  // The resize is saved once it settles.
+  await page.waitForTimeout(500);
   await window.getByRole('button', { name: 'Close proofreader' }).click();
   await expect(window).toBeHidden();
-  console.log('Proofreader window is non-modal, draggable, and resizable.');
+
+  // Reopening, and reopening after a reload, keeps the place and size it was left at.
+  const same = (a, b) => ['x', 'y', 'width', 'height'].every(key => Math.abs(a[key] - b[key]) <= 2);
+  const reopen = async () => {
+    await page.locator('[data-find="more-review"]').click();
+    await page.locator('[data-find="page-proofreader"]').click();
+    await expect(window).toBeVisible();
+    return window.boundingBox();
+  };
+  let reopened = await reopen();
+  assert.ok(same(reopened, resized), `Window should reopen where it was left: ${JSON.stringify({ reopened, resized })}`);
+  await window.getByRole('button', { name: 'Close proofreader' }).click();
+  await page.reload();
+  await page.waitForFunction(() => document.body.dataset.studioReady === '1');
+  await page.locator('.pages > button').first().click();
+  reopened = await reopen();
+  assert.ok(same(reopened, resized), `Window should keep its place after a reload: ${JSON.stringify({ reopened, resized })}`);
+  await window.getByRole('button', { name: 'Close proofreader' }).click();
+  console.log('Proofreader window is non-modal, draggable, resizable, and remembers its place and size.');
 } finally {
   await browser.close();
 }

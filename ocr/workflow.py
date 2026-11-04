@@ -648,7 +648,11 @@ def _plausible_interior(mask, box, gray=None):
     if gray is not None and area > patch.size * 3:
         inner = cv2.erode(mask, np.ones((7, 7), np.uint8))
         inner[y0:y1, x0:x1] = 0
-        ink = np.uint8((gray < 160) & (inner > 0))
+        # Ink is whatever contrasts with the balloon's own fill: dark marks in a light
+        # balloon (as `gray < 160` was), light marks in a black one. Testing darkness
+        # alone made a solid black balloon count as artwork inside itself.
+        fill = float(np.median(gray[inner > 0])) if np.any(inner) else 255.0
+        ink = np.uint8((np.abs(gray.astype(np.int16) - int(fill)) > 255 - 160) & (inner > 0))
         n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=4)
         _, _, mw, mh = cv2.boundingRect(contour)
         large_ink = sum(stats[i, cv2.CC_STAT_AREA] for i in range(1, n)

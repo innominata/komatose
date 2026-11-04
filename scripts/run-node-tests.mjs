@@ -32,6 +32,7 @@ const groups = {
     "tests/gpu-names.test.ts",
     "tests/image-edit-placement.test.ts",
     "tests/region-text-drop.test.ts",
+    "tests/lettering-breaks.test.ts",
   ],
   integration: [
     "tests/series-backups.test.ts",

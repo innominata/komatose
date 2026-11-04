@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { breakAtSpace, formatLettering } from "$lib/letteringBreaks";
   import "./studio-controls.css";
   import { type LineRow } from "$lib/types";
   import { builtinRegionKinds, regionKindOptions, type RegionKind } from "$lib/regionCatalog";
@@ -182,14 +183,35 @@
     {/if}
     {#if tab === "text"}
     <div data-find="autofit-region">
-    <label
-      >English · manual breaks<textarea
-        rows="4"
-        value={selected.body}
-        disabled={!canEdit}
-        oninput={(e) => onedit(selected, { body: e.currentTarget.value })}
-      ></textarea></label
-    >
+    <div class="english-head">
+      <label for={`typeset-english-${selected.id}`}>English · manual breaks</label>
+      <button type="button" class="format-english" data-find="format-english" disabled={!canEdit || !selected.body.trim()}
+        title="Break the line after every , . ? ! and remove double quotes and extra spaces. Tip: Ctrl-click a space in the text to break there."
+        onclick={() => {
+          const next = formatLettering(selected.body);
+          if (next !== selected.body) onedit(selected, { body: next });
+        }}><i class="bi bi-text-paragraph" aria-hidden="true"></i> Format</button>
+    </div>
+    <textarea
+      class="english-box"
+      id={`typeset-english-${selected.id}`}
+      rows="4"
+      value={selected.body}
+      disabled={!canEdit}
+      title="Ctrl-click a space to break the line there"
+      oninput={(e) => onedit(selected, { body: e.currentTarget.value })}
+      onclick={(e) => {
+        // Ctrl-click (Cmd-click on a Mac) a space: break the line there, dropping the space.
+        if (!(e.ctrlKey || e.metaKey) || !canEdit) return;
+        const area = e.currentTarget;
+        const result = breakAtSpace(area.value, area.selectionStart);
+        if (!result) return;
+        e.preventDefault();
+        area.value = result.text;
+        area.setSelectionRange(result.caret, result.caret);
+        onedit(selected, { body: result.text });
+      }}
+    ></textarea>
     <label
       >Region type<select
         aria-label="Region type"
@@ -484,6 +506,10 @@
 {/if}
 
 <style>
+  .english-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 3px; }
+  .english-box { display: block; margin-bottom: 8px; }
+  .english-head label { margin: 0; }
+  .format-english { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 12px; }
   .ts-insp { padding: 12px 14px; display: grid; gap: 8px; border-bottom: 1px solid var(--hud-line); }
   .ts-insp :global(label) { margin: 0; display: grid; gap: 4px; }
   .ts-insp p { margin: 0; color: var(--hud-muted); font-size: 12px; }

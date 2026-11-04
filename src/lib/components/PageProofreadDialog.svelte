@@ -16,8 +16,50 @@
     onattachpage?: (variant: 'raw' | 'typeset') => Promise<Blob>;
   } = $props();
 
-  let x = $state(32);
-  let y = $state(32);
+  /** Where the window was last left, so reopening it does not reset its place and size. */
+  const PLACE_KEY = 'komatose.pageProofreadWindow';
+  type Place = { x: number; y: number; width?: number; height?: number };
+  function savedPlace(): Place | null {
+    try {
+      const value = JSON.parse(localStorage.getItem(PLACE_KEY) || 'null');
+      return value && Number.isFinite(value.x) && Number.isFinite(value.y) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  const initial = typeof window === 'undefined' ? null : savedPlace();
+  // Kept on screen: a smaller window or another display must not strand it off-screen.
+  const fit = (value: number, size: number, keep: number) => Math.max(0, Math.min(Math.max(0, size - keep), value));
+  let x = $state(initial && typeof window !== 'undefined' ? fit(initial.x, window.innerWidth, 100) : 32);
+  let y = $state(initial && typeof window !== 'undefined' ? fit(initial.y, window.innerHeight, 40) : 32);
+  let width = $state(initial?.width && typeof window !== 'undefined' ? Math.min(initial.width, window.innerWidth - 16) : undefined);
+  let height = $state(initial?.height && typeof window !== 'undefined' ? Math.min(initial.height, window.innerHeight - 16) : undefined);
+  let windowEl = $state<HTMLDivElement>();
+  function savePlace() {
+    try {
+      localStorage.setItem(PLACE_KEY, JSON.stringify({ x, y, width, height }));
+    } catch {
+      /* private mode: the window simply opens at the default place next time */
+    }
+  }
+  // The CSS resize handle changes the size directly; record it once a resize settles.
+  $effect(() => {
+    if (!windowEl || typeof ResizeObserver === 'undefined') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let first = true;
+    const observer = new ResizeObserver(() => {
+      if (first) { first = false; return; }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!windowEl) return;
+        width = Math.round(windowEl.offsetWidth);
+        height = Math.round(windowEl.offsetHeight);
+        savePlace();
+      }, 250);
+    });
+    observer.observe(windowEl);
+    return () => { observer.disconnect(); clearTimeout(timer); };
+  });
   let dragging = $state<{ pointer: number; x: number; y: number } | null>(null);
   let prompt = $state('');
   let pasted = $state<{ mime: string; data: string; preview: string; label?: string }[]>([]);
@@ -174,12 +216,14 @@
   }
 
   function stopDrag(event: PointerEvent) {
-    if (dragging?.pointer === event.pointerId) dragging = null;
+    if (dragging?.pointer !== event.pointerId) return;
+    dragging = null;
+    savePlace();
   }
 </script>
 
 {#if job}
-<div class="hud-dialog-controls page-proofread-window" role="dialog" aria-labelledby="page-proofread-title" style:left={`${x}px`} style:top={`${y}px`}>
+<div bind:this={windowEl} class="hud-dialog-controls page-proofread-window" role="dialog" aria-labelledby="page-proofread-title" style:left={`${x}px`} style:top={`${y}px`} style:width={width ? `${width}px` : undefined} style:height={height ? `${height}px` : undefined}>
   <header role="toolbar" tabindex="0" aria-label="Move proofreader window" onpointerdown={startDrag} onpointermove={moveDrag} onpointerup={stopDrag} onpointercancel={stopDrag}>
     <div>
       <h2 id="page-proofread-title">{followUp ? 'Proofreader follow-up' : pageProofreadCall(job ?? { id: '', kind: '', state: '' }) === 'Raw' ? 'Proofread Raw' : 'Page proofreader'}</h2>

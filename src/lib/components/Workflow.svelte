@@ -14,6 +14,7 @@
   import { copyPngToClipboard } from '$lib/clipboardImage';
   import { currentRawProofread, lastProofreadPageId, pageProofreadCall } from '$lib/pageProofread';
   import { cleanDroppedText, dropFieldFor } from '$lib/regionTextDrop';
+  import { cleanModelChoices } from '$lib/cleanMethods';
   import PageProofreadDialog from './PageProofreadDialog.svelte';
   import SavedProofreadWindow from './SavedProofreadWindow.svelte';
   import ScriptProofreadDialog from './ScriptProofreadDialog.svelte';
@@ -441,6 +442,19 @@
     settingsSection = "colors";
   }
   let userRegionColors = $state<Record<string, string>>({});
+  /** Cleaning methods (per user) whose result applies as soon as it finishes. */
+  let autoApplyClean = $state<string[]>([]);
+  async function saveAutoApplyClean(methods: string[]) {
+    const previous = autoApplyClean;
+    autoApplyClean = methods;
+    try {
+      const data = await request("/api/me/settings", { autoApplyClean: methods }, "PUT");
+      autoApplyClean = Array.isArray(data.autoApplyClean) ? data.autoApplyClean : methods;
+    } catch (e) {
+      autoApplyClean = previous;
+      error = String(e);
+    }
+  }
   let polygonRevision = 0;
   let mergeId = $state("");
   let splitAt = $state(1);
@@ -1638,6 +1652,7 @@
     if (!pageId || !data.images.some((p: ImageRow) => p.id === pageId))
       pageId = data.images[0]?.id ?? "";
     tryPendingClean();
+    tryPendingCompare();
     if (step === 'Prepare') void refreshPageUndo().catch(() => {});
   }
   function applyRegionDoc(doc: WorkflowDoc<RegionData>) {
@@ -1678,7 +1693,7 @@
         if (
           !current ||
           !imageId ||
-          !["mask", "clean", "bubble-fill", "clone-brush", "blur-brush", "restore-brush", "raw-brush", "page", "apply-clean"].includes(String(body.action))
+          !["mask", "clean", "bubble-fill", "rect-fill", "clone-brush", "blur-brush", "restore-brush", "raw-brush", "page", "apply-clean"].includes(String(body.action))
         )
           throw e;
         adoptPageDoc(imageId, current);
@@ -1798,6 +1813,11 @@
         if (now) edit(now, previous);
       },
     });
+  }
+  /** Trace the selected region's enclosed bubble interior (Shape & mask, and the Typeset rail). */
+  function fitSelectedBubble() {
+    if (!selected || !page || !canClean || busy || regionDoc?.data.locked) return;
+    void act({ action: "geometry", imageId: page.id, lineId: selected.id, expectedRevision: pageDoc?.revision ?? 0, method: "opencv" });
   }
   const canChangeType = $derived(canEdit || canClean);
   const regionKinds = $derived(activeRegionKinds(studioState?.seriesDefaults.data.regionKinds));
@@ -2109,6 +2129,12 @@
     tool = "select";
   }
   function down(e: PointerEvent) {
+    // Bubble fill clicks queue while another fill (or save) runs, rather than being dropped.
+    if (page && e.button === 0 && busy && tool === "bubble-fill" && !zooming && canClean) {
+      e.preventDefault();
+      void clickCleanTool(coords(e));
+      return;
+    }
     if (!page || e.button !== 0 || busy) return;
     if (zooming) {
       nudgeZoom(e.altKey ? -1 : 1);
@@ -2123,6 +2149,7 @@
         "brush",
         "erase",
         "bubble-fill",
+        "rect-fill",
         "clone-stamp",
         "blur",
         "restore",
@@ -2561,6 +2588,15 @@
       await saveDrawnShape(tool, d.start, d.end);
       return;
     }
+    if (tool === "rect-fill") {
+      const x = Math.min(d.start.x, d.end.x), y = Math.min(d.start.y, d.end.y),
+        w = Math.abs(d.start.x - d.end.x), h = Math.abs(d.start.y - d.end.y);
+      if (w * page.width < 3 || h * page.height < 3 || !pageDoc || !canClean) return;
+      // As if the rectangle were masked and Sampled flat fill clicked, then kept at once.
+      const result = await act({ action: "rect-fill", imageId: page.id, expectedRevision: pageDoc.revision, box: [x, y, w, h] });
+      if (result) notify("Filled the rectangle with the sampled colour. Undo steps back.");
+      return;
+    }
     if (["region", "read-area", "detect-area", "place-line"].includes(tool)) {
       const x = Math.min(d.start.x, d.end.x),
         y = Math.min(d.start.y, d.end.y),
@@ -2657,20 +2693,55 @@
     cloneOffset = null;
     notify("Clone source set. Click the destination, then drag to paint.");
   }
+  /**
+   * Bubble fills queue: a click while one is filling (or anything else is saving) waits its
+   * turn instead of being dropped. Each runs against the page's latest revision, because
+   * the fill before it changed the artwork.
+   */
+  let bubbleQueue = $state<{ imageId: string; p: Point }[]>([]);
+  let bubbleQueueRunning = false;
+  function queueBubbleFill(imageId: string, p: Point) {
+    bubbleQueue = [...bubbleQueue, { imageId, p }];
+    // The fill running now stays first in the queue (so its marker shows) but is not waiting.
+    const waiting = bubbleQueue.length - (bubbleQueueRunning ? 1 : 0);
+    if (bubbleQueueRunning || busy)
+      notify(`Queued. ${waiting} bubble fill${waiting === 1 ? "" : "s"} waiting.`);
+    if (!bubbleQueueRunning) void runBubbleQueue();
+  }
+  async function runBubbleQueue() {
+    bubbleQueueRunning = true;
+    let filled = 0, failed = 0;
+    try {
+      while (bubbleQueue.length) {
+        while (busy) await new Promise((resolve) => setTimeout(resolve, 80));
+        const [next, ...rest] = bubbleQueue;
+        const doc = studioState?.pages[next.imageId];
+        if (!doc || !canClean) { bubbleQueue = rest; continue; }
+        const result = await act({
+          action: "bubble-fill",
+          imageId: next.imageId,
+          expectedRevision: doc.revision,
+          px: next.p.x,
+          py: next.p.y,
+        });
+        // Dropped only once it has run, so its marker stays until then.
+        bubbleQueue = bubbleQueue.slice(1);
+        if (result) filled++;
+        else failed++;
+      }
+    } finally {
+      bubbleQueueRunning = false;
+    }
+    if (filled)
+      notify(`Filled ${filled === 1 ? "the speech bubble" : `${filled} speech bubbles`}${failed ? ` · ${failed} could not be filled` : ""}. Undo saved edit restores the previous artwork.`);
+  }
   async function clickCleanTool(p: Point) {
-    if (!page || !pageDoc || !canClean || busy) return;
+    if (!page || !pageDoc || !canClean) return;
     if (tool === "bubble-fill") {
-      const result = await act({
-        action: "bubble-fill",
-        imageId: page.id,
-        expectedRevision: pageDoc.revision,
-        px: p.x,
-        py: p.y,
-      });
-      if (result)
-        notify("Filled the speech bubble. Undo saved edit restores the previous artwork.");
+      queueBubbleFill(page.id, p);
       return;
     }
+    if (busy) return;
     if (!pageDoc.data.mask && !strokes.length) {
       notify("Paint or detect a mask first, then click a mask region to grow it.");
       return;
@@ -2907,8 +2978,42 @@
       method,
       offset: [cloneX, cloneY],
       ...(prompt ? { prompt } : {}),
+      ...(autoApplyClean.includes(method) ? { autoApply: true } : {}),
     });
     if (!result) endJobIntent();
+  }
+  /**
+   * Compare methods approves the mask the way a cleaning method does: unsaved strokes are
+   * saved first (which approves them), and a detected mask is approved, then the dialog opens.
+   */
+  let pendingCompare = $state<{ lineId: string; imageId: string } | null>(null);
+  async function openCleanCompare(lineId: string) {
+    if (!page || !pageDoc || busy) return;
+    if (strokes.length) {
+      const result = await applyMask();
+      if (!result) return;
+      pendingCompare = { lineId, imageId: page.id };
+      tryPendingCompare();
+      return;
+    }
+    if (!pageDoc.data.mask) { notify("Paint or detect a mask on this region before comparing methods."); return; }
+    if (!pageDoc.data.maskApproved) {
+      const approved = await act({ action: "page", imageId: page.id, expectedRevision: pageDoc.revision, data: { maskApproved: true } });
+      if (!approved) return;
+    }
+    compareLineId = lineId;
+  }
+  function tryPendingCompare() {
+    if (!pendingCompare || busy) return;
+    if (maskJobId) {
+      const job = studioState?.jobs.find((item) => item.id === maskJobId);
+      if (!job || ["running", "queued", "cancelling"].includes(job.state)) return;
+      if (job.state !== "completed") { pendingCompare = null; return; }
+    }
+    const { lineId, imageId } = pendingCompare;
+    if (!studioState?.pages[imageId]?.data.mask) return;
+    pendingCompare = null;
+    if (page?.id === imageId) compareLineId = lineId;
   }
   function tryPendingClean() {
     if (!pendingClean || busy) return;
@@ -2933,6 +3038,7 @@
       method,
       offset: [cloneX, cloneY],
       ...(prompt ? { prompt } : {}),
+      ...(autoApplyClean.includes(method) ? { autoApply: true } : {}),
     }).then((result) => {
       if (!result) endJobIntent();
     });
@@ -3605,12 +3711,18 @@
     if (!res.ok) throw new Error(json.error || "Could not add font");
     await refresh();
   }
-  async function resetStyles(scope: "page" | "chapter") {
+  /**
+   * Auto-fit all text and Reset all text both start from the series defaults: unlocked
+   * regions lose their own typeface, size and effects, then everything is fitted again.
+   */
+  async function resetStyles(scope: "page" | "chapter", imageId?: string) {
     if (!canClean || busy || typesetRunning()) return;
-    const label = scope === "page" ? "this page" : "this chapter";
+    const target = scope === "page" ? imageId ?? page?.id : undefined;
+    if (scope === "page" && !target) return;
+    const label = scope === "page" ? "on this page" : "in this chapter";
     if (
       !window.confirm(
-        `Clear unlocked style overrides on ${label} and refit from series type settings? Locked layouts stay.`,
+        `Auto-fit resets the text style of every unlocked region ${label} to the series defaults (typeface, size, colours, outline and effects), then fits all the text again.\n\nRegions with their own style changes lose them. Locked layouts are kept.${scope === "chapter" ? " The chapter's own type settings are cleared too." : ""}`,
       )
     )
       return;
@@ -3619,13 +3731,13 @@
     const result = await act({
       action: "reset-styles",
       scope,
-      imageId: scope === "page" ? page?.id : undefined,
+      imageId: target,
     });
     if (!result) return;
     notify(
-      `Cleared ${result.cleared ?? 0} overrides${result.locked ? ` · ${result.locked} locked skipped` : ""}.`,
+      `Reset ${result.cleared ?? 0} region style${result.cleared === 1 ? "" : "s"} to the series defaults${result.locked ? ` · ${result.locked} locked kept` : ""}. Fitting the text again.`,
     );
-    if (scope === "page") await fitPage();
+    if (scope === "page") await fitPage(target);
     else fitChapter();
   }
   function toggleMenu(next: "series" | "chapter" | "page" | "view") {
@@ -3800,7 +3912,7 @@
     }
     tool = id;
     if (id === "brush" || id === "erase" || id === "mask-grow") setMaskVisibility(true);
-    if (id === "bubble-fill" || id === "clone-stamp" || id === "blur" || id === "restore" || id === "raw") compare = false;
+    if (id === "bubble-fill" || id === "rect-fill" || id === "clone-stamp" || id === "blur" || id === "restore" || id === "raw") compare = false;
     if (id === "clone-stamp") {
       if (!cloneSource) notify("Right-click to set the clone source, then click and drag to paint.");
     }
@@ -3877,7 +3989,10 @@
     void refreshPageUndo()
       .catch(() => {});
     void request("/api/me/settings")
-      .then((data) => (userRegionColors = parseColorMap(data.regionColors)))
+      .then((data) => {
+        userRegionColors = parseColorMap(data.regionColors);
+        if (Array.isArray(data.autoApplyClean)) autoApplyClean = data.autoApplyClean;
+      })
       .catch(() => {});
     void refresh()
       .then(() => {
@@ -4221,6 +4336,8 @@
     }
     if ((e.key === "a" || e.key === "A") && !shortcut && stripEditor && canUpload)
       choosePalette("add-break");
+    if ((e.key === "q" || e.key === "Q") && !shortcut && step === "Clean" && canClean)
+      choosePalette("rect-fill");
     if ((e.key === "b" || e.key === "B") && step === "Clean" && canClean)
       choosePalette("brush");
     if ((e.key === "e" || e.key === "E") && step === "Clean" && canClean)
@@ -4361,6 +4478,7 @@
       compareRegion: (line: LineRow) => void openRegionCompare(line),
       saveCleaningSample: () => void saveCleaningSample(),
       fitPage,
+      autofitPage: (imageId?: string) => void resetStyles("page", imageId),
       resetStyles,
       replaceFile: (imageId) => {
         replacementId = imageId;
@@ -4536,7 +4654,7 @@
               <button type="button" class="ed-btn primary" data-find="approve-clean" disabled={busy || !canClean} onclick={() => approveCleanedAndNext()}>Approve cleaned &amp; next</button>
             {/if}
           {:else if step === "Typeset"}
-            <button type="button" class="ed-btn primary" data-find="autofit-all" disabled={!canClean || busy || typesetRunning()} onclick={() => scope === "chapter" ? fitChapter() : fitPage()}><i class="bi bi-textarea-resize" aria-hidden="true"></i> {scope === "chapter" ? "Auto-fit chapter" : "Auto-fit all text"}</button>
+            <button type="button" class="ed-btn primary" data-find="autofit-all" disabled={!canClean || busy || typesetRunning()} title="Reset unlocked region styles to the series defaults and fit all text again" onclick={() => void resetStyles(scope === "chapter" ? "chapter" : "page")}><i class="bi bi-textarea-resize" aria-hidden="true"></i> {scope === "chapter" ? "Auto-fit chapter" : "Auto-fit all text"}</button>
             <button type="button" class="ed-btn" data-find="find-fit" disabled={!canClean || busy || typesetRunning()} onclick={() => scope === "chapter" ? fitChapter() : fitPage()}><i class="bi bi-bounding-box-circles" aria-hidden="true"></i> Find &amp; fit bubbles</button>
             <button type="button" class="ed-btn" data-find="keep-layouts" title="Accept stale placements instead of refitting" disabled={!canClean || busy} onclick={() => keepCurrentLayouts()}><i class="bi bi-pin-angle" aria-hidden="true"></i> Keep current layouts</button>
           {:else if step === "Export"}
@@ -4743,6 +4861,11 @@
               {canUpload}
               {pageMode}
               showPolygon={!!selected && step === "Typeset"}
+              geometryActions={selected && regionDoc && step === "Typeset" ? {
+                fitBubble: fitSelectedBubble,
+                regionBounds: () => void rectanglePolygon(),
+                disabled: busy || !canClean || !!regionDoc.data.locked,
+              } : undefined}
               canCopyStyle={!!selected && !!regionDoc?.data.layout && !busy}
               onselect={choosePalette}
             />
@@ -4794,6 +4917,7 @@
               onassetschange={changePageAssets}
               onassetdrop={insertPageAsset}
               ontextdrop={dropTextOnRegion}
+              pendingFills={bubbleQueue.filter((item) => item.imageId === page?.id).map((item) => item.p)}
               drawTextPath={drawingTextPath}
               ondrawtextpath={setDrawingTextPath}
               {page}
@@ -5197,7 +5321,7 @@
             ondetect={() => void applyMask(true)}
             onapprovemask={() => void approveMask()}
             onclean={(method) => void cleanWith(method)}
-            oncompare={selected && selected.imageId === page?.id ? () => (compareLineId = selected!.id) : undefined}
+            oncompare={selected && selected.imageId === page?.id ? () => void openCleanCompare(selected!.id) : undefined}
             onpostprocess={() => (postprocessOpen = true)}
             onapplypass={() => void applyCleaningPass()}
             onapproveclean={() => void approveCleanedAndNext()}
@@ -5237,7 +5361,7 @@
             onconfirmrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderReviewConfirmed:true}})}
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
             onrectangle={() => void rectanglePolygon()}
-            onfitbubble={() => selected && page && act({ action: "geometry", imageId: page.id, lineId: selected.id, expectedRevision: pageDoc?.revision ?? 0, method: "opencv" })}
+            onfitbubble={fitSelectedBubble}
             canSegmentBubble={!!backend?.models?.some((m: { id: string; tasks: string[] }) => m.tasks.includes("segmentBubble"))}
             onrefinebubble={() => selected && page && act({
               action: "geometry",
@@ -5280,6 +5404,24 @@
         {#if id === "series"}{@render prepareSettings("series")}
         {:else if id === "chapter"}{@render prepareSettings("defaults")}
         {:else if id === "detection"}{@render translationSettings("detection")}
+        {:else if id === "clean"}
+          <section class="clean-settings" data-find="clean-settings">
+            <h2>Cleaning</h2>
+            <p>Choose which cleaning methods apply their result as soon as they finish, as <strong>Keep result &amp; start another pass</strong> does. Undo steps back if you don’t like it. Saved for you, on every chapter.</p>
+            <fieldset>
+              <legend>Auto-apply after cleaning with</legend>
+              {#each cleanModelChoices(backend) as choice (choice.id)}
+                <label class="auto-apply-choice">
+                  <input type="checkbox" checked={autoApplyClean.includes(choice.id)}
+                    onchange={(e) => void saveAutoApplyClean(e.currentTarget.checked
+                      ? [...autoApplyClean, choice.id]
+                      : autoApplyClean.filter((id) => id !== choice.id))} />
+                  <span class="mdot" style={`background:${choice.color}`}></span>{choice.label}
+                </label>
+              {/each}
+            </fieldset>
+            <p class="muted">The <strong>Fill rectangle</strong> tool always applies at once. Comparing methods on a region still asks you to pick a result.</p>
+          </section>
         {:else if id === "models"}{@render translationSettings("models")}
         {:else if id === "director"}
           <h2>Director settings</h2>
@@ -5961,6 +6103,11 @@
     filter: none;
   }
   .floating-apply-clean:disabled { opacity: .55; cursor: default; }
+  .clean-settings { max-width: 640px; }
+  .clean-settings fieldset { display: grid; gap: 8px; margin: 16px 0; padding: 12px 16px; border: 1px solid var(--hud-line); border-radius: 8px; }
+  .clean-settings legend { padding: 0 6px; font-weight: 600; }
+  .auto-apply-choice { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .auto-apply-choice .mdot { width: 10px; height: 10px; border-radius: 50%; }
   .floating-strip-actions {
     position: absolute;
     right: 24px;

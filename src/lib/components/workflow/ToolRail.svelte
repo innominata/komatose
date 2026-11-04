@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { PaletteId } from "../ToolPalette.svelte";
 
-  type ToolDef = { id: PaletteId; icon: string; title: string; group: string };
+  /** A tool to switch to, or (with `run`) a one-click action such as Fit bubble. */
+  type ToolDef = { id: PaletteId | "fit-bubble" | "region-bounds"; icon: string; title: string; group: string; run?: () => void; off?: boolean };
 
   const ALL: Record<string, ToolDef> = {
     'assign-character': { id: 'assign-character', icon: 'bi-person-badge', title: 'Assign character', group: '' },
@@ -18,6 +19,7 @@
     erase: { id: "erase", icon: "bi-eraser", title: "Erase mask (E)", group: "Mask" },
     "mask-grow": { id: "mask-grow", icon: "bi-arrows-angle-expand", title: "Grow mask (G)", group: "Mask" },
     "bubble-fill": { id: "bubble-fill", icon: "bi-paint-bucket", title: "Fill speech bubble (F)", group: "Touch up" },
+    "rect-fill": { id: "rect-fill", icon: "bi-square-half", title: "Fill rectangle (sampled flat fill) (Q)", group: "Touch up" },
     "clone-stamp": { id: "clone-stamp", icon: "bi-copy", title: "Clone stamp (C)", group: "Touch up" },
     blur: { id: "blur", icon: "bi-droplet-half", title: "Blur (L)", group: "Touch up" },
     restore: { id: "restore", icon: "bi-clock-history", title: "Restore (H)", group: "Touch up" },
@@ -38,6 +40,7 @@
     pageMode = "pages",
     showPolygon = false,
     canCopyStyle = false,
+    geometryActions,
     onselect,
   }: {
     step: string;
@@ -48,6 +51,8 @@
     pageMode?: "pages" | "strip";
     showPolygon?: boolean;
     canCopyStyle?: boolean;
+    /** Typeset geometry shortcuts for the selected region, shown under the Geometry tools. */
+    geometryActions?: { fitBubble: () => void; regionBounds: () => void; disabled: boolean };
     onselect: (id: PaletteId) => void;
   } = $props();
 
@@ -69,6 +74,7 @@
             ALL["mask-grow"],
             ...(canEdit ? [ALL["detect-area"]] : []),
             ALL["bubble-fill"],
+            ALL["rect-fill"],
             ALL["clone-stamp"],
             ALL.blur,
             ALL.restore,
@@ -84,6 +90,12 @@
             { ...ALL.brush, title: "Text mask brush (B)", group: "Text mask" },
             { ...ALL.erase, title: "Erase text mask (E)", group: "Text mask" },
             ...(showPolygon ? [ALL.polygon, ALL.rectangle, ALL.oval] : []),
+            ...(showPolygon && geometryActions ? [
+              { id: "fit-bubble", icon: "bi-crosshair", title: "Fit bubble (enclosed interior)", group: "Auto",
+                run: geometryActions.fitBubble, off: geometryActions.disabled },
+              { id: "region-bounds", icon: "bi-bounding-box", title: "Set polygon to region bounds", group: "Auto",
+                run: geometryActions.regionBounds, off: geometryActions.disabled },
+            ] satisfies ToolDef[] : []),
             zoom,
           ]
         : [ALL.select, zoom];
@@ -111,14 +123,14 @@
           <button
             type="button"
             class="ed-rail-btn"
-            class:active={tool === item.id}
+            class:active={!item.run && tool === item.id}
             title={item.title}
             aria-label={item.title}
-            aria-pressed={tool === item.id}
-            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "add-break" ? "tool-add-break" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : ""}
-            disabled={(["polygon", "rectangle", "oval"].includes(item.id) && !canClean) ||
+            aria-pressed={item.run ? undefined : tool === item.id}
+            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "add-break" ? "tool-add-break" : item.id === "rect-fill" ? "tool-rect-fill" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : item.run ? `rail-${item.id}` : ""}
+            disabled={item.off || (["polygon", "rectangle", "oval"].includes(item.id) && !canClean) ||
               (item.id === "style-brush" && tool !== item.id && !canCopyStyle)}
-            onclick={() => onselect(item.id)}
+            onclick={() => item.run ? item.run() : onselect(item.id as PaletteId)}
           >
             <i class="bi {item.icon}"></i>
           </button>

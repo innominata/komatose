@@ -56,6 +56,8 @@
     compareRegion: (line: LineRow) => void;
     saveCleaningSample: () => void;
     fitPage: (imageId?: string) => void;
+    /** Reset unlocked styles on the page to series defaults (with a confirmation), then fit. */
+    autofitPage: (imageId?: string) => void;
     resetStyles: (scope: "page" | "chapter") => void;
     replaceFile: (imageId: string) => void;
   };
@@ -639,7 +641,7 @@
         <button
           role="menuitem"
           disabled={!canClean || busy || fitting}
-          onclick={() => ops.fitPage(menu!.imageId)}>Auto-fit all text on page</button
+          onclick={() => ops.autofitPage(menu!.imageId)}>Auto-fit all text on page</button
         >
         <button
           role="menuitem"

@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import {storePageThumbnail} from '$lib/server/pageThumbnail';
 import {seriesAssetHashes, validatePlacements, compositePageAssets} from '$lib/server/cleanAssets';
 import { startChapterMask, cancelChapterMask } from '$lib/server/chapterMask';
@@ -1336,6 +1337,30 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         doc: saveCleanPixels(episode.id, doc, artifact, result, "keep"),
       });
     }
+    if (action === "rect-fill") {
+      // Exactly a sampled flat fill of a mask covering this rectangle, applied at once like
+      // the other touch-up tools. The page's own mask is left as it was.
+      const box = Array.isArray(b.box) ? b.box.map(Number) : [];
+      if (box.length !== 4 || box.some((n: number) => !Number.isFinite(n)))
+        throw new WorkflowError("Drag a rectangle to fill");
+      const left = Math.max(0, Math.floor(box[0] * img.width)), top = Math.max(0, Math.floor(box[1] * img.height));
+      const right = Math.min(img.width, Math.ceil((box[0] + box[2]) * img.width));
+      const bottom = Math.min(img.height, Math.ceil((box[1] + box[3]) * img.height));
+      if (right - left < 2 || bottom - top < 2) throw new WorkflowError("Drag a larger rectangle to fill");
+      const rect = await sharp({ create: { width: right - left, height: bottom - top, channels: 3, background: "white" } }).png().toBuffer();
+      const mask = await storeAsset(await sharp({ create: { width: img.width, height: img.height, channels: 3, background: "black" } })
+        .composite([{ input: rect, left, top }]).greyscale().png().toBuffer());
+      const source = pageArtwork(doc.data)!;
+      const { result, artifact } = await runWorkflowPng({
+        cmd: "clean",
+        path: assetPath(source),
+        mask: assetPath(mask),
+        method: "flat",
+      });
+      return json({
+        doc: saveCleanPixels(episode.id, doc, artifact, { ...result, method: "flat" }, "keep"),
+      });
+    }
     if (action === "clone-brush") {
       const dx = Number(b.offset?.[0]);
       const dy = Number(b.offset?.[1]);
@@ -1673,7 +1698,10 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
                   backend: result.backend,
                   cleanApproved: false,
                 }, "replace");
-          putDoc(episode.id, doc.id, data, doc.revision);
+          const saved = putDoc(episode.id, doc.id, data, doc.revision);
+          // A method the user set to auto-apply keeps its result at once, as Keep result
+          // does. Undo steps back to the unapplied result, and then to the pass before.
+          if (action === "clean" && b.autoApply === true) applyCleaning(episode.id, img.id, saved.revision);
         }
         pageResult(jobId, img.id, "completed");
         const finishedModel = action === "mask" && detectingMask

@@ -94,6 +94,7 @@
     onassetschange = () => {},
     onassetdrop = () => {},
     ontextdrop,
+    pendingFills = [],
     rotationCenter,
     rotationAngle,
     skewAngle,
@@ -180,6 +181,8 @@
     onassetdrop?: (asset:CleanAsset,x:number,y:number)=>void;
     /** Text dropped on a region, e.g. a selection dragged from a proofreader reply. */
     ontextdrop?: (lineId: string, text: string) => void;
+    /** Bubble-fill clicks waiting their turn (page fractions), the first one filling now. */
+    pendingFills?: Point[];
     rotationCenter: (line: LineRow) => Point;
     rotationAngle: (d: StudioDrawing) => number;
     skewAngle: (d: StudioDrawing) => number;
@@ -1213,7 +1216,7 @@
                 page.height}
               r={tool === "polygon" && i === 0 ? 7 : 5}
               fill="#57b9ff"
-              pointer-events={["style-brush", "bubble-fill", "mask-grow", "clone-stamp", "blur", "restore", "raw"].includes(tool) ? "none" : undefined}
+              pointer-events={["style-brush", "bubble-fill", "rect-fill", "mask-grow", "clone-stamp", "blur", "restore", "raw"].includes(tool) ? "none" : undefined}
               role="button"
               tabindex="0"
               aria-label={tool === "polygon" && i === 0
@@ -1346,7 +1349,12 @@
             fill="#62e5ce" text-anchor="middle" pointer-events="none">{skewing.skew!.axis === "x" ? "H" : "V"} {skewAngle(skewing)}°</text>{/if}
         {/if}
         </g>
-        {#if drawing && ["region", "read-area", "detect-area", "place-line", "rectangle"].includes(tool)}<rect
+        {#if step === "Clean"}{#each pendingFills as fill, i (i)}<g class="pending-fill" class:active={i === 0} pointer-events="none"
+            transform={`translate(${fill.x * page.width} ${fill.y * page.height})`}>
+            <circle r={Math.max(6, page.width / 90)} />
+            <text y={Math.max(6, page.width / 90) * 0.4} font-size={Math.max(8, page.width / 80)} text-anchor="middle">{i + 1}</text>
+          </g>{/each}{/if}
+        {#if drawing && ["region", "read-area", "detect-area", "place-line", "rectangle", "rect-fill"].includes(tool)}<rect
             x={Math.min(drawing.start.x, drawing.end.x) *
               page.width}
             y={Math.min(drawing.start.y, drawing.end.y) *
@@ -1400,6 +1408,10 @@
 </div>
 
 <style>
+  .pending-fill circle { fill: #ffffffd9; stroke: var(--hud-teal-ink, #3fc2a4); stroke-width: 3; stroke-dasharray: 5 4; }
+  .pending-fill.active circle { animation: fillspin 1s linear infinite; }
+  .pending-fill text { fill: #10161f; font-family: Inter, system-ui, sans-serif; font-weight: 700; }
+  @keyframes fillspin { to { stroke-dashoffset: -18; } }
   .text-drop-target {
     position: absolute;
     z-index: 6;

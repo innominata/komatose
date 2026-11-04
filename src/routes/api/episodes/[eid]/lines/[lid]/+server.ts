@@ -1,5 +1,5 @@
 import { deleteRegions } from "$lib/server/regionTrash";
-import { acceptedRegionKind } from "$lib/server/workflowService";
+import { acceptedRegionKind, restyleForType } from "$lib/server/workflowService";
 import { json } from "@sveltejs/kit";
 import { and, eq } from "drizzle-orm";
 import { logActivity } from "$lib/server/activity";
@@ -181,6 +181,17 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
           }
         })();
       }
+    }
+    // A new type brings its series style. The region's saved style is usually a stamped copy
+    // of the old type's default (or a fit of it), so only fields someone changed survive;
+    // the rest follow the new type, and the next fit uses them.
+    if ("lineType" in body && line.lineType !== existing.lineType) {
+      const region = getDoc<RegionData>(`region:${line.id}`, {});
+      if (!region.data.locked && region.data.style)
+        putDoc(episode.id, region.id, {
+          ...region.data,
+          style: restyleForType(episode.seriesId, region.data.style, existing.lineType, line.lineType),
+        }, region.revision);
     }
     if (patch.status === "approved")
       rejectPendingSuggestions(episode.id, line.id);
