@@ -516,6 +516,22 @@ export function clearAllJobs(episodeId: string) {
   return ids.length;
 }
 
+/**
+ * Delete one finished proofreader reply. Its saved text and snapshots go; the page's
+ * regions and other replies, including follow-ups asked from it, are untouched.
+ */
+export function deleteProofreadReply(episodeId: string, jobId: string): boolean {
+  const row = sqlite
+    .prepare("SELECT kind,state FROM workflow_jobs WHERE id=? AND episode_id=?")
+    .get(jobId, episodeId) as { kind: string; state: string } | undefined;
+  if (!row || row.kind !== "page-proofread") return false;
+  if (!TERMINAL.has(row.state)) throw Object.assign(new Error("Wait for this reply to finish, or cancel it, before deleting it."), { status: 409 });
+  sqlite.prepare("DELETE FROM job_pages WHERE job_id=?").run(jobId);
+  sqlite.prepare("DELETE FROM workflow_jobs WHERE id=?").run(jobId);
+  broadcast(episodeId, { type: "job:changed", id: jobId });
+  return true;
+}
+
 export function clearFinishedJobs(episodeId: string) {
   const rows = sqlite
     .prepare("SELECT id,state FROM workflow_jobs WHERE episode_id=?")

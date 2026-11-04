@@ -388,6 +388,18 @@
     inspectorTab = "";
   }
   const savedProofreadJob = $derived(studioState?.jobs.find(job => job.id === savedProofreadJobId));
+  /** Remove one saved reply, for example a bad reading, so the next Proofread Raw reads again. */
+  async function deleteProofreadReply(reply: { id: string; created_at: number } & Parameters<typeof pageProofreadCall>[0]) {
+    const when = new Date(reply.created_at).toLocaleString();
+    if (!window.confirm(`Delete the ${pageProofreadCall(reply)} reply from ${when}?\n\nIts saved text and page snapshots are removed. Regions, other replies and follow-ups asked from it are kept. This cannot be undone.`)) return;
+    try {
+      await request(`${apiBase}/workflow`, { action: 'delete-proofread-reply', jobId: reply.id });
+      if (savedProofreadJobId === reply.id) savedProofreadJobId = null;
+      if (proofreadJobId === reply.id) proofreadJobId = null;
+      await refresh();
+      notify('Reply deleted.');
+    } catch (e) { error = String(e); }
+  }
   const pageProofreadReplies = $derived((studioState?.jobs ?? []).filter(job =>
     job.kind === 'page-proofread' && job.state === 'completed' && !!job.progress?.critique &&
     (job.payload?.imageId === page?.id || job.progress?.pageGeometry?.imageIds?.includes(page?.id))));
@@ -874,8 +886,18 @@
     } catch (e) { error = String(e); }
     finally { reviewImageBusy = false; }
   }
-  async function proofreadPageImages(mode: 'raw' | 'critique' = 'critique') {
+  async function proofreadPageImages(mode: 'raw' | 'critique' = 'critique', again = false) {
     if (!page || reviewImageBusy || !canEdit) return;
+    // A page already read raw opens that reply instead of paying for another reading.
+    const saved = mode === 'raw' && !again ? currentRawProofread(studioState?.jobs ?? [], page.id) : undefined;
+    if (saved) {
+      openSavedReply(saved.id);
+      notify(`Opened this page’s saved raw reply from ${new Date(saved.created_at).toLocaleString()}.`, {
+        label: 'Proofread again',
+        run: () => void proofreadPageImages('raw', true),
+      });
+      return;
+    }
     if (mode === 'raw' && !rawProofreadGate.ok) { error = rawProofreadGate.reason; return; }
     const imageId = page.id;
     reviewImageBusy = true;
@@ -4484,7 +4506,7 @@
             {#if scope === "chapter"}
               <button type="button" class="ed-btn" data-find="proofread-all-raw" disabled={busy || reviewImageBusy || !canEdit || !rawProofreadGate.ok || !rawBatchCount || rawBatchRunning} title={rawProofreadGate.reason || (rawBatchRunning ? 'A raw proofreading batch is already running. Open Jobs to view progress.' : (rawBatchCount ? 'Send unfinished Review pages with regions to the proofreader, one at a time. Pages that already have a raw proofreading reply are skipped.' : 'Every unfinished Review page with regions already has a raw proofreading reply.'))} onclick={() => void proofreadAllRaw()}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread All Raw</button>
             {:else}
-              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || reviewImageBusy || !canEdit || !page || !rawProofreadGate.ok} title={rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
+              <button type="button" class="ed-btn" data-find="proofread-raw" disabled={busy || reviewImageBusy || !canEdit || !page || (!rawProofreadGate.ok && !currentRawProofread(studioState.jobs, page.id))} title={page && currentRawProofread(studioState.jobs, page.id) ? 'Open this page’s saved raw reply. Its notice offers Proofread again.' : rawProofreadGate.reason || 'Send only this page’s raw image to the selected proofreader.'} onclick={() => void proofreadPageImages('raw')}><i class="bi bi-file-image" aria-hidden="true"></i> Proofread Raw</button>
             {/if}
           {:else if step === "Review"}
             {#if scope === "chapter"}
@@ -5018,11 +5040,15 @@
               <p>No saved replies for this page yet.</p>
             {:else}
               {#each pageProofreadReplies as reply (reply.id)}
-                <button type="button" class="proofread-reply" onclick={() => openSavedReply(reply.id)}>
-                  <strong>{pageProofreadCall(reply)}</strong>
-                  <time datetime={new Date(reply.created_at).toISOString()}>{new Date(reply.created_at).toLocaleString()}</time>
-                  <span>{reply.progress.critique}</span>
-                </button>
+                <div class="proofread-reply-row">
+                  <button type="button" class="proofread-reply" onclick={() => openSavedReply(reply.id)}>
+                    <strong>{pageProofreadCall(reply)}</strong>
+                    <time datetime={new Date(reply.created_at).toISOString()}>{new Date(reply.created_at).toLocaleString()}</time>
+                    <span>{reply.progress.critique}</span>
+                  </button>
+                  {#if canEdit}<button type="button" class="icon-btn delete-reply" aria-label={`Delete ${pageProofreadCall(reply)} reply from ${new Date(reply.created_at).toLocaleString()}`}
+                    title="Delete this reply" disabled={busy} onclick={() => void deleteProofreadReply(reply)}><i class="bi bi-trash" aria-hidden="true"></i></button>{/if}
+                </div>
               {/each}
             {/if}
           </div>
@@ -5469,6 +5495,10 @@
   .proofread-replies p { color: var(--hud-muted); }
   .proofread-reply { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; width: 100%; padding: 10px; margin-bottom: 8px; text-align: left; border: 1px solid var(--hud-line); background: var(--hud-bg-2); color: var(--hud-text); }
   .proofread-reply:hover { border-color: var(--hud-teal); }
+  .proofread-reply-row { display: flex; align-items: stretch; gap: 6px; margin-bottom: 8px; }
+  .proofread-reply-row .proofread-reply { flex: 1; min-width: 0; margin-bottom: 0; }
+  .delete-reply { flex: none; align-self: flex-start; }
+  .delete-reply:hover:not(:disabled) { color: var(--hud-red, #e5484d); }
   .proofread-reply time { font-size: 11px; color: var(--hud-muted); }
   .proofread-reply span { grid-column: 1 / -1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--hud-muted); }
   .page-selection-actions {

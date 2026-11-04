@@ -104,10 +104,13 @@ jobs to finish. Missing content and other readiness issues still block finished 
 Pages without reviewed regions show a warning, which does not block finished export.
 
 In **Translate**, **Proofread Raw** sends only the selected page's raw image to
-the selected proofreading model, and **Proofread All Raw** (Whole chapter) sends
+the selected proofreading model. When the page already has a current raw reply, it opens that
+saved reply instead; its notice offers **Proofread again** for a fresh reading. Delete a reply
+with the bin button beside it in the **Replies** tab. The rest of the page and other replies,
+including follow-ups asked from it, are kept. **Proofread All Raw** (Whole chapter) sends
 each unfinished page with regions in turn. Like the Director, it skips pages that
 already have a current Proofread Raw reply (one not made stale by a page-boundary
-edit); proofread such a page again from its own toolbar. Replies are saved in Jobs and in the
+edit); to read such a page again, click its **Proofread Raw** and choose **Proofread again**, or delete the reply first. Replies are saved in Jobs and in the
 **Replies** inspector tab, which Translate and Review both show. Opening a reply
 docks it full height on the left of the screen and returns the inspector to its
 first tab. In **Review**, **Proofread English** follows the selected proofreading

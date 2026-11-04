@@ -76,7 +76,7 @@ import {
   saveSeriesTypeSettings,
   saveStyleAsRegionType,
 } from "$lib/server/workflowService";
-import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, runWithJob, type JobPayload } from "$lib/server/jobs";
+import { appendJobLog, createJob, listJobs, jobPollStamp, updateJob, pageResult, clearFinishedJobs, clearAllJobs, deleteProofreadReply, runWithJob, type JobPayload } from "$lib/server/jobs";
 import { cleaningDeviceLabel, localOperation, probeBackend } from "$lib/server/localWorker";
 import { gpuClientStatus } from "$lib/server/gpuMode";
 import { presentGpuStatus } from "$lib/server/computeDevices";
@@ -401,6 +401,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         b.includeMetadata === true,
       );
       return json({ jobId: startExport(snapshot) }, { status: 202 });
+    }
+    if (action === "delete-proofread-reply") {
+      requireEdit(user);
+      if (!deleteProofreadReply(episode.id, String(b.jobId || ""))) return fail(404, "That reply no longer exists.");
+      return json({ ok: true });
     }
     if (action === "clear-finished") {
       return json({ ok: true, removed: clearFinishedJobs(episode.id) });
