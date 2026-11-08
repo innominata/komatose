@@ -534,3 +534,35 @@ console.log(JSON.stringify({error:''}));
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('Claude Code sends text and ordered image blocks on stdin with tools disabled', async () => {
+  const { createClaudeAdapter, claudeArgs } = await import('../src/lib/server/cliAdapters/claude');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]);
+  const jpg = Buffer.from([0xff, 0xd8, 0xff, 2]);
+  const adapter = createClaudeAdapter(options, { parse: JSON.parse, async run(command) {
+    assert.deepEqual(command.args, claudeArgs('selected'));
+    assert.equal(command.args[command.args.indexOf('--tools') + 1], '');
+    const message = JSON.parse(command.stdin!.trim());
+    assert.equal(message.type, 'user');
+    const [text, first, second] = message.message.content;
+    assert.match(text.text, /Return JSON matching this schema/);
+    assert.equal(first.source.media_type, 'image/png');
+    assert.equal(Buffer.from(first.source.data, 'base64').equals(png), true);
+    assert.equal(second.source.media_type, 'image/jpeg');
+    return { code: 0, stdout: '{"answer":"claude"}', stderr: '' };
+  } });
+  assert.deepEqual(await new CliAdapterRegistry([adapter]).advisory('claude', { ...request, images: [png, jpg], model: 'selected' }), { answer: 'claude' });
+});
+
+test('Claude Code stream-json replies come from the final result event', async () => {
+  const { claudeReplyText } = await import('../src/lib/server/cliAdapters/claude');
+  const stream = [
+    '{"type":"system","subtype":"init"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"draft"}]}}',
+    '{"type":"result","subtype":"success","is_error":false,"result":"```json\\n{\\"caption\\":\\"x\\"}\\n```"}',
+  ].join('\n');
+  assert.match(claudeReplyText(stream), /"caption":"x"/);
+  assert.throws(() => claudeReplyText('{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}'), /not signed in on this server/);
+  assert.throws(() => claudeReplyText('{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["model not found"]}'), /Claude Code failed: model not found/);
+  assert.throws(() => claudeReplyText(''), /no output/);
+});

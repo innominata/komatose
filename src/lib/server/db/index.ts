@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { DB_PATH, ensureDataDirs } from '../paths';
 import * as schema from './schema';
-import { migrateWorkflow, migrateWorkflowV2, migrateReviewTranslations, migrateSeriesGlossary, migrateSeriesCredits, migrateEditorHotPath, migrateLinePlacementRevisions, migrateSeriesReadingPreferences, migrateDirector } from './workflowMigration';
+import { migrateWorkflow, migrateWorkflowV2, migrateReviewTranslations, migrateSeriesGlossary, migrateSeriesCredits, migrateEditorHotPath, migrateLinePlacementRevisions, migrateSeriesReadingPreferences, migrateDirector, migrateAutoPageNumbers } from './workflowMigration';
 
 ensureDataDirs();
 mkdirSync(dirname(DB_PATH), { recursive: true });
@@ -195,6 +195,7 @@ migrateLinePlacementRevisions(client);
 migrateSeriesReadingPreferences(client);
 migrateDirector(client);
 migrateDirectorAutomation(client);
+migrateAutoPageNumbers(client);
 
 export const db = drizzle(client, { schema });
 export { client as sqlite };

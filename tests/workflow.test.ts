@@ -1673,9 +1673,10 @@ test("document CAS, persistent undo/redo and redo branch replacement", () => {
   assert.deepEqual(getDoc("test:doc", {}).data, { value: 4 });
 });
 
-test("numbering is explicit and becomes stale after insertion, deletion or ordering", async () => {
-  renumberPages("e");
+test("page numbers follow reading order after insertion, deletion and reordering", async () => {
+  const numbers = async () => (await listImages("e")).map((i) => [i.id, i.pageNumber]);
   assert.equal((await listImages("e"))[0].pageNumber, 1);
+  const first = (await listImages("e"))[0].id;
   await db.insert(schema.images).values({
     id: "inserted",
     episodeId: "e",
@@ -1686,16 +1687,14 @@ test("numbering is explicit and becomes stale after insertion, deletion or order
     sortOrder: -1,
     createdAt: 2,
   });
-  assert.equal((await getEpisode("e"))?.numberingStale, true);
-  renumberPages("e");
-  assert.deepEqual(
-    (await listImages("e")).map((i) => i.pageNumber),
-    [1, 2],
-  );
+  assert.equal((await getEpisode("e"))?.numberingStale, false);
+  assert.deepEqual(await numbers(), [["inserted", 1], [first, 2]]);
   assert.equal((await listImages("e"))[1].filename, saved.filename);
+  sqlite.prepare("UPDATE images SET sort_order=99 WHERE id='inserted'").run();
+  assert.deepEqual(await numbers(), [[first, 1], ["inserted", 2]]);
   sqlite.prepare("DELETE FROM images WHERE id='inserted'").run();
-  assert.equal((await getEpisode("e"))?.numberingStale, true);
-  renumberPages("e");
+  assert.deepEqual(await numbers(), [[first, 1]]);
+  assert.equal((await getEpisode("e"))?.numberingStale, false);
 });
 
 test("TTF/OTF versioned fonts, duplicate detection and missing glyph reporting", async () => {
@@ -5298,11 +5297,18 @@ test("reslice protects current bubble interiors and saved lettering outside the 
     bubbleBounds: { x: 0.1, y: 0.2, w: 0.5, h: 0.3 } };
   const work: any = { lines: [line], sources: [{ top: 1000, image: { width: 800, height: 5000 },
     snapshot: { lines: [{ id: line.id, region }] } }] };
-  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2250, bottom: 3000 }]);
+  // The detected bubble outline is kept whole as well: writing the pages refuses a cut
+  // through it, so planning one there would only fail once the job ran.
+  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2000, bottom: 3500 }]);
+  // Only the part of the bubble on its own page counts.
+  work.sources[0].snapshot.lines[0].region = { ...region, bubbleBounds: { x: 0.1, y: 0.9, w: 0.5, h: 0.3 } };
+  assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2250, bottom: 6000 }]);
   // Hand-drawn interiors can legitimately extend beyond the text box without
   // having detector bubble metadata. They must still be kept together.
   work.sources[0].snapshot.lines[0].region = { ...region, bubbleBounds: undefined };
   assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2250, bottom: 3000 }]);
+  // The remaining cases are about the polygon and lettering alone.
+  delete (region as any).bubbleBounds;
   const knownStale = { ...region, resliceStalePolygon: hash(JSON.stringify(region.polygon)) };
   work.sources[0].snapshot.lines[0].region = knownStale;
   assert.deepEqual(protectedResliceRanges(work), [{ id: line.id, top: 2500, bottom: 2600 }]);

@@ -53,8 +53,8 @@
     "detect-area": {
       id: "detect-area",
       icon: "bi-bounding-box-circles",
-      title: "Detect lettering in an area (D)",
-      key: "D",
+      title: "Detect lettering in an area (T)",
+      key: "T",
     },
     reorder: {
       id: "reorder",
@@ -110,7 +110,7 @@
     oval: { id: "oval", icon: "bi-circle", title: "Draw oval" },
     crop: { id: "crop", icon: "bi-crop", title: "Crop" },
     split: { id: "split", icon: "bi-vr", title: "Split page" },
-    "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (A)" },
+    "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (N)" },
     "rect-fill": { id: "rect-fill", icon: "bi-square-half", title: "Fill rectangle (sampled flat fill) (Q)" },
     boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary'},
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", key: "Z" },

@@ -1,5 +1,5 @@
 import { parseColorMap } from "../regionCatalog";
-import { isProofreaderId, PROOFREADER_IDS, type ProofreaderId } from "../proofreaders";
+import { isProofreaderId, type ProofreaderId } from "../proofreaders";
 import { sqlite } from "./db";
 
 export type UserSettings = {
@@ -92,6 +92,5 @@ export function hasAnyProofreader(userId: string): boolean {
   return readUserSettings(userId).proofreaders.length > 0;
 }
 
-/** Every proofreader id, in contract order, for admin pickers. */
-export const ALL_PROOFREADER_IDS = PROOFREADER_IDS;
+
 

@@ -18,6 +18,8 @@
     showMaskToggle = false,
     showCompareToggle = false,
     maskStaysWithCompare = false,
+    continuous,
+    oncontinuous = () => {},
   }: {
     pageIndex: number;
     pageCount: number;
@@ -37,6 +39,9 @@
     showMaskToggle?: boolean;
     showCompareToggle?: boolean;
     maskStaysWithCompare?: boolean;
+    /** Continuous view on or off; leave it out where the view is not available. */
+    continuous?: boolean;
+    oncontinuous?: () => void;
   } = $props();
   const toggles = $derived(showRegionsToggle || showMaskToggle || showCompareToggle);
   const maskOn = $derived(showMask && (maskStaysWithCompare || !compare));
@@ -46,6 +51,12 @@
   <button type="button" class="vb" aria-label="Previous page" title="Previous page" disabled={pageIndex <= 1} onclick={() => onpage(-1)}><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
   <span class="vb-txt">Page {pageCount ? pageIndex : "—"} / {pageCount}</span>
   <button type="button" class="vb" aria-label="Next page" title="Next page" disabled={pageIndex >= pageCount} onclick={() => onpage(1)}><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+  {#if continuous !== undefined}
+    <button type="button" class="vb" class:on={continuous} data-find="view-continuous" aria-pressed={continuous}
+      aria-label="Scroll through all pages"
+      title={continuous ? "Showing every page in one scrolling column. Click for one page at a time." : "Show every page in one scrolling column"}
+      onclick={oncontinuous}><i class="bi bi-view-stacked" aria-hidden="true"></i> Scroll</button>
+  {/if}
   {#if toggles}<span class="vsep"></span>{/if}
   {#if showRegionsToggle}
     <button type="button" class="vb" class:on={regionVisibility === "shown"} class:ghost={regionVisibility === "ghost"} data-find="view-regions" aria-label={`Regions: ${regionVisibility}. Next: ${regionVisibility === "shown" ? "ghost" : regionVisibility === "ghost" ? "off" : "shown"}`} title="Cycle region overlay: shown → ghost (10% opacity) → off" onclick={onregions}>

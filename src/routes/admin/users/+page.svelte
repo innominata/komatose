@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { proofreaderLabel } from '$lib/proofreaders';
 	import { APP_NAME } from '$lib/brand';
 	import { onMount } from 'svelte';
 	let { data, form } = $props();
@@ -213,15 +212,17 @@
 					Page-image proofread (grant a proofreader; off means the tools stay hidden)
 				</div>
 				<div class="d-flex flex-wrap gap-2">
-					{#each data.proofreaderIds as engine (engine)}
+					{#each data.proofreaderOptions as option (option.id)}
 						<form method="POST" action="?/proofreaders">
 							<input type="hidden" name="id" value={u.id} />
-							<input type="hidden" name="engine" value={engine} />
-							<input type="hidden" name="on" value={u.proofreaders?.includes(engine) ? '0' : '1'} />
-							<button class="status-pill" class:on={u.proofreaders?.includes(engine)} type="submit">
-								{proofreaderLabel(engine)}
+							<input type="hidden" name="engine" value={option.id} />
+							<input type="hidden" name="on" value={u.proofreaders?.includes(option.id) ? '0' : '1'} />
+							<button class="status-pill" class:on={u.proofreaders?.includes(option.id)} type="submit">
+								{option.label}
 							</button>
 						</form>
+					{:else}
+						<span class="text-secondary">The proofreading service has not reported any proofreaders.</span>
 					{/each}
 				</div>
 			{/if}

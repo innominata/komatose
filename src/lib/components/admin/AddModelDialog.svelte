@@ -335,7 +335,7 @@
 					<button class="choice" onclick={() => { $ui.addOpen = false; void goto('/admin/models/install'); }}><i class="bi bi-download"></i><strong>Install a model</strong><span class="muted">Detectors, OCR, translators, editors — downloaded and set up for you.</span></button>
 					<button class="choice" onclick={() => openAdd('local')}><i class="bi bi-cpu"></i><strong>Local model server</strong><span class="muted">Run a GGUF with llama.cpp, or point at a server you already run.</span></button>
 					<button class="choice" onclick={() => openAdd('remote')}><i class="bi bi-cloud"></i><strong>Remote API</strong><span class="muted">OpenAI, DeepSeek, Moonshot, Qwen and other OpenAI-compatible endpoints.</span></button>
-					<button class="choice" onclick={() => openAdd('cli')}><i class="bi bi-terminal"></i><strong>CLI agent</strong><span class="muted">Codex, Cursor or Grok installed on this server.</span></button>
+					<button class="choice" onclick={() => openAdd('cli')}><i class="bi bi-terminal"></i><strong>CLI agent</strong><span class="muted">Codex, Cursor, Grok or Claude Code installed on this server.</span></button>
 				</div>
 			{:else if step === 'local'}
 				<h3>Local model server</h3>

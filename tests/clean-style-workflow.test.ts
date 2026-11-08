@@ -242,7 +242,7 @@ test('Approve everything accepts current saved work, skips ignored/empty text, r
   const history = JSON.parse(undoHistory(pageBefore.id));
   const response = await POST(event(ctx.episode.id, { action: 'approve-everything' }));
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { translations: 1, geometry: 2, cleaning: 2, layouts: 1 });
+  assert.deepEqual(await response.json(), { translations: 1, geometry: 2, cleaning: 2, layouts: 1, pages: 2 });
   const texts = await listLines(ctx.episode.id);
   assert.equal(texts.find(l => l.id === 'export-approve-text')!.status, 'approved');
   for (const id of ['export-approve-empty', 'export-approve-ignore'])
@@ -259,7 +259,8 @@ test('Approve everything accepts current saved work, skips ignored/empty text, r
     assert.equal(page.data.cleaned, undefined);
     assert.equal(page.data.cleanApproved, true);
     assert.equal(page.data.mask, undefined);
-    assert.equal(page.data.completed, undefined);
+    // Every step is marked done on every page.
+    assert.deepEqual(Object.keys(page.data.completed ?? {}).sort(), ['clean', 'review', 'translate', 'typeset']);
     assert.ok(page.revision > pageBefore.revision);
   }
   const savedHistory = JSON.parse(undoHistory(pageBefore.id));

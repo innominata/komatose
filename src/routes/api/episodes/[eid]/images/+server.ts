@@ -58,7 +58,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				await removeImageFile(series.slug, episode.slug, previous.filename);
 				broadcast(episode.id, { type: 'image:delete', id: previous.id });
 			}
-			await db.update(episodes).set({ numberingStale: true, revision: (episode.revision ?? 0) + 1 }).where(eq(episodes.id, episode.id));
+			await db.update(episodes).set({ revision: (episode.revision ?? 0) + 1 }).where(eq(episodes.id, episode.id));
 			const image = toImage(row);
 			broadcast(episode.id, { type: 'image:upsert', image });
 			const next = await listImages(episode.id);

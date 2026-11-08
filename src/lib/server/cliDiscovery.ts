@@ -1,5 +1,5 @@
 /**
- * Server-only CLI executable discovery for Grok, Codex and Cursor.
+ * Server-only CLI executable discovery for Grok, Codex, Cursor and Claude Code.
  *
  * Precedence for each tool:
  * 1. Explicit nonempty environment override (see OVERRIDE_VARS). A bad
@@ -706,4 +706,8 @@ export function codexExecutable(host: DiscoveryHost = nodeDiscoveryHost()): stri
 
 export function cursorExecutable(host: DiscoveryHost = nodeDiscoveryHost()): string | null {
 	return executablePath(discoverCli('cursor', host));
+}
+
+export function claudeExecutable(host: DiscoveryHost = nodeDiscoveryHost()): string | null {
+	return executablePath(discoverCli('claude', host));
 }

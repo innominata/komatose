@@ -304,7 +304,7 @@ Paid model, GPU, and Python worker checks stay on their own scripts
 | [TRANSLATION_MODELS.md](docs/TRANSLATION_MODELS.md) | Specialist translators and installers |
 | [LETTERING.md](docs/LETTERING.md) | Detection and lettering-mask details |
 | [MANAGED_MODELS.md](docs/MANAGED_MODELS.md) · [MODEL_REGISTRY.md](docs/MODEL_REGISTRY.md) · [MODEL_PACKAGES.md](docs/MODEL_PACKAGES.md) | Local model lifecycle, registry, moving setups |
-| [CLI_ADAPTERS.md](docs/CLI_ADAPTERS.md) · [HTTP_ENDPOINTS.md](docs/HTTP_ENDPOINTS.md) | Grok/Codex/Cursor adapters and OpenAI-compatible contracts |
+| [CLI_ADAPTERS.md](docs/CLI_ADAPTERS.md) · [HTTP_ENDPOINTS.md](docs/HTTP_ENDPOINTS.md) | Grok/Codex/Cursor/Claude Code adapters and OpenAI-compatible contracts |
 | [QWEN_IMAGE_EDIT_2511.md](docs/QWEN_IMAGE_EDIT_2511.md) | Image-edit cleaning |
 | [PROOFREADING_SERVICE.md](docs/PROOFREADING_SERVICE.md) | Optional page-image proofreader |
 

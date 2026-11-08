@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { breakAtSpace, formatLettering } from "$lib/letteringBreaks";
+  import { breakAtSpace, formatLettering, glossaryNames, sentenceCase } from "$lib/letteringBreaks";
   import "./studio-controls.css";
   import { type LineRow } from "$lib/types";
   import { builtinRegionKinds, regionKindOptions, type RegionKind } from "$lib/regionCatalog";
@@ -27,6 +27,7 @@
     regionIndex,
     canEdit,
     canClean,
+    properNames = [],
     canUpload,
     canAddRegionType = false,
     busy,
@@ -63,6 +64,8 @@
     regionDoc: WorkflowDoc<RegionData> | undefined;
     regionIndex: number;
     canEdit: boolean;
+    /** Glossary names (see `glossaryNames`) that sentence case keeps capitalized. */
+    properNames?: string[];
     canClean: boolean;
     canUpload: boolean;
     canAddRegionType?: boolean;
@@ -185,12 +188,20 @@
     <div data-find="autofit-region">
     <div class="english-head">
       <label for={`typeset-english-${selected.id}`}>English · manual breaks</label>
+      <span class="english-actions">
+      <button type="button" class="format-english" data-find="sentence-case" aria-label="Sentence case" disabled={!canEdit || !selected.body.trim()}
+        title="Re-case the text: lowercase everything except the start of each sentence, the word I and glossary names."
+        onclick={() => {
+          const next = sentenceCase(selected.body, properNames);
+          if (next !== selected.body) onedit(selected, { body: next });
+        }}><i class="bi bi-type" aria-hidden="true"></i> Aa</button>
       <button type="button" class="format-english" data-find="format-english" disabled={!canEdit || !selected.body.trim()}
         title="Break the line after every , . ? ! and remove double quotes and extra spaces. Tip: Ctrl-click a space in the text to break there."
         onclick={() => {
           const next = formatLettering(selected.body);
           if (next !== selected.body) onedit(selected, { body: next });
         }}><i class="bi bi-text-paragraph" aria-hidden="true"></i> Format</button>
+      </span>
     </div>
     <textarea
       class="english-box"
@@ -509,6 +520,7 @@
   .english-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 3px; }
   .english-box { display: block; margin-bottom: 8px; }
   .english-head label { margin: 0; }
+  .english-actions { display: inline-flex; gap: 6px; }
   .format-english { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 12px; }
   .ts-insp { padding: 12px 14px; display: grid; gap: 8px; border-bottom: 1px solid var(--hud-line); }
   .ts-insp :global(label) { margin: 0; display: grid; gap: 4px; }

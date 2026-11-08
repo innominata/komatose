@@ -84,6 +84,21 @@ const cursor = {
 	},
 } as const satisfies CliAdapterDef;
 
+const claude = {
+	id: 'claude',
+	label: 'Claude Code',
+	catalogLabel: 'Claude Code CLI',
+	production: true,
+	operations: CLI_CHAT_OPERATIONS,
+	rowIdForSlug: {},
+	discovery: {
+		command: 'claude',
+		overrideVars: ['CLAUDE_BIN'],
+		knownRelative: ['.local/bin/claude', '.claude/local/claude', '.local/share/mise/installs/claude/latest/claude', 'bin/claude'],
+		missingReason: 'Claude Code CLI not found. Install Claude Code or set CLAUDE_BIN to its executable.',
+	},
+} as const satisfies CliAdapterDef;
+
 /** Fake contract adapter. Not production: no catalog row, admin tool, or built-in registry entry. */
 const example = {
 	id: 'example',
@@ -100,7 +115,7 @@ const example = {
 	},
 } as const satisfies CliAdapterDef;
 
-export const CLI_ADAPTER_DEFS = [grok, codex, cursor, example] as const;
+export const CLI_ADAPTER_DEFS = [grok, codex, cursor, claude, example] as const;
 export type CliAdapterDefEntry = (typeof CLI_ADAPTER_DEFS)[number];
 export type CliAdapterDefId = CliAdapterDefEntry['id'];
 export type ProductionCliAdapterId = Extract<CliAdapterDefEntry, { production: true }>['id'];

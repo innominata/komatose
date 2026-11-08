@@ -9,7 +9,6 @@ import { DEFAULT_CHAT_MODEL_ID } from './modelDefaults';
 import type { ProviderOperation } from './providerCatalog';
 import {
 	isProofreaderId,
-	PROOFREADER_DEFS,
 	proofreaderLabel,
 	type ProofreaderId,
 } from './proofreaders';
@@ -350,22 +349,24 @@ export const SEED_ROWS: ModelRow[] = [
 ];
 
 /**
- * Proofreaders are contributed by the proofreading service, not seeded here.
- * The rows exist only so a configured service has something to resolve to; when
- * no service is configured they are reported unavailable and stay hidden.
+ * A registry row for a proofreader the service reported. Not a built-in seed:
+ * the service's report is the list of options.
  */
-const PROOFREADER_SEED_ROWS: ModelRow[] = PROOFREADER_DEFS.map((def) =>
-	row({
-		id: def.id,
-		name: def.label,
-		slug: def.id,
+export function proofreaderModelRow(id: string, label?: string): ModelRow {
+	const name = (label || proofreaderLabel(id)).trim() || id;
+	return {
+		id,
+		name,
+		slug: id,
 		access: 'proofreader',
 		operations: ['pageImageProofread'],
+		roles: [...ALL_ROLES],
+		seeded: false,
 		operationsLocked: true,
-	}),
-);
+	};
+}
 
-export const ALL_SEED_ROWS: ModelRow[] = [...SEED_ROWS, ...PROOFREADER_SEED_ROWS];
+export const ALL_SEED_ROWS: ModelRow[] = [...SEED_ROWS];
 
 
 /** No transcription models are built in; the series list or the operator's default decides. */
@@ -387,7 +388,7 @@ export function isAssistantHost(id: string): id is AssistantHost {
 }
 
 export function hostOf(row: ModelRow): AssistantHost {
-	if (row.access === 'proofreader') return isProofreaderId(row.id) ? row.id : 'proofreader-a';
+	if (row.access === 'proofreader') return row.id;
 	if (row.cliAdapter) return row.cliAdapter;
 	return 'http';
 }
@@ -525,12 +526,30 @@ function overlayRowFromPartial(extra: Partial<ModelRow> & { id: string }, taken:
 	const cliAdapter = isCliAdapterId(String(extra.cliAdapter || '')) ? extra.cliAdapter : undefined;
 	if (access === 'cli' && !cliAdapter && !extra.packageId) return null;
 	const runtime = MODEL_RUNTIMES.includes(extra.runtime as ModelRuntime) ? (extra.runtime as ModelRuntime) : access === 'remote_http' ? 'openai' : undefined;
-	// Operator rows are task-agnostic too: any operations list that predates
-	// this (a saved box) is widened back to every task — except external
-	// proofreading services, which only ever do page images.
+	// Operator rows are task-agnostic: a saved operations list is widened back to
+	// every task. Proofreaders stay on page images, which is the only job the
+	// service performs.
+	if (access === 'proofreader') {
+		return {
+			id,
+			name: (extra.name || extra.slug || proofreaderLabel(id)).trim(),
+			slug: (extra.slug || id).trim(),
+			access: 'proofreader',
+			operations: ['pageImageProofread'],
+			roles: Array.isArray(extra.roles) ? extra.roles.filter(validRole) : [...ALL_ROLES],
+			seeded: extra.seeded === true,
+			operationsLocked: true,
+			disabled: extra.disabled === true,
+			autoRun: extra.autoRun === true,
+			probes: extra.probes,
+			probeHistory: extra.probeHistory,
+			capabilities: extra.capabilities,
+			capabilityHistory: extra.capabilityHistory,
+			modelRevision: extra.modelRevision,
+			packageId: extra.packageId,
+		};
+	}
 	const operations = [...CHAT_AND_CLI_OPERATIONS];
-	// Only external proofreading services are fixed to their one job; every real
-	// model is task-agnostic and the tests decide.
 	const operationsLocked = false;
 	return {
 		id,
@@ -633,7 +652,7 @@ export function resolveAssistant(
 	}
 
 	if (isProofreaderId(id)) {
-		const tab = rows.find((item) => item.id === id) || seedRow(id)!;
+		const tab = rows.find((item) => item.id === id) || proofreaderModelRow(id);
 		return { row: tab, slug: tab.slug, host: id };
 	}
 

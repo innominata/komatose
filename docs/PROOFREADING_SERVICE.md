@@ -19,8 +19,11 @@ While `SCAN_PROOFREAD_SERVICE_URL` is unset:
 - saved settings that name a proofreader resolve to a disabled row with a reason,
   rather than silently running something else.
 
-Once it is set, Komatose asks the service for per-proofreader readiness and only
-offers the ones it reports ready.
+Once it is set, Komatose asks the service which proofreaders it has and offers
+those. Readiness comes from that report, including a proofreader that is not
+ready yet, so it can be started. A saved registry row the service did not report
+stays listed as unavailable. Komatose does not invent proofreaders the service
+left out.
 
 ## The contract
 
@@ -33,17 +36,22 @@ including a follow-up on the same page, sends `mode: "critique"`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/health` | Liveness only. |
-| `GET` | `/v1/proofreaders` | Readiness for every proofreader. |
+| `GET` | `/v1/proofreaders` | The proofreader catalog, and readiness for each one. |
 | `POST` | `/v1/proofreaders/start` | Bring one proofreader up. |
 | `POST` | `/v1/proofread` | Send `mode`, images, and an optional prompt. Return `{ critique, context }`. |
+
+`GET /v1/proofreaders` returns `{ proofreaders: [ ... ] }`. Each item is
+`{ id, ready, context, reason }` and may also include `label` or `name`. That
+list is the catalog: Komatose offers the ids the service reports and does not
+hardcode a pair of its own. When an item has no `label` or `name`, the id is
+shown in title case (`proofreader-a` is shown as "Proofreader A"). An id
+Komatose has not seen before is kept. Ids that are not slugs, or that belong to
+a built-in engine, are ignored. What implements an id is the service's
+business.
 
 The Translate **Proofread Raw** action sends one raw page image with `mode: raw`.
 The existing raw and typeset comparison sends `mode: critique`; its follow-ups
 also use `mode: critique`.
-
-Proofreaders are named `proofreader-a` and `proofreader-b` in the API and in the
-UI. Those ids are the stable contract; what implements them is the service's
-business.
 
 `context` is an opaque token. Komatose stores it and sends it back to decide
 whether a follow-up continues the same conversation or starts a new one. It must

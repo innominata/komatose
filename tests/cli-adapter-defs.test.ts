@@ -32,11 +32,11 @@ test('production lists are derived from adapter definitions and omit example', (
 	assert.equal(isCliAdapterDefId('example'), true);
 	assert.equal(isProductionCliAdapterId('example'), false);
 	assert.equal(isCliAdapterId('example'), false);
-	assert.deepEqual([...PRODUCTION_CLI_ADAPTER_IDS], ['grok', 'codex', 'cursor']);
-	assert.deepEqual([...CLI_ADAPTER_IDS], ['grok', 'codex', 'cursor']);
-	assert.deepEqual([...PROVIDER_IDS], ['qwen', 'grok', 'codex', 'cursor', 'proofreader-a', 'proofreader-b']);
-	assert.deepEqual([...CLI_PROVIDER_IDS], ['grok', 'codex', 'cursor']);
-	assert.equal(PROVIDER_CATALOG.length, 6);
+	assert.deepEqual([...PRODUCTION_CLI_ADAPTER_IDS], ['grok', 'codex', 'cursor', 'claude']);
+	assert.deepEqual([...CLI_ADAPTER_IDS], ['grok', 'codex', 'cursor', 'claude']);
+	assert.deepEqual([...PROVIDER_IDS], ['qwen', 'grok', 'codex', 'cursor', 'claude']);
+	assert.deepEqual([...CLI_PROVIDER_IDS], ['grok', 'codex', 'cursor', 'claude']);
+	assert.equal(PROVIDER_CATALOG.length, 5);
 	assert.equal(providerById('example'), undefined);
 	assert.equal(isCliProvider('example'), false);
 	assert.equal(providerById('grok')?.label, cliAdapterDef('grok')?.catalogLabel);
@@ -75,7 +75,7 @@ test('example discovery uses definition metadata with no extra provider-name che
 	const admin = listCliToolAdminStatus();
 	assert.deepEqual(
 		admin.map((item) => item.id),
-		['grok', 'codex', 'cursor'],
+		['grok', 'codex', 'cursor', 'claude'],
 	);
 
 	const report = await buildSetupReport({

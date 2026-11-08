@@ -40,7 +40,7 @@ shown before anything runs); the Remote tab adds and removes OpenAI-compatible
 rows and can list `GET {baseUrl}/models`; the CLI tab is a collapse/expand tree
 of detected tools and their models. It does not call a model.
 
-**Command-line agents** (Setup) saves optional Grok/Codex/Cursor executable
+**Command-line agents** (Setup) saves optional Grok/Codex/Cursor/Claude Code executable
 locations in `SCAN_DATA_DIR/cli-tools.json`. Environment `*_BIN` values still
 win; Check discovery does not run the CLI. **Refresh list** is explicit (not on
 page load): Cursor `cursor-agent --list-models`, `grok models`, `codex debug

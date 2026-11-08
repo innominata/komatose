@@ -53,7 +53,7 @@ export async function builtinPackageReadiness(pkg: DiscoveredPackage): Promise<{
   }
   if (adapter === 'browser-proofreader') {
     const { proofreaderStatus } = await import('./proofreadService');
-    const status = await proofreaderStatus(row.id as any);
+    const status = await proofreaderStatus(row.id);
     return { available: status.ready, reason: status.reason };
   }
   const { probeModelConnection } = await import('./modelConnection');

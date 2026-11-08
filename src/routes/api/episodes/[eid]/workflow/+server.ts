@@ -121,8 +121,7 @@ import {
 import { cancelDescribePages, startDescribePages } from "$lib/server/pageEdit";
 import { cancelReslice, startReslice } from "$lib/server/reslice";
 import { cancelPageProofread, cancelChapterRawProofread, startPageProofread, startPageProofreadFollowUp, startChapterRawProofread } from '$lib/server/pageProofread';
-import { isProofreaderId, type ProofreaderId } from '$lib/proofreaders';
-import { assertProofreaderGrant } from '$lib/server/proofreadService';
+import { assertProofreaderGrant, isKnownProofreaderEngine } from '$lib/server/proofreadService';
 import { KOHARU_MODEL, maskModelName, parseDetectConf } from "$lib/server/detect";
 import { detectorSetupId, parseDetectorSetup } from "$lib/detectorSetup";
 import { komatoseGpuEnabled } from "$lib/server/gpuMode";
@@ -473,7 +472,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       }
       const retryProofreader = String(job.payload.engine || '');
       if ((job.kind === 'page-proofread' || job.kind === 'page-proofread-batch') &&
-        isProofreaderId(retryProofreader)) assertProofreaderGrant(user, retryProofreader as ProofreaderId);
+        isKnownProofreaderEngine(retryProofreader)) assertProofreaderGrant(user, retryProofreader);
       if (job.kind === "describe")
         return json(
           startDescribePages(
@@ -790,7 +789,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     if (action === "restore-deleted-regions") {
       requireEdit(user);
       assertEpisodeIdle(episode.id);
-      const restored = await restoreDeletion(episode.id, typeof b.batchId === "string" ? b.batchId : undefined);
+      const restored = await restoreDeletion(
+        episode.id,
+        typeof b.batchId === "string" ? b.batchId : undefined,
+        typeof b.imageId === "string" ? b.imageId : undefined,
+      );
       const entry = await logActivity({
         seriesId: series.id, episodeId: episode.id, userId: user.id,
         action: "restored_regions", payload: { ids: restored.ids },

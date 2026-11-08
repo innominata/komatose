@@ -1,6 +1,6 @@
 import { executeModelTask } from './modelTaskRunner';
 import { resolveLiveAssistant } from './assistantRoute';
-import { proofreaderToolbarOnlyMessage, PROOFREADER_IDS } from '../proofreaders';
+import { proofreaderToolbarOnlyMessage } from '../proofreaders';
 import type { AdvisoryRequest } from './cliAdapters/types';
 import type { CliTranslationEngine } from './translationTask';
 import { WorkflowError } from './workflowStore';
@@ -8,7 +8,7 @@ import { WorkflowError } from './workflowStore';
 export type AdvisoryOpts = AdvisoryRequest;
 
 /** Proofreaders are page-image proofread only and cannot answer advisory prompts. */
-export const ADVISORY_PROOFREADER_MESSAGE = proofreaderToolbarOnlyMessage(PROOFREADER_IDS[0]);
+export const ADVISORY_PROOFREADER_MESSAGE = proofreaderToolbarOnlyMessage('proofreader-a');
 
 /** Injected so tests can swap CLI and local advisory without importing runtimes. */
 export type AdvisoryHandlers = {
@@ -22,7 +22,7 @@ export async function runAdvisory(
 	handlers?: AdvisoryHandlers,
 ): Promise<unknown> {
 	const row = resolveLiveAssistant(engine, opts.model).row;
-	if (row.access === 'proofreader') throw new WorkflowError(ADVISORY_PROOFREADER_MESSAGE);
+	if (row.access === 'proofreader') throw new WorkflowError(proofreaderToolbarOnlyMessage(row.id));
 	opts.abort?.throwIfAborted();
 	if (handlers) return row.access === 'cli' ? handlers.cli((row.cliAdapter || engine) as CliTranslationEngine, opts) : handlers.local(opts, engine);
 	return executeModelTask(row, 'advisory', opts, { abort: opts.abort });

@@ -74,7 +74,11 @@
   let expandedImage=$state<{hash:string;label:string}|null>(null);
   $effect(()=>{if(!open) expandedImage=null;});
   let preflight=$state<{stage:string;message:string}[]>([]),loading=false,loadedRun='';
-  const eligible=$derived(mode==='page' ? !!logPage : pages.length>0);
+  // Chapter runs cover the ticked pages. Unticked ids are kept, so new pages start ticked.
+  let unticked=$state<string[]>([]);
+  const ticked=$derived(pages.filter(item=>!unticked.includes(item.id)));
+  function tick(id:string,on:boolean) { unticked=on?unticked.filter(item=>item!==id):[...unticked,id]; }
+  const eligible=$derived(mode==='page' ? !!logPage : ticked.length>0);
   const canStart=$derived(canEdit && !busy && !working && !locked && eligible && !!selectedModel && tasks.length>0);
   const auditEvents=$derived(events.filter(event=> event.run_id===selectedRun && event.image_id===logPage?.id &&
     ['run','page','request','critique:reused','proofreader:question','proofreader:images','critique','director:request',
@@ -341,6 +345,7 @@
     const model=models.find(item=>item.id===selectedModel);
     if (!model) return;
     void act({action:retryBlocked?'retry-blocked':'start',scope:mode,imageId:mode==='page'?logPage?.id:undefined,
+      imageIds:mode==='chapter'?ticked.map(item=>item.id):undefined,
       model:{engine:model.id,model:model.model||''},recheckAll,tasks,policy:{savedProofreadsOnly:false}});
   }
   async function checkSetup() {
@@ -449,13 +454,13 @@
         {:else if run && ['paused','interrupted','failed'].includes(run.state)}
           <button type="button" disabled={working||locked||!eligible} onclick={()=>void act({action:'resume',runId:run.id})}><i class="bi bi-play-fill" aria-hidden="true"></i> Resume</button>
         {/if}
-        <button type="button" class="primary" disabled={!canStart} aria-label={`Run ${mode} Director`} onclick={()=>start()}><i class="bi bi-play-fill" aria-hidden="true"></i> Run {tasks.length===ALL_DIRECTOR_TASKS.length?'':`${tasks.length} task${tasks.length===1?'':'s'} on `}{mode==='page'?'page':'chapter'}</button>
+        <button type="button" class="primary" disabled={!canStart} aria-label={`Run ${mode} Director`} onclick={()=>start()}><i class="bi bi-play-fill" aria-hidden="true"></i> Run {tasks.length===ALL_DIRECTOR_TASKS.length?'':`${tasks.length} task${tasks.length===1?'':'s'} on `}{mode==='page'?'page':ticked.length===pages.length?'chapter':`${ticked.length} page${ticked.length===1?'':'s'}`}</button>
         <details class="director-menu" ontoggle={menuToggled}>
           <summary aria-label="More Director actions" title="More"><i class="bi bi-three-dots" aria-hidden="true"></i></summary>
           <div class="director-pop director-more">
             {#if mode==='chapter'}
               <label class="inline"><input type="checkbox" bind:checked={recheckAll}> Recheck passed and stale pages</label>
-              <button type="button" disabled={!canStart||!pages.some(p=>p.state==='unresolved')} onclick={()=>{closeMenus();start(true);}}>Retry blocked pages</button>
+              <button type="button" disabled={!canStart||!ticked.some(p=>p.state==='unresolved')} onclick={()=>{closeMenus();start(true);}}>Retry blocked pages</button>
             {/if}
             {#if logPage}
               <button type="button" title="Forget saved stage results so the next run redoes every task on this page. Edits stay undoable." disabled={!canEdit||working||locked}
@@ -492,18 +497,27 @@
       {/if}
     </div>
     {#if error}<p class="director-error" role="alert">{error}</p>{/if}
-    {#if !eligible}<p class="director-error">Choose a story page first.</p>{/if}
+    {#if !eligible}<p class="director-error">{mode==='chapter'&&pages.length?'Tick at least one page to run the chapter Director on.':'Choose a story page first.'}</p>{/if}
     {#if preflight.length}<div class="director-preflight"><div>{#each preflight as issue}<p>{issue.stage}: {issue.message}</p>{/each}</div>
       <button type="button" aria-label="Dismiss setup check" onclick={()=>preflight=[]}><i class="bi bi-x" aria-hidden="true"></i></button></div>{/if}
     <div class="director-body">
       <aside aria-label="Pages">
+        {#if mode==='chapter'}
+          <div class="director-pick" role="group" aria-label="Pages to run">
+            <span>{ticked.length}/{pages.length}</span>
+            <button type="button" disabled={working} onclick={()=>unticked=[]}>All</button>
+            <button type="button" disabled={working} onclick={()=>unticked=pages.map(item=>item.id)}>None</button>
+          </div>
+        {/if}
         <div class="director-pages">{#each pages as item}
-          <button type="button" class="director-page state-{item.state}" class:current={item.id===logPage?.id} aria-pressed={item.id===logPage?.id} aria-label={`Page ${item.pageNumber??'?'}`}
+          <div class="director-page-row">
+          {#if mode==='chapter'}<input type="checkbox" checked={!unticked.includes(item.id)} disabled={working} aria-label={`Run Director on page ${item.pageNumber??'?'}`} onchange={(e)=>tick(item.id,e.currentTarget.checked)}>{/if}
+          <button type="button" class="director-page state-{item.state}" class:current={item.id===logPage?.id} class:unticked={mode==='chapter'&&unticked.includes(item.id)} aria-pressed={item.id===logPage?.id} aria-label={`Page ${item.pageNumber??'?'}`}
             title={[directorStatusLabel(item.state),item.stage?stageName(item.stage):'',tidy(item.detail||'')].filter(Boolean).join(' · ')}
             onclick={()=>{selectedPageId=item.id;showDetail=false;}}>
             <span class="dot" aria-hidden="true"></span><span class="num">Page {item.pageNumber??'?'}</span>
             <small>{directorStatusLabel(item.state)}{item.stage?` · ${stageName(item.stage)}`:''}</small>
-          </button>{/each}</div>
+          </button></div>{/each}</div>
         <p class="director-footnote">Checks passed does not mark a page Done. Warnings do not block; dismiss them in Review.</p>
       </aside>
       <div class="director-log" class:show-detail={showDetail}>
@@ -633,6 +647,11 @@
   .director-body aside{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--d-line)}
   .director-pages{overflow:auto;padding:8px;display:grid;gap:2px;align-content:start;flex:1}
   .director-page{display:grid;grid-template-columns:auto 1fr;column-gap:7px;align-items:center;text-align:left;background:transparent;color:inherit;border:1px solid transparent;border-radius:6px;padding:5px 7px;cursor:pointer}
+  .director-page-row{display:flex;align-items:center;gap:4px}.director-page-row .director-page{flex:1;min-width:0}
+  .director-page.unticked{opacity:.5}
+  .director-pick{display:flex;align-items:center;gap:4px;padding:8px 8px 0;font-size:.75rem;color:var(--hud-muted,#aaa)}
+  .director-pick span{margin-right:auto}
+  .director-pick button{background:transparent;color:inherit;border:1px solid var(--d-line);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:.75rem}
   .director-page:hover{background:var(--d-soft)}.director-page.current{background:var(--d-soft);border-color:var(--d-line)}
   .director-page .num{font-weight:600}.director-page small{grid-column:2;color:var(--hud-muted,#aaa);font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .director-page .dot{width:8px;height:8px;border-radius:50%;background:var(--d-line)}
@@ -686,7 +705,7 @@
     .director-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
     .director-body aside{border-right:0;border-bottom:1px solid var(--d-line)}
     .director-pages{display:flex;overflow-x:auto;padding:6px 10px;gap:6px}
-    .director-page{flex:0 0 auto;border-color:var(--d-line)}.director-page small{display:none}
+    .director-page-row{flex:0 0 auto}.director-page{flex:0 0 auto;border-color:var(--d-line)}.director-page small{display:none}
     .director-footnote{display:none}
     .director-log{grid-template-columns:1fr}
     .director-log-list{border-right:0}

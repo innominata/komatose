@@ -1,5 +1,5 @@
 import { charRunFonts } from "../charStyles";
-import { deleteRegions, lastDeletion } from "./regionTrash";
+import { deleteRegions, deletedRegionPages, lastDeletion } from "./regionTrash";
 import { maskInputs, currentMaskDiagnostics } from "../maskDiagnostics";
 import { sfxEnglishChoices } from "../sfx";
 import { isSourceSuggestion } from "../regionAi";
@@ -53,15 +53,19 @@ import { gpuClientStatus } from "./gpuMode";
 import { presentGpuStatus } from "./computeDevices";
 import { broadcast, withDeferredBroadcasts } from "./realtime";
 import { storePageThumbnail } from "./pageThumbnail";
-import { approveAllCleaning } from "./stepUndo";
+import { approveAllCleaning, completeOutstandingPages } from "./stepUndo";
 
+/** Approve everything, then mark every step done on every page (stamped after the approvals). */
 export function approveEverything(episodeId: string, userId: string) {
-  return withDeferredBroadcasts(() => sqlite.transaction(() => ({
-    translations: approveAllTranslations(episodeId, userId),
-    geometry: approveAllGeometry(episodeId),
-    cleaning: approveAllCleaning(episodeId),
-    layouts: keepCurrentLayouts(episodeId),
-  }))());
+  return withDeferredBroadcasts(() => sqlite.transaction(() => {
+    const result = {
+      translations: approveAllTranslations(episodeId, userId),
+      geometry: approveAllGeometry(episodeId),
+      cleaning: approveAllCleaning(episodeId),
+      layouts: keepCurrentLayouts(episodeId),
+    };
+    return { ...result, pages: completeOutstandingPages(episodeId).pages };
+  })());
 }
 
 export function removePageRegions(episodeId: string, imageId: string | string[]): string[] {
@@ -830,6 +834,8 @@ export async function workflowState(series: Series, episode: Episode) {
     previewToken: await getEpisodePreviewToken(episode.id),
     /** The newest region deletion Undo can restore. */
     deletion: lastDeletion(episode.id),
+    /** Pages whose deleted regions Ctrl+Z on that page can put back. */
+    deletedRegionPages: deletedRegionPages(episode.id),
     gpu: presentGpuStatus(gpuClientStatus(cleaningDeviceLabel())),
     credits: series.credits ?? {},
     /** What "use the default" means in Chapter Settings, and which setups can run here. */

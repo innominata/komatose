@@ -613,7 +613,7 @@ test('proofreading service gets page images first and only the typed follow-up a
     assert.equal(bodies[3].mode, 'raw');
     assert.equal(bodies[3].followUp, false);
     assert.equal((bodies[3].images as unknown[]).length, 1);
-    assert.match(String(bodies[3].prompt),/exact original-language source AND a complete recommended English translation/);
+    assert.match(String(bodies[3].prompt),/\[n\] source \| Localized English/);
     const region=await sharp({create:{width:12,height:12,channels:3,background:'blue'}}).png().toBuffer();
     const rawQuestion=startPageProofreadFollowUp({series,episode,parentJobId:rawJob.jobId,
       prompt:'Can you give me the source and English translation for this region?',images:[region],includeParentContext:true});

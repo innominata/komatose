@@ -11,7 +11,6 @@
     selectionDisabled = false,
     canUpload = false,
     busy = false,
-    numberingStale = false,
     credits = {},
     pageMode = "pages",
     seriesId,
@@ -34,7 +33,6 @@
     selectionDisabled?: boolean;
     canUpload?: boolean;
     busy?: boolean;
-    numberingStale?: boolean;
     credits?: SeriesCredits;
     pageMode?: "pages" | "strip";
     seriesId: string;
@@ -126,9 +124,7 @@
   ondrop={(e) => { if (hasFiles(e)) dropFiles(e); }}>
   <div class="grid-hint">
     <span><i class="bi bi-arrows-move" aria-hidden="true"></i> {pageMode === "strip" ? "Strip · top to bottom" : "Pages · reading order"} · Drag to reorder · Shift-click to select a range · Paste images anywhere</span>
-    <span class:warning={numberingStale}>
-      {numberingStale ? "Numbering is stale. Renumber after organizing." : "Numbering is current. Export names: 1, 2, 3…"}
-    </span>
+    <span>Page numbers follow this order. Export names: 1, 2, 3…</span>
     <span class="spacer"></span>
     {#if canUpload && !selectedIds.length}
       <button type="button" class="ed-btn small ghost" onclick={() => onselectall(selectedIds.length !== images.length)}>
@@ -232,7 +228,6 @@
 <style>
   .organize { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 24px; background: var(--hud-canvas); font-family: Inter, system-ui, sans-serif; }
   .grid-hint { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; color: var(--hud-muted); font-size: 12px; margin-bottom: 12px; }
-  .warning { color: #f5b85c; }
   .spacer { flex: 1; }
   .sel-bar {
     display: flex;

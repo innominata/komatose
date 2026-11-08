@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from "$app/environment";
   import { DECIDER_MIN_PROBABILITY, DECIDER_MIN_MARGIN } from '$lib/decider';
   import { untrack } from "svelte";
   import AiModelPicker from "./AiModelPicker.svelte";
@@ -7,7 +8,7 @@
   import { regionAiSettings, defaultReviseModels, enginesForRegionAiField, MAX_REVISE_MODELS, MAX_TRANSCRIPTION_MODELS, type RegionAiSettings } from "$lib/regionAi";
   import type { TaskEngine, EngineModelOption } from "$lib/aiTasks";
   import { isPageImageOnlyEngine, type TranslateEngine, type TranslateEngineInfo } from "$lib/types";
-  import { isProofreaderId, proofreaderLabel } from "$lib/proofreaders";
+  import { isProofreaderId, noteProofreaderOptions, proofreaderLabel } from "$lib/proofreaders";
   import { MAX_SOURCE_REVIEWERS } from "$lib/localReviewModels";
   import { formatDuration, transcribeSetPageMs } from "$lib/modelEstimate";
   import {
@@ -90,6 +91,16 @@
     if (info.defaultTranscriptionDecider !== undefined) deciderDefault = info.defaultTranscriptionDecider;
     if (Array.isArray(info.engines)) {
       liveEngines = info.engines;
+      // The browser keeps its own copy of the report. Noting it during SSR would
+      // replace the server process's catalog for every later request.
+      if (browser) {
+        noteProofreaderOptions(
+          info.engines
+            .filter((engine) => engine.access === "proofreader" || engine.pageImageOnly)
+            .map((engine) => ({ id: engine.id, label: engine.label })),
+          { replace: true },
+        );
+      }
       const ops = new Map(info.engines.map((engine) => [engine.id, new Set(engine.operations || [])]));
       const keeps = (id: string, operation: string) => ops.get(id)?.has(operation) === true;
     }
@@ -250,7 +261,8 @@
     }
   }
   async function startProofreader() {
-    const engine = isProofreaderId(draft.proofread.engine) ? draft.proofread.engine : "proofreader-a";
+    const engine = draft.proofread.engine;
+    if (!isProofreaderId(engine)) return;
     proofreaderBusy = true;
     error = "";
     try {

@@ -123,12 +123,8 @@ export function undoDirectorChange(episodeId: string, changeId: number): void {
   const after = JSON.parse(change.after_json);
   withDeferredBroadcasts(() => sqlite.transaction(() => {
     if (!change.image_id) {
-      const rows = sqlite.prepare('SELECT id,page_number FROM images WHERE episode_id=? ORDER BY sort_order,created_at,id').all(episodeId) as Row[];
-      const stale = (sqlite.prepare('SELECT numbering_stale FROM episodes WHERE id=?').get(episodeId) as Row).numbering_stale;
-      assertSame({ pages: rows, stale }, after, 'Page numbering');
-      for (const page of before.pages) sqlite.prepare('UPDATE images SET page_number=? WHERE id=? AND episode_id=?')
-        .run(page.page_number, page.id, episodeId);
-      sqlite.prepare('UPDATE episodes SET numbering_stale=?,revision=revision+1 WHERE id=?').run(before.stale, episodeId);
+      // An older run's Renumber pages: page numbers now always follow reading order, so
+      // there is nothing to put back.
     } else {
       const current = snapshotPage(episodeId, change.image_id);
       assertSame(comparable(current), comparable(after), change.label);
@@ -164,8 +160,6 @@ export function undoDirectorChange(episodeId: string, changeId: number): void {
           .run(suggestion.state, suggestion.body, suggestion.reason, suggestion.translation, suggestion.id, episodeId);
       if (current.image.caption !== before.image.caption)
         sqlite.prepare('UPDATE images SET caption=? WHERE id=? AND episode_id=?').run(before.image.caption, change.image_id, episodeId);
-      if (current.image.page_number !== before.image.page_number)
-        sqlite.prepare('UPDATE images SET page_number=? WHERE id=? AND episode_id=?').run(before.image.page_number, change.image_id, episodeId);
       if (current.episodeStatus !== before.episodeStatus) {
         sqlite.prepare('UPDATE episodes SET status=?,updated_at=?,revision=revision+1 WHERE id=?')
           .run(before.episodeStatus,Date.now(),episodeId);

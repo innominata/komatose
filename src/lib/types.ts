@@ -286,6 +286,8 @@ export function isPageImageOnlyEngine(id: string): boolean {
 	return isProofreaderProvider(id);
 }
 
-export function textEngines<T extends { id: string }>(engines: T[]): T[] {
-	return engines.filter((engine) => !isPageImageOnlyEngine(engine.id));
+export function textEngines<T extends { id: string; pageImageOnly?: boolean; access?: string }>(engines: T[]): T[] {
+	return engines.filter(
+		(engine) => engine.access !== 'proofreader' && !engine.pageImageOnly && !isPageImageOnlyEngine(engine.id),
+	);
 }

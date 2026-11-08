@@ -2,6 +2,7 @@
   import { PAGE_FILE_ACCEPT, isPageFile } from "$lib/pageFiles";
   import { deciderPageStamp } from "$lib/decider";
   import { glossaryCharacters, resolveCharacter, characterLabel } from '$lib/characters';
+  import { glossaryNames } from '$lib/letteringBreaks';
   import type { GlossaryTerm } from '$lib/types';
   import { nextUnfinishedPage, prepareActionConfirmation, preparePageLabel, type PageUndoSummary } from "$lib/prepareActions";
   import { onMount, tick, untrack } from "svelte";
@@ -68,7 +69,7 @@
   import CleanInspector from "./workflow/CleanInspector.svelte";
   import TypesetInspector from "./workflow/TypesetInspector.svelte";
   import RegionGeometryPanel from "./workflow/RegionGeometryPanel.svelte";
-  import WorkflowCanvas from "./workflow/WorkflowCanvas.svelte";
+  import WorkflowCanvas, { type StripPage } from "./workflow/WorkflowCanvas.svelte";
   import { draggedRotation, normalizeRotation } from "$lib/textRotation";
   import {
     clampSkew,
@@ -180,6 +181,7 @@
     detection?: { setup: DetectorSetupConfig; conf: number; source: "request" | "chapter" | "default"; skipped: string[] };
     /** The newest region deletion Undo can restore. */
     deletion?: { id: string; label: string; count: number; at: number } | null;
+    deletedRegionPages?: string[];
   };
   let studioState = $state<State | null>(null);
   const blankRegionCount = $derived(studioState?.lines.filter(line => isBlankRegion(line) &&
@@ -723,10 +725,16 @@
       if (!(await saves.flushAll()))
         throw new Error("Resolve unsaved drafts first");
       if (body.op === 'undo') {
+        const { onlyPage, ...rest } = body;
         const undo = await refreshPageUndo();
         if (!undo) { notify('Nothing to undo.'); return null; }
+        // Ctrl+Z passes the page on screen; the menu's Undo page edit undoes any page.
+        if (typeof onlyPage === 'string' && !undo.imageIds.includes(onlyPage)) {
+          notify(`Nothing to undo on this page. The last page edit was elsewhere: use “${undo.label}” in the menu.`);
+          return null;
+        }
         if (!window.confirm(undo.confirmation)) return null;
-        body = { ...body, undoToken: undo.token };
+        body = { ...rest, undoToken: undo.token };
       } else {
         const confirmation = prepareActionConfirmation(body, studioState?.images ?? []);
         if (confirmation && !window.confirm(confirmation)) return null;
@@ -1430,26 +1438,53 @@
   }
   const asset = (hash?: string) =>
     hash ? `${apiBase}/workflow/assets/${hash}` : "";
-  const hasTypesetCopy = $derived(
-    pageLines.some(
-      (line) =>
-        line.sourceState !== "ignored" &&
-        !!studioState?.regions[line.id]?.data.layout,
-    ),
+  /** A page's artwork as this step shows it: the raw page, the prepared page, or the cleaned one. */
+  function artworkFor(img: ImageRow, lines: LineRow[]) {
+    const doc = studioState?.pages[img.id];
+    const raw = `/api/images/${img.id}?v=${img.updatedAt}`;
+    if (doc?.data.preparedAt !== img.updatedAt) return raw;
+    const typeset = lines.some((l) => l.sourceState !== "ignored" && !!studioState?.regions[l.id]?.data.layout);
+    return (usesSourceArtwork(step, compare, typeset)
+      ? asset(doc.data.prepared)
+      : asset(doc.data.cleaned || doc.data.cleanBase || doc.data.prepared)) || raw;
+  }
+  const pageImage = $derived(page ? artworkFor(page, pageLines) : "");
+  /**
+   * Continuous view: every page in one scrolling column, outside Prepare. On by default for
+   * long-strip chapters; remembered separately for strip and page chapters.
+   */
+  let continuousPref = $state<Partial<Record<"strip" | "pages", boolean>>>({});
+  const continuousAvailable = $derived(
+    step !== "Prepare" && !(step === "Review" && reviewView === "side-by-side") && (studioState?.images.length ?? 0) > 1,
   );
-  const showSourceArtwork = $derived(
-    usesSourceArtwork(step, compare, hasTypesetCopy),
-  );
-  const pageImage = $derived(
-    page
-      ? (pageDoc?.data.preparedAt !== page.updatedAt
-          ? `/api/images/${page.id}?v=${page.updatedAt}`
-          : showSourceArtwork
-            ? asset(pageDoc?.data.prepared)
-            : asset(pageDoc?.data.cleaned || pageDoc?.data.cleanBase || pageDoc?.data.prepared)) ||
-          `/api/images/${page.id}?v=${page.updatedAt}`
-      : "",
-  );
+  const continuous = $derived(continuousAvailable && (continuousPref[pageMode] ?? pageMode === "strip"));
+  function toggleContinuous() {
+    continuousPref = { ...continuousPref, [pageMode]: !continuous };
+    try {
+      localStorage.setItem("scan.studio.continuous", JSON.stringify(continuousPref));
+    } catch {
+      // Remembering the choice is a convenience.
+    }
+  }
+  const stripPages = $derived.by<StripPage[]>(() => {
+    if (!continuous || !studioState) return [];
+    const byPage = new Map<string, LineRow[]>();
+    for (const line of studioState.lines) {
+      if (!line.imageId) continue;
+      const list = byPage.get(line.imageId);
+      if (list) list.push(line);
+      else byPage.set(line.imageId, [line]);
+    }
+    return studioState.images.map((img, i) => {
+      const lines = (byPage.get(img.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
+      return { page: img, number: i + 1, image: artworkFor(img, lines), lines };
+    });
+  });
+  /** A page in the continuous view was clicked or scrolled to the middle: make it current. */
+  function chooseStripPage(id: string, line?: string) {
+    if (id !== pageId) choosePage(id);
+    if (line && tool === "select") selectLine(line, "page");
+  }
   const selectedPolygon = $derived(
     regionDoc?.data.polygon?.length
       ? regionDoc.data.polygon
@@ -1676,7 +1711,6 @@
     });
   }
   async function act(body: Record<string, unknown>) {
-    if (step === 'Prepare' && body.action === 'renumber' && !window.confirm('Renumber all chapter pages in their current reading order? This replaces their saved page numbers and export names.')) return null;
     error = "";
     busy = true;
     try {
@@ -1735,14 +1769,16 @@
     }
   }
   function pageSavedHistory(history: "undo" | "redo") {
-    // Outside Prepare and Clean, which have their own page history, Ctrl+Z puts back the
-    // regions deleted last.
+    // Ctrl+Z only changes the page on screen. Outside Prepare and Clean, which have their own
+    // page history, it puts back the regions deleted last from this page.
     if (history === "undo" && step !== "Prepare" && step !== "Clean") {
-      void restoreDeletedRegions();
+      if (!pageId) return;
+      if (!studioState?.deletedRegionPages?.includes(pageId)) notify("Nothing deleted on this page to undo.");
+      else void restoreDeletedRegions(pageId);
       return;
     }
     if (step === 'Prepare') {
-      if (history === 'undo' && canUpload && !busy) void pageOperation({ op: 'undo' });
+      if (history === 'undo' && canUpload && !busy && pageId) void pageOperation({ op: 'undo', onlyPage: pageId });
       return;
     }
     if (step !== "Clean" || !canClean || busy || !pageDoc) return;
@@ -1892,7 +1928,7 @@
   function scrollCanvasToRegion(line: LineRow | undefined) {
     const scroller = canvasScrollEl;
     if (!scroller || !page || !line || line.imageId !== page.id) return;
-    const canvas = scroller.querySelector(".canvas-page");
+    const canvas = scroller.querySelector(".canvas-page[data-active-page]") ?? scroller.querySelector(".canvas-page");
     if (!(canvas instanceof HTMLElement)) return;
     // Measure where the page sits: it carries the overscroll gutter.
     const s = scroller.getBoundingClientRect();
@@ -3547,9 +3583,12 @@
     }, action ? 10000 : 5000);
   }
   /** Put back the newest deleted regions (with their comments and suggestions). */
-  async function restoreDeletedRegions() {
+  /** Puts back the newest deletion, or with `imageId` the regions deleted last from that page. */
+  async function restoreDeletedRegions(imageId?: string) {
     if (!canEdit || busy || !studioState?.deletion) return false;
-    const result = await act({ action: "restore-deleted-regions", batchId: studioState.deletion.id });
+    const result = await act(imageId
+      ? { action: "restore-deleted-regions", imageId }
+      : { action: "restore-deleted-regions", batchId: studioState.deletion.id });
     if (!result) return false;
     await refresh();
     const n = result.ids?.length ?? 0;
@@ -3612,11 +3651,11 @@
   }
   async function approveChapterEverything() {
     if (!canEdit || !canClean || busy || !studioState) return;
-    if (!confirm("Approve all current translations, geometry, and artwork, and accept saved layouts in this chapter? Saved cleaning results are applied. Pending masks and draft strokes are cleared. Missing text or layouts still need attention. Revision history stays.")) return;
+    if (!confirm("Approve all current translations, geometry, and artwork, accept saved layouts, and mark every page done in every step in this chapter? Saved cleaning results are applied. Pending masks and draft strokes are cleared. Missing text or layouts still need attention. Revision history stays.")) return;
     const result = await act({ action: "approve-everything" });
     if (result) {
       for (const image of studioState.images) discardMaskDraft(image.id);
-      notify(`Approved ${result.translations} translations, ${result.geometry} regions, and ${result.cleaning} cleaned pages; accepted ${result.layouts} layouts.`);
+      notify(`Approved ${result.translations} translations, ${result.geometry} regions, and ${result.cleaning} cleaned pages; accepted ${result.layouts} layouts; marked all ${result.pages} pages done in every step.`);
     }
   }
   async function saveSeriesType(payload: {
@@ -3663,7 +3702,7 @@
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not save chapter credits");
       await refresh();
-      notify(`Saved this chapter’s ${kind === "pre" ? "pre-credits" : "post-credits"} override. Renumber pages before export.`);
+      notify(`Saved this chapter’s ${kind === "pre" ? "pre-credits" : "post-credits"} override.`);
     } catch (e) {
       error = String(e);
     } finally {
@@ -3959,6 +3998,9 @@
         pagesWidth = clamp(layout.pagesWidth, 80, 280);
       if (Number.isFinite(layout.inspectorWidth))
         inspectorWidth = clamp(layout.inspectorWidth, 280, 640);
+      const continuousSaved = JSON.parse(localStorage.getItem("scan.studio.continuous") || "{}");
+      for (const mode of ["strip", "pages"] as const)
+        if (typeof continuousSaved?.[mode] === "boolean") continuousPref[mode] = continuousSaved[mode];
     } catch {
       jobsPanel = "collapsed";
       pagesOpen = !narrow;
@@ -4146,10 +4188,7 @@
   }
   const stageCounts = $derived(Object.fromEntries(STUDIO_STAGE_ORDER.map((stage) => {
     const images = studioState?.images ?? [];
-    if (stage.id === "prepare") {
-      const stale = studioState?.issues.some((issue) => issue.code === "numbering");
-      return [stage.label, `${images.length} pages${stale ? " · renumber" : ""}`];
-    }
+    if (stage.id === "prepare") return [stage.label, `${images.length} pages`];
     if (stage.id === "export") {
       const n = studioState ? exportBlockers(studioState.issues).length : 0;
       return [stage.label, n ? `${n} blocker${n === 1 ? "" : "s"}` : "ready"];
@@ -4321,7 +4360,16 @@
     if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
       choosePalette("zoom");
     }
-    if ((e.key === "a" || e.key === "A") && !shortcut && stripEditor && canUpload)
+    // A / D: previous and next page; W: next page this step has not marked done.
+    if (!shortcut && !e.altKey && !e.shiftKey && ["a", "d", "w"].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      if (e.key.toLowerCase() === "w") {
+        if (nextUnfinishedId) choosePage(nextUnfinishedId);
+        else if (["Translate", "Review", "Clean", "Typeset"].includes(step)) notify(`Every other page is marked done in ${step}.`);
+      } else shiftPage(e.key.toLowerCase() === "a" ? -1 : 1);
+      return;
+    }
+    if ((e.key === "n" || e.key === "N") && !shortcut && stripEditor && canUpload)
       choosePalette("add-break");
     if ((e.key === "q" || e.key === "Q") && !shortcut && step === "Clean" && canClean)
       choosePalette("rect-fill");
@@ -4341,7 +4389,7 @@
       choosePalette("raw");
     if ((e.key === "g" || e.key === "G") && step === "Clean" && canClean)
       choosePalette("mask-grow");
-    if ((e.key === "d" || e.key === "D") && !e.ctrlKey && !e.metaKey && step === "Clean" && canClean && canEdit)
+    if ((e.key === "t" || e.key === "T") && !e.ctrlKey && !e.metaKey && step === "Clean" && canClean && canEdit)
       choosePalette("detect-area");
     if ((e.key === "r" || e.key === "R") && canEdit && ["Translate", "Review"].includes(step))
       tool = "region";
@@ -4676,7 +4724,6 @@
           <div class="more-menu" role="menu">
             {#if step === "Prepare"}
               <button type="button" role="menuitem" data-find="scene-notes" disabled={busy || aiRunning || !canUpload} onclick={() => { moreOpen = false; void describe(undefined, true); }}>Scene notes</button>
-              <button type="button" role="menuitem" data-find="renumber" onclick={() => { moreOpen = false; void act({ action: "renumber" }); }}>Renumber pages</button>
               <button type="button" role="menuitem" data-find="prepare-undo" disabled={busy || !pageUndoCount} onclick={() => { moreOpen = false; pageOperation({ op: "undo" }); }}>{pageUndo?.label ?? 'Undo page edit'}</button>
             {:else if step === "Translate" || step === "Review"}
               {#if step !== "Review" || scope === "chapter"}
@@ -4706,10 +4753,7 @@
             {/if}
           </div>
         {/if}
-        <StudioBanners
-          numberingStale={step === "Prepare" && studioState.issues.some((issue) => issue.code === "numbering")}
-          onrenumber={() => act({ action: "renumber" })}
-        >
+        <StudioBanners>
           {#snippet selection()}
             {#if step === "Prepare" && canUpload && selectedPageIds.length && prepView !== "grid"}
               <div class="page-selection-actions" role="region" aria-label="Selected page actions">
@@ -4752,7 +4796,6 @@
             selectionDisabled={pageSelectionBusy}
             {canUpload}
             {busy}
-            numberingStale={studioState.issues.some((issue) => issue.code === "numbering")}
             credits={studioState.credits ?? series.credits}
             {pageMode}
             seriesId={series.id}
@@ -4983,6 +5026,8 @@
               oncompletepolygon={completePolygon}
               onact={act}
               onnotify={notify}
+              {stripPages}
+              onstrippage={chooseStripPage}
             />
             {/if}
             {#if step === 'Clean' && pageDoc?.data.cleaned}
@@ -5009,6 +5054,8 @@
               showCompareToggle={step !== "Prepare"}
               maskStaysWithCompare={step === "Clean"}
               onpage={shiftPage}
+              continuous={continuousAvailable ? continuous : undefined}
+              oncontinuous={toggleContinuous}
               onregions={() => (regionVisibility = regionVisibility === "shown" ? "ghost" : regionVisibility === "ghost" ? "off" : "shown")}
               onmask={() => setMaskVisibility(!(showMask && !compare))}
               oncompare={() => {
@@ -5323,6 +5370,7 @@
             {canClean}
             {canUpload}
             {busy}
+            properNames={glossaryNames(seriesTerms)}
             bind:regionStyle
             fonts={studioState.fonts}
             stale={!!selected && studioState.issues.some((issue) => issue.lineId === selected.id && issue.code === "stale")}
@@ -5457,7 +5505,6 @@
       {pageUndoCount}
       pageUndoLabel={pageUndo?.label ?? 'Undo page edit'}
       {duplicateWarning}
-      numberingStale={studioState.issues.some((issue) => issue.code === "numbering")}
       bind:pendingFiles
       bind:chapterDpi
       bind:resliceSizing
@@ -5472,7 +5519,6 @@
       onaddfiles={addFiles}
       onupload={upload}
       onreorder={reorder}
-      onrenumber={() => act({ action: "renumber" })}
       onpageop={pageOperation}
       onreslice={() => void splitStrips()}
       ondescribe={() => describe(undefined, true)}

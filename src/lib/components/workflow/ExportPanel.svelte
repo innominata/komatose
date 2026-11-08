@@ -134,7 +134,7 @@
       type="button"
       class="primary"
       data-find="approve-everything"
-      title="Approve current translations, geometry and artwork, and accept saved layouts for the whole chapter."
+      title="Approve current translations, geometry and artwork, accept saved layouts, and mark every page done in every step for the whole chapter."
       disabled={!canEdit || !canClean || busy || !images.length}
       onclick={onapproveeverything}><i class="bi bi-check2-all" aria-hidden="true"></i> Approve everything</button
     >

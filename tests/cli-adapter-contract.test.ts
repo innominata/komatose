@@ -4,6 +4,7 @@ import { CliAdapterRegistry } from '../src/lib/server/cliAdapters/registry';
 import { createCodexAdapter } from '../src/lib/server/cliAdapters/codex';
 import { createGrokAdapter } from '../src/lib/server/cliAdapters/grok';
 import { createCursorAdapter } from '../src/lib/server/cliAdapters/cursor';
+import { createClaudeAdapter } from '../src/lib/server/cliAdapters/claude';
 import { createExampleAdapter } from '../src/lib/server/cliAdapters/example';
 import type { AdvisoryRequest, CliAdapter, Command, CommandResult, CommandRuntime } from '../src/lib/server/cliAdapters/types';
 
@@ -226,6 +227,8 @@ runCliAdapterContract('grok', (runtime, options) =>
 
 runCliAdapterContract('codex', (runtime, options) => createCodexAdapter({ ...baseOptions, ...options }, runtime));
 
+runCliAdapterContract('claude', (runtime, options) => createClaudeAdapter({ ...baseOptions, ...options }, runtime));
+
 runCliAdapterContract(
 	'cursor',
 	() => {
@@ -249,6 +252,7 @@ test('example adapter is not registered in production', async () => {
 		assert.equal(isCliEngine('grok'), true);
 		assert.equal(isCliEngine('codex'), true);
 		assert.equal(isCliEngine('cursor'), true);
+		assert.equal(isCliEngine('claude'), true);
 		assert.equal(isCliEngine('example'), false);
 		assert.equal(isCliEngine('chatgpt'), false);
 	} finally {

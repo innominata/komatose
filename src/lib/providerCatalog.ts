@@ -1,13 +1,14 @@
 import { MODEL_TASK_IDS } from './modelTasks';
 import { accessGroup, resolveAssistant, rowForReviewer, rowHasOperation } from './modelRegistry';
-import { PROOFREADER_DEFS } from './proofreaders';
+import { isProofreaderId, proofreaderLabel } from './proofreaders';
 import {
 	CLI_CHAT_OPERATIONS,
 	PRODUCTION_CLI_ADAPTER_IDS,
 	productionCliAdapterDefs,
 } from './cliAdapterDefs';
 
-export const PROVIDER_IDS = ['qwen', ...PRODUCTION_CLI_ADAPTER_IDS, ...PROOFREADER_DEFS.map((item) => item.id)] as const;
+/** Built-in hosts. Proofreaders are not listed here; the proofreading service reports them. */
+export const PROVIDER_IDS = ['qwen', ...PRODUCTION_CLI_ADAPTER_IDS] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export type ProviderTransport = 'local' | 'cli' | 'proofreader';
@@ -33,11 +34,6 @@ export const PROVIDER_CATALOG = [
 		id: item.id,
 		label: item.catalogLabel,
 		transport: 'cli' as const,
-	})),
-	...PROOFREADER_DEFS.map((item) => ({
-		id: item.id,
-		label: item.catalogLabel,
-		transport: 'proofreader' as const,
 	})),
 ] as const satisfies readonly ProviderInfo[];
 
@@ -67,7 +63,7 @@ export function isCliProvider(id: string): id is CliProviderId {
 }
 
 export function isProofreaderProvider(id: string): boolean {
-	return providerById(id)?.transport === 'proofreader';
+	return isProofreaderId(id);
 }
 
 function operationList(
@@ -199,14 +195,18 @@ export function providerRunGate(
 
 function omittedProviderOption(id: string): ProviderSelectionOption {
 	const catalog = providerById(id);
+	const proofreader = isProofreaderId(id);
+	const label = catalog?.label || (proofreader ? proofreaderLabel(id) : id);
 	return {
 		id,
-		label: catalog?.label || id,
+		label,
 		available: false,
 		reason: catalog
 			? `${catalog.label} availability is unknown until model status refreshes.`
-			: `Unknown provider: ${id}`,
-		pageImageOnly: catalog?.transport === 'proofreader',
+			: proofreader
+				? `${label} availability is unknown until model status refreshes.`
+				: `Unknown provider: ${id}`,
+		pageImageOnly: proofreader,
 	};
 }
 
@@ -219,7 +219,7 @@ export function toProviderSelectionOption(
 		try {
 			group = accessGroup(resolveAssistant(engine.id, '').row);
 		} catch {
-			group = catalog?.transport === 'proofreader' ? 'Proofreaders' : catalog?.transport === 'cli' ? 'CLI agents' : undefined;
+			group = isProofreaderId(engine.id) ? 'Proofreaders' : catalog?.transport === 'cli' ? 'CLI agents' : undefined;
 		}
 	}
 	return {
@@ -227,7 +227,7 @@ export function toProviderSelectionOption(
 		label: engine.label || catalog?.label || engine.id,
 		available: engine.available === true,
 		reason: engine.reason,
-		pageImageOnly: engine.pageImageOnly ?? (catalog?.transport === 'proofreader'),
+		pageImageOnly: engine.pageImageOnly ?? isProofreaderId(engine.id),
 		group,
 		operations: engine.operations as ProviderOperation[] | undefined,
 		estimates: engine.estimates,

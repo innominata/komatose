@@ -1,7 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { startPageProofread, startPageProofreadFollowUp, startChapterRawProofread } from '$lib/server/pageProofread';
-import { assertProofreaderGrant } from '$lib/server/proofreadService';
-import { isProofreaderId } from '$lib/proofreaders';
+import { assertProofreaderGrant, isKnownProofreaderEngine } from '$lib/server/proofreadService';
 import { fail, messageOf, requireEdit, requireEpisodeAccess, requireUser, statusOf } from '$lib/server/http';
 import { listImages } from '$lib/server/queries';
 import { listJobs } from '$lib/server/jobs';
@@ -31,8 +30,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     const { series, episode } = await requireEpisodeAccess(user, params.eid);
     requireEdit(user);
     const body = await request.json();
-    if (isProofreaderId(String(body?.model?.engine || ''))) {
-      assertProofreaderGrant(user, String(body.model.engine) as never);
+    if (isKnownProofreaderEngine(String(body?.model?.engine || ''))) {
+      assertProofreaderGrant(user, String(body.model.engine));
     }
     if (body?.scope === 'chapter') {
       if (body?.mode !== 'raw') return fail(400, 'Chapter page proofreading requires Raw mode');

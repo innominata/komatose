@@ -1,12 +1,11 @@
 import { probeModelConnection, modelHttpConfig } from './modelConnection';
-import { isProofreaderId } from '../proofreaders';
 import { accessGroup, allowedOperations, isOcrSpecialist, isTranslationSpecialist, rowAllowedForRole, rowHasOperation, visionEligible, type ModelRow } from '../modelRegistry';
 import type { ProviderOperation } from '../providerCatalog';
 import type { Role } from '../types';
 import { listRegistryRows } from './modelRegistryStore';
 import { cliReadiness, isCliToolId } from './cliDiscovery';
 import { hasRegisteredCliAdapter, registeredCliExecutable } from './cliTranslate';
-import { proofreaderStatus } from './proofreadService';
+import { proofreadServiceConfigured } from './proofreadService';
 import { missingApiKeyMessage } from './openaiHttp';
 import { installedLocalReviewModels } from './localReview';
 import { listTranslationModels } from './translationRuntime';
@@ -70,6 +69,7 @@ export async function registryPickerRows(role?: Role | null, operation?: Provide
 	const rows = listRegistryRows().filter((row) => rowAllowedForRole(row, role));
 	const out: RegistryPickerRow[] = [];
 	for (const row of rows) {
+		if (row.access === 'proofreader' && !proofreadServiceConfigured()) continue;
 		if (operation) {
 			const list = typeof operation === 'string' ? [operation] : [...operation];
 			const ok = list.some((item) => rowHasOperation(row, item));

@@ -1155,6 +1155,19 @@ test("unreadable page does not stop other chapter pages", async () => {
   );
 });
 
+test("a chapter run covers only the ticked pages", async () => {
+  const page = await seedChapter("chapter-ticked", 6);
+  sqlite.prepare(`INSERT INTO images(id,episode_id,filename,original_name,sort_order,width,height,created_at,updated_at,page_number,caption)
+    VALUES('unticked-page',?,'missing.png','missing.png',1,100,100,1,1,2,'missing')`).run(page.episode.id);
+  await assert.rejects(startDirector({ ...page, user, scope: "chapter", model: selected, imageIds: [] }), /Tick at least one page/);
+  const { runId, pageIds } = await startDirector({ ...page, user, scope: "chapter", model: selected, imageIds: [page.imageId] });
+  assert.deepEqual(pageIds, [page.imageId]);
+  await waitRun(runId);
+  const result = await directorOverviewAsync(page.episode.id, runId);
+  assert.equal(result.pages.find((p) => p.id === page.imageId)?.state, "passed");
+  assert.notEqual(result.pages.find((p) => p.id === "unticked-page")?.state, "unresolved", "the unticked page was not run");
+});
+
 test("a textless raw upload is visually checked and stays without human completion", async () => {
   const page = await seedChapter("blank-page", 6);
   sqlite.prepare("DELETE FROM lines WHERE episode_id=?").run(page.episode.id);

@@ -62,27 +62,48 @@ export function lastDeletion(episodeId: string) {
   return { id: row.id, label: row.label, count: (JSON.parse(row.payload) as Batch).lines.length, at: row.created_at };
 }
 
-/** Puts back the newest deleted batch (or `batchId`): rows, comments and suggestions. */
-export async function restoreDeletion(episodeId: string, batchId?: string) {
-  const row = (batchId
-    ? sqlite.prepare("SELECT * FROM deleted_regions WHERE episode_id=? AND id=?").get(episodeId, batchId)
-    : sqlite.prepare("SELECT * FROM deleted_regions WHERE episode_id=? ORDER BY created_at DESC LIMIT 1").get(episodeId)) as
-    | { id: string; label: string; payload: string }
-    | undefined;
-  if (!row) throw new WorkflowError("Nothing deleted to restore", 404);
+/** Pages with deleted regions that Ctrl+Z on that page can restore. */
+export function deletedRegionPages(episodeId: string): string[] {
+  const pages = new Set<string>();
+  for (const row of sqlite.prepare("SELECT payload FROM deleted_regions WHERE episode_id=?").all(episodeId) as { payload: string }[])
+    for (const line of (JSON.parse(row.payload) as Batch).lines)
+      if (typeof line.image_id === "string") pages.add(line.image_id);
+  return [...pages];
+}
+
+/**
+ * Puts back the newest deleted batch (or `batchId`): rows, comments and suggestions. With
+ * `imageId`, only the newest batch with regions on that page, and only those regions; the rest
+ * of the batch stays restorable from its own pages.
+ */
+export async function restoreDeletion(episodeId: string, batchId?: string, imageId?: string) {
+  const rows = (batchId
+    ? sqlite.prepare("SELECT * FROM deleted_regions WHERE episode_id=? AND id=?").all(episodeId, batchId)
+    : sqlite.prepare("SELECT * FROM deleted_regions WHERE episode_id=? ORDER BY created_at DESC").all(episodeId)) as
+    { id: string; label: string; payload: string }[];
+  const onPage = (line: Row) => !imageId || line.image_id === imageId;
+  const row = rows.find((r) => (JSON.parse(r.payload) as Batch).lines.some(onPage));
+  if (!row) throw new WorkflowError(imageId ? "Nothing deleted on this page to restore" : "Nothing deleted to restore", 404);
   const batch = JSON.parse(row.payload) as Batch;
+  const lines = batch.lines.filter(onPage);
+  const ids = new Set(lines.map((l) => l.id as string));
+  const rest: Batch = {
+    lines: batch.lines.filter((l) => !ids.has(l.id as string)),
+    comments: batch.comments.filter((c) => !ids.has(c.line_id as string)),
+    suggestions: batch.suggestions.filter((s) => !ids.has(s.line_id as string)),
+  };
   const pages = new Set((sqlite.prepare("SELECT id FROM images WHERE episode_id=?").all(episodeId) as { id: string }[]).map((r) => r.id));
   sqlite.transaction(() => {
-    for (const line of batch.lines) {
+    for (const line of lines) {
       // A region whose page was deleted since comes back unplaced rather than not at all.
       insert("lines", line.image_id && !pages.has(line.image_id as string) ? { ...line, image_id: null } : line);
     }
-    for (const c of batch.comments) insert("comments", c);
-    for (const s of batch.suggestions) insert("suggestions", s);
-    sqlite.prepare("DELETE FROM deleted_regions WHERE id=?").run(row.id);
+    for (const c of batch.comments) if (ids.has(c.line_id as string)) insert("comments", c);
+    for (const s of batch.suggestions) if (ids.has(s.line_id as string)) insert("suggestions", s);
+    if (rest.lines.length) sqlite.prepare("UPDATE deleted_regions SET payload=? WHERE id=?").run(JSON.stringify(rest), row.id);
+    else sqlite.prepare("DELETE FROM deleted_regions WHERE id=?").run(row.id);
     sqlite.prepare("UPDATE episodes SET revision=revision+1 WHERE id=?").run(episodeId);
   })();
-  const ids = new Set(batch.lines.map((l) => l.id as string));
   for (const line of (await listLines(episodeId)).filter((l) => ids.has(l.id))) broadcast(episodeId, { type: "line:upsert", line });
   return { ids: [...ids], label: row.label };
 }

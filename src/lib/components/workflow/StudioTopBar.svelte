@@ -95,7 +95,7 @@ function meterWidth(count: string | undefined) {
         <span class="num" aria-hidden="true">{index + 1}</span>
         <span class="lbl">{stage.label}</span>
         {#if width !== null}<span class="meter" aria-hidden="true"><i style={`width:${width}%`}></i></span>{/if}
-        <small aria-hidden="true" class:warn={/renumber|blocker/.test(counts[stage.label] ?? "")}>{counts[stage.label] ?? ""}</small>
+        <small aria-hidden="true" class:warn={/blocker/.test(counts[stage.label] ?? "")}>{counts[stage.label] ?? ""}</small>
       </button>
     {/each}
   </nav>

@@ -12,7 +12,7 @@ programs. It does not download models, sign in, or make paid calls.
 - **One** working translation backend (pick any):
   1. Local OpenAI-compatible HTTP (`GET {url}/models` must succeed)
   2. A remote OpenAI-compatible row (base URL + API-key **variable** in `.env`)
-  3. Grok, Codex, or Cursor **installed on the server OS**, then saved under
+  3. Grok, Codex, Cursor, or Claude Code **installed on the server OS**, then saved under
      **Admin → Setup → Command-line agents**
 
 Optional and **not** required to translate: Hayai, PaddleOCR-VL, Qwen3-VL, Hy-MT,
@@ -73,9 +73,9 @@ Imsbee, the proofreading service, Komatose GPU mode.
      variable filled in; **Check endpoint & list models** probes the endpoint
      before anything is saved. Search the returned model list, then add several
      at once. Put the secret in `.env` under the variable name stored on the row.
-   - **CLI** — install Grok, Codex, or Cursor on this machine (not in the
+   - **CLI** — install Grok, Codex, Cursor, or Claude Code on this machine (not in the
      browser), sign in as the server user, then **Add model → CLI agent**.
-     Environment `GROK_BIN` / `CODEX_BIN` / `CURSOR_BIN` still override a
+     Environment `GROK_BIN` / `CODEX_BIN` / `CURSOR_BIN` / `CLAUDE_BIN` still override a
      saved path.
    Visibility is per row (**Users can pick**) and nothing is deleted by hiding
    it.

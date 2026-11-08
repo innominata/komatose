@@ -24,10 +24,9 @@ export const GET: RequestHandler = async ({ locals }) => {
 			: new Set(readUserSettings(user.id).proofreaders);
 		const allowed = <T extends { id: string }>(list: T[]): T[] =>
 			granted === null ? list : list.filter((item) => !isProofreaderId(item.id) || granted.has(item.id));
-		const [allHosts, allRows] = await Promise.all([
-			engineReadiness(),
-			registryPickerRows(user.role),
-		]);
+		// Readiness syncs proofreader rows from the service before the picker reads them.
+		const allHosts = await engineReadiness();
+		const allRows = await registryPickerRows(user.role);
 		const hosts = allowed(allHosts);
 		const rows = allowed(allRows);
 		const registry = listRegistryRows();

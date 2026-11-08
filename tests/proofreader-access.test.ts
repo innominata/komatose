@@ -14,14 +14,19 @@ const { db } = await import('../src/lib/server/db');
 const { users } = await import('../src/lib/server/db/schema');
 const {
 	assertProofreaderGrant,
-	proofreadServiceConfigured,
+	readReportedProofreaders,
 } = await import('../src/lib/server/proofreadService');
 const {
 	readUserSettings,
 	saveUserProofreaders,
 	hasAnyProofreader,
 } = await import('../src/lib/server/userSettings');
-const { PROOFREADER_IDS, isProofreaderId, proofreaderOnlyMessage } = await import('../src/lib/proofreaders');
+const {
+	isProofreaderId,
+	noteProofreaderOptions,
+	proofreaderLabel,
+	proofreaderOnlyMessage,
+} = await import('../src/lib/proofreaders');
 
 after(() => rm(root, { recursive: true, force: true }));
 
@@ -32,18 +37,46 @@ await db.insert(users).values([
 ]);
 
 const engineIds = () => listTranslateEngines().map((engine) => engine.id);
-const configured = proofreadServiceConfigured();
 
-test('no service means no proofreader is ever offered', () => {
-	if (configured) {
-		assert.ok(engineIds().some(isProofreaderId), 'a configured service should offer proofreaders');
-		return;
-	}
+test('translate engines never include proofreaders; the service report is the list', () => {
 	assert.deepEqual(engineIds().filter(isProofreaderId), []);
 });
 
+test('the service report names the proofreaders, and missing ones are not invented', () => {
+	const reported = readReportedProofreaders({
+		proofreaders: [
+			{ id: 'night-shift', label: 'Night shift', ready: true, context: 'c1', reason: '' },
+			{ id: 'desk-b', name: 'Desk B', ready: true, context: '', reason: 'ready' },
+			{ id: 'proofreader-a', ready: false, context: '', reason: 'down' },
+			{ id: 'proofreader-a', ready: true, context: 'dup', reason: '' },
+			{ id: 'not a proofreader', ready: true },
+			{ id: 'qwen', ready: true },
+			{ id: 'claude', ready: true },
+			{ id: 'hayai-ocr-v2', ready: true },
+			{ id: '', ready: true },
+		],
+	});
+	assert.deepEqual(reported.map((item) => item.id), ['night-shift', 'desk-b', 'proofreader-a']);
+	assert.equal(reported.some((item) => item.id === 'proofreader-b'), false);
+	assert.equal(reported[0]?.label, 'Night shift');
+	assert.equal(reported[0]?.named, true);
+	assert.equal(reported[1]?.label, 'Desk B');
+	assert.equal(reported[1]?.named, true);
+	assert.equal(reported[2]?.label, 'Proofreader A');
+	assert.equal(reported[2]?.named, false);
+	assert.equal(reported[2]?.ready, false);
+	assert.equal(isProofreaderId('night-shift'), false);
+	noteProofreaderOptions(reported.map((item) => ({ id: item.id, label: item.label })));
+	assert.equal(isProofreaderId('night-shift'), true);
+	assert.equal(proofreaderLabel('night-shift'), 'Night shift');
+	assert.equal(proofreaderLabel('proofreader-a'), 'Proofreader A');
+	assert.equal(isProofreaderId('not-a-proofreader'), false);
+	assert.equal(isProofreaderId('qwen'), false);
+	assert.equal(isProofreaderId('hayai-ocr-v2'), false);
+});
+
 test('proofreaders are proofread-only, never a translation engine', () => {
-	for (const id of PROOFREADER_IDS) {
+	for (const id of ['proofreader-a', 'proofreader-b']) {
 		assert.equal(isProofreaderId(id), true);
 		assert.match(proofreaderOnlyMessage(id, 'translation'), /only for Proofread raw \+ typeset images/);
 	}

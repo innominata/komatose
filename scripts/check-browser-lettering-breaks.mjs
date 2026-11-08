@@ -39,6 +39,12 @@ try {
   await expect.poll(async () => (await state()).lines.find(l => l.id === line.id).body, { timeout: 10000 })
     .toBe("Wait,\nI can do this.\nReally?!\nWatch me...");
 
+  // Aa re-cases shouted lettering: sentence starts and I keep their capitals.
+  await box.fill("WAIT, I CAN DO THIS. REALLY?!");
+  await page.locator('[data-find="sentence-case"]').click();
+  await expect(box).toHaveValue("Wait, I can do this. Really?!");
+  await expect.poll(async () => (await state()).lines.find(l => l.id === line.id).body, { timeout: 10000 }).toBe("Wait, I can do this. Really?!");
+
   // Ctrl-click a space: that space becomes a line break.
   await box.fill("I can do this");
   const point = await box.evaluate((area) => {
@@ -100,8 +106,63 @@ try {
   await page.screenshot({ path: "/tmp/komatose-lettering-breaks.png" });
   // Without a selected region there is nothing to fit, so the buttons go away.
   await page.keyboard.press("Escape");
+
+  // Review's English box has the same Format button and Ctrl-click break.
+  const review = page.getByRole("navigation", { name: "Chapter workflow" }).getByRole("button", { name: "Review", exact: true });
+  await expect(async () => { await review.click(); await expect(review).toHaveClass(/active/); }).toPass();
+  await page.getByRole("button", { name: /^Region 1(,.*)?$/ }).dispatchEvent("click");
+  const reviewBox = page.locator(`#english-${line.id}`);
+  await reviewBox.fill('"Fine. Go on, then!"');
+  await reviewBox.locator("xpath=ancestor::div[contains(@class,'field')][1]").locator('[data-find="format-english"]').click();
+  await expect(reviewBox).toHaveValue("Fine.\nGo on,\nthen!");
+  await expect.poll(async () => (await state()).lines.find(l => l.id === line.id).body, { timeout: 10000 }).toBe("Fine.\nGo on,\nthen!");
+  await reviewBox.fill("GO ON. I'M HERE");
+  await reviewBox.locator("xpath=ancestor::div[contains(@class,'field')][1]").locator('[data-find="sentence-case"]').click();
+  await expect(reviewBox).toHaveValue("Go on. I'm here");
+  await reviewBox.fill("I can do this");
+  const reviewPoint = await reviewBox.evaluate((area) => {
+    const style = getComputedStyle(area), mirror = document.createElement("div");
+    for (const key of ["font", "padding", "border", "width", "lineHeight", "letterSpacing", "whiteSpace", "wordWrap"]) mirror.style[key] = style[key];
+    mirror.style.position = "fixed"; mirror.style.visibility = "hidden"; mirror.style.whiteSpace = "pre-wrap";
+    const rect = area.getBoundingClientRect();
+    mirror.style.left = `${rect.left}px`; mirror.style.top = `${rect.top}px`;
+    mirror.textContent = "I can";
+    const mark = document.createElement("span"); mark.textContent = " "; mirror.append(mark);
+    document.body.append(mirror);
+    const r = mark.getBoundingClientRect(); mirror.remove();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await page.keyboard.down("Control");
+  await page.mouse.click(reviewPoint.x, reviewPoint.y);
+  await page.keyboard.up("Control");
+  await expect(reviewBox).toHaveValue("I can\ndo this");
+  await expect.poll(async () => (await state()).lines.find(l => l.id === line.id).body, { timeout: 10000 }).toBe("I can\ndo this");
+
+  // Corner handles keep a wide grab area: a drag starting 10 px off the corner still resizes.
+  const handle = page.getByRole("button", { name: "Resize region corner 3" });
+  const hb = await handle.boundingBox();
+  expect(hb.width).toBeGreaterThanOrEqual(26);
+  const boxBefore = (await state()).lines.find(l => l.id === line.id);
+  await page.mouse.move(hb.x + hb.width / 2 + 10, hb.y + hb.height / 2 + 10);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + hb.width / 2 + 40, hb.y + hb.height / 2 + 30, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await state()).lines.find(l => l.id === line.id).w, { timeout: 10000 }).toBeGreaterThan(boxBefore.w);
+
+  // A / D step through pages and W opens the next page not marked done; typing in a box does not.
+  const selectedPage = () => page.locator(".pages > button").evaluateAll(buttons => buttons.findIndex(b => b.classList.contains("selected")));
+  const startPage = await selectedPage();
+  await reviewBox.press("d");
+  expect(await selectedPage()).toBe(startPage);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("d");
+  await expect.poll(selectedPage).toBe(startPage + 1);
+  await page.keyboard.press("a");
+  await expect.poll(selectedPage).toBe(startPage);
+  await page.keyboard.press("w");
+  await expect.poll(selectedPage).not.toBe(startPage);
   expect(errors).toEqual([]);
-  console.log("Browser lettering breaks passed: Format breaks after punctuation and strips quotes; Ctrl-click a space breaks the line there; the rail's Auto buttons set region bounds and fit the bubble.");
+  console.log("Browser lettering breaks passed: Format breaks after punctuation and strips quotes; Ctrl-click a space breaks the line there; the rail's Auto buttons set region bounds and fit the bubble; Aa re-cases shouting; Review's English box formats, re-cases and breaks the same way; corner handles grab from 10 px away; A, D and W change pages.");
 } finally {
   await browser.close();
 }

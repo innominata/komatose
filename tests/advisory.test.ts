@@ -71,7 +71,7 @@ test('region-AI advisory forwards system, prompt, images, schema, model and canc
 
 test('a proofreader and unknown engines are rejected before region-AI advisory', async () => {
 	// An empty engine is "not chosen" and follows the operator's default; it is not unknown.
-	for (const engine of ['proofreader-a', 'unknown', 'claude']) {
+	for (const engine of ['proofreader-a', 'unknown']) {
 		const { calls, handlers } = trackers();
 		await assert.rejects(
 			runAdvisory(engine, opts, handlers),
@@ -81,6 +81,11 @@ test('a proofreader and unknown engines are rejected before region-AI advisory',
 		);
 		assert.equal(calls.length, 0);
 	}
+	const claude = trackers();
+	await runAdvisory('claude', opts, claude.handlers);
+	assert.equal(claude.calls.length, 1);
+	assert.equal(claude.calls[0].kind, 'cli');
+	assert.equal(claude.calls[0].engine, 'claude');
 });
 
 test('region-AI advisory runtime errors do not fall back to the other implementation', async () => {

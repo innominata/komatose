@@ -2,8 +2,8 @@ import { json } from '@sveltejs/kit';
 import {
 	assertProofreaderGrant,
 	grantedProofreaders,
-	parseProofreaderId,
 	proofreaderStatus,
+	requireProofreaderId,
 	startProofreader
 } from '$lib/server/proofreadService';
 import { fail, messageOf, requireUser, statusOf } from '$lib/server/http';
@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		const user = requireUser(locals.user);
 		const requested = url.searchParams.get('engine');
 		if (!requested) return json({ ok: true, items: await grantedProofreaders(user) });
-		const engine = parseProofreaderId(requested);
+		const engine = await requireProofreaderId(requested);
 		assertProofreaderGrant(user, engine);
 		return json({ ok: true, ...(await proofreaderStatus(engine)) });
 	} catch (e) {
@@ -27,7 +27,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const user = requireUser(locals.user);
 		const body = await request.json().catch(() => ({}));
 		if (body?.action && body.action !== 'start') return fail(400, 'Unknown proofreader action');
-		const engine = parseProofreaderId(body?.engine);
+		const engine = await requireProofreaderId(body?.engine);
 		assertProofreaderGrant(user, engine);
 		return json({ ok: true, ...(await startProofreader(engine)) });
 	} catch (e) {

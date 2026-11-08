@@ -24,6 +24,7 @@ import { recordSample } from '../modelEstimate';
 import { sanitizePortableUrl } from '../modelPack';
 import { recoverPackApply, writeAtomicJson } from './modelPackJournal';
 import { toHomeLaunch } from './homePath';
+import { noteProofreaderOptions } from '../proofreaders';
 
 /** Resolved at call time so tests can isolate SCAN_DATA_DIR after import. */
 export function modelsOverlayPath(): string {
@@ -101,14 +102,24 @@ function readModelOverlayRaw(): ModelOverlay | null {
 	}
 }
 
+function publishRows(rows: ModelRow[]): ModelRow[] {
+	const packaged = packageRows(rows);
+	noteProofreaderOptions(
+		packaged
+			.filter((row) => row.access === 'proofreader')
+			.map((row) => ({ id: row.id, label: row.name })),
+	);
+	return packaged;
+}
+
 export function listRegistryRows(force = false): ModelRow[] {
 	if (recoverPackApply()) invalidateRegistryCache();
 	const path = overlayPath();
-	if (!force && cache?.path === path) return packageRows(cache.rows);
+	if (!force && cache?.path === path) return publishRows(cache.rows);
 	const overlay = readModelOverlay();
 	const rows = mergeRegistry(overlay);
 	cache = { path, overlay, rows };
-	return packageRows(rows);
+	return publishRows(rows);
 }
 
 export function invalidateRegistryCache() {

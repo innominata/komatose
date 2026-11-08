@@ -15,6 +15,33 @@ import koharu_mask
 
 
 class KoharuMask(unittest.TestCase):
+    def test_tile_spans_overlap_and_end_flush(self):
+        self.assertEqual(koharu_mask.tile_spans(800, 1024), [(0, 800)])
+        spans = koharu_mask.tile_spans(6490, 1024)
+        self.assertEqual(spans[0], (0, 1024))
+        self.assertEqual(spans[-1], (6490 - 1024, 6490))
+        for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+            self.assertGreaterEqual(a1 - b0, 256)  # neighbours overlap by at least a quarter tile
+
+    def test_long_strip_is_read_in_tiles_at_full_resolution(self):
+        calls = []
+        def fake(image, device):
+            calls.append(image.shape[:2])
+            return np.full(image.shape[:2], 255, np.uint8)
+        with patch.object(koharu_mask, '_predict', side_effect=fake):
+            mask = koharu_mask._predict_tiled(np.zeros((6490, 690, 3), np.uint8), 'cpu')
+            self.assertEqual(mask.shape, (6490, 690))
+            self.assertTrue(np.all(mask == 255))
+            # Each tile is 690 wide and 1024 tall: the model reads it unshrunk.
+            self.assertTrue(all(shape == (1024, 690) for shape in calls))
+            self.assertGreater(len(calls), 6)
+            calls.clear()
+            koharu_mask._predict_tiled(np.zeros((1400, 1000, 3), np.uint8), 'cpu')
+            self.assertEqual(calls, [(1400, 1000)])  # an ordinary page stays one pass
+            calls.clear()
+            koharu_mask._predict_tiled(np.zeros((600, 3000, 3), np.uint8), 'cpu')
+            self.assertTrue(all(shape == (600, 1024) for shape in calls))
+
     def test_resolve_engine_respects_explicit_ctd(self):
         with patch.object(koharu_mask, 'installed', return_value=True):
             self.assertEqual(lettering.resolve_engine('ctd'), 'ctd')

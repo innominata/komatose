@@ -199,7 +199,8 @@ test('bulk deletion removes only selected pages and their dependent metadata', a
   assert.equal(getDoc(`region:${id}-l0`, {}).revision, 0);
   assert.equal(db.select().from(comments).where(eq(comments.lineId, `${id}-l0`)).all().length, 0);
   assert.equal(sqlite.prepare('SELECT 1 FROM suggestions WHERE line_id=?').get(`${id}-l0`), undefined);
-  assert.equal(db.select().from(episodes).where(eq(episodes.id, id)).get()!.numberingStale, true);
+  assert.equal(db.select().from(episodes).where(eq(episodes.id, id)).get()!.numberingStale, false);
+  assert.deepEqual(db.select().from(images).where(eq(images.episodeId, id)).all().map(p => p.pageNumber), [1]);
   assert.deepEqual((await readUndoLog(s.slug, id)).map(({ undoId: _undoId, ...op }) => op), [
     { type: 'pixels', imageId: `${id}-p1` },
     { type: 'reorder', order: [{ id: `${id}-p1`, sortOrder: 1 }] },

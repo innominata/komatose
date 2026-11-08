@@ -47,9 +47,12 @@ function sampleArgs(id: ImageEditModelId) {
   // lettering survives; the removal mask decides what is repainted instead.
   const denoise = tuning('DENOISE', model.sampling.denoise);
   args.strength = Math.min(1, Math.max(0.05, denoise));
-  // Fixed seeds make cleaning runs reproducible for benchmarking; -1 varies each run.
-  const seed = Number(process.env.SCAN_IMAGE_SEED);
-  if (Number.isInteger(seed)) args.seed = seed;
+  // Fixed seeds make cleaning runs reproducible for benchmarking. Otherwise every request
+  // gets a fresh seed: sd-server falls back to seed 42 when none is sent, so a crop the
+  // 8-step Lightning sampler garbles at that seed garbled again on every retry.
+  const raw = (process.env.SCAN_IMAGE_SEED || '').trim();
+  const fixed = raw ? Number(raw) : NaN;
+  args.seed = Number.isInteger(fixed) && fixed >= 0 ? fixed : Math.floor(Math.random() * 2 ** 31);
   // The OpenAI edits route stores this path as-is. It does not join --lora-model-dir,
   // so a bare filename is opened from the process directory and the LoRA is skipped.
   // Lightning's 8-step LoRA is part of that model; SCAN_IMAGE_EDIT_LIGHTNING_LORAS

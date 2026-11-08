@@ -10,6 +10,7 @@
   import SfxHints from "../SfxHints.svelte";
   import { sfxEnglishChoices } from "$lib/sfx";
   import GlossaryChips from "../GlossaryChips.svelte";
+  import { breakAtSpace, formatLettering, glossaryNames, sentenceCase } from "$lib/letteringBreaks";
   import CharacterEntryPanel from "../CharacterEntryPanel.svelte";
   import {
     type GlossaryTerm,
@@ -253,6 +254,7 @@
     </div>
     <textarea
       aria-label={sourceLabel}
+      data-undo-key={`source-${line.id}`}
       rows="2"
       lang={japanese ? "ja" : "ko"}
       placeholder="Type or pick a reading"
@@ -289,6 +291,19 @@
   <div class="field">
     <div class="field-head">
       <label class="flabel" for={`english-${line.id}`}>English</label>
+      <span class="head-actions">
+      <button class="small" data-find="sentence-case" aria-label="Sentence case" disabled={!canEdit || !line.body.trim()}
+        title="Re-case the text: lowercase everything except the start of each sentence, the word I and glossary names."
+        onclick={() => {
+          const next = sentenceCase(line.body, glossaryNames(glossary));
+          if (next !== line.body) onedit(line, { body: next });
+        }}><i class="bi bi-type" aria-hidden="true"></i> Aa</button>
+      <button class="small" data-find="format-english" disabled={!canEdit || !line.body.trim()}
+        title="Break the line after every , . ? ! and remove double quotes and extra spaces. Tip: Ctrl-click a space in the text to break there."
+        onclick={() => {
+          const next = formatLettering(line.body);
+          if (next !== line.body) onedit(line, { body: next });
+        }}><i class="bi bi-text-paragraph" aria-hidden="true"></i> Format</button>
       <button
         class="small"
         disabled={!canEdit || busy || aiRunning || line.sourceState === "ignored" || !(line.source ?? "").trim()}
@@ -296,6 +311,7 @@
         title={(line.source ?? "").trim() ? undefined : "Needs source first"}
         onclick={() => onrevise(line)}><i class="bi bi-magic" aria-hidden="true"></i> Review Translation</button
       >
+      </span>
     </div>
     <textarea
       id={`english-${line.id}`}
@@ -304,7 +320,19 @@
       placeholder={(line.source ?? "").trim() ? "Translate, or type English" : "Needs source first"}
       value={line.body}
       disabled={!canEdit}
+      title="Ctrl-click a space to break the line there"
       oninput={(e) => onedit(line, { body: e.currentTarget.value })}
+      onclick={(e) => {
+        // Ctrl-click (Cmd-click on a Mac) a space: break the line there, dropping the space.
+        if (!(e.ctrlKey || e.metaKey) || !canEdit) return;
+        const area = e.currentTarget;
+        const result = breakAtSpace(area.value, area.selectionStart);
+        if (!result) return;
+        e.preventDefault();
+        area.value = result.text;
+        area.setSelectionRange(result.caret, result.caret);
+        onedit(line, { body: result.text });
+      }}
     ></textarea>
   </div>
   <div class="btn-row wrap">
@@ -359,6 +387,7 @@
   .alert.muted { background: var(--hud-hover); }
   .field { display: grid; gap: 5px; }
   .field-head { display: flex; align-items: center; justify-content: space-between; }
+  .head-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .flabel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--hud-muted); margin: 0; }
   .helpers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .kana-wrap { width: 100%; }

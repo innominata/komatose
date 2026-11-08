@@ -18,7 +18,7 @@
     },
     {
       title: "2 · Put them in order",
-      body: "Drag thumbnails to reorder. Tick checkboxes (Shift-click for a range) to delete pages or extract them to a new chapter. If a banner says numbering is stale, Renumber before exporting.",
+      body: "Drag thumbnails to reorder. Tick checkboxes (Shift-click for a range) to delete pages or extract them to a new chapter. Page numbers follow the order automatically.",
       go: { stage: "prepare", prepView: "grid" },
       find: "organize",
     },

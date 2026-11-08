@@ -89,22 +89,37 @@ It is **not** registered in production. `createExampleAdapter` plus
 `runCliAdapterContract('example', …)` in
 `tests/cli-adapter-contract.test.ts` is the template for a new factory.
 
+## Claude Code
+
+`src/lib/server/cliAdapters/claude.ts` runs `claude -p` with stream-json input and
+output. The prompt and any images go in as one user message on stdin (images
+are base64 image blocks, not files), with `--tools ""`, `--strict-mcp-config`,
+`--disable-slash-commands`, `--no-session-persistence` and a short replacement
+`--system-prompt`. The reply is the final `result` event; an error result
+(including "Not logged in") is reported as-is, never parsed as JSON. It
+implements advisory, translate, read, review and describe; not cleaning.
+Claude Code has no model-list command, so the catalog is its aliases (`sonnet`,
+`opus`, `haiku`, `fable`); a full model id typed on a row is passed through.
+`CLAUDE_MODEL` sets the default; empty uses the CLI's own default. It runs
+under the server user's Claude Code login or `ANTHROPIC_API_KEY`.
+
 ## Discovery
 
-`src/lib/server/cliDiscovery.ts` resolves Grok, Codex and Cursor executables for
+`src/lib/server/cliDiscovery.ts` resolves Grok, Codex, Cursor and Claude Code executables for
 both readiness (`GET /api/ai/engines`) and execution. Tests inject environment,
 path/platform semantics and a fake filesystem; changing `process.platform` alone
 does not switch Node's path implementation.
 
 Precedence:
 
-1. Nonempty environment override: `GROK_BIN`, `CODEX_BIN`, `CURSOR_BIN`.
+1. Nonempty environment override: `GROK_BIN`, `CODEX_BIN`, `CURSOR_BIN`, `CLAUDE_BIN`.
    `CURSOR_AGENT_BIN` is used only when `CURSOR_BIN` is unset or empty.
 2. Admin-saved executable in `SCAN_DATA_DIR/cli-tools.json` (Setup →
    Command-line agents). Missing file means this step is skipped.
-3. The provider command on `PATH` (`grok`, `codex`, `cursor-agent`).
+3. The provider command on `PATH` (`grok`, `codex`, `cursor-agent`, `claude`).
 4. Known install locations under the resolved home directory
-   (`~/.grok/bin/grok`, `~/.local/bin/<command>`, `~/bin/<command>`).
+   (`~/.grok/bin/grok`, `~/.local/bin/<command>`, `~/bin/<command>`; Claude Code
+   also `~/.claude/local/claude` and mise's `~/.local/share/mise/installs/claude/latest/claude`).
 5. Codex only: an optional bundled helper from a Cursor `openai.chatgpt-*`
    extension, and only the verified `linux-x86_64` layout on linux x64.
 
@@ -117,7 +132,7 @@ not fall through. Clearing a saved location restores automatic discovery unless
 an environment override is still set. Do not mutate `process.env` to implement
 this. Malformed `cli-tools.json` is an error for every tool; it is never ignored
 so a different executable can run. Unknown tool ids and non-string values
-(including numbers) are rejected. Only `grok`, `codex`, and `cursor` may appear.
+(including numbers) are rejected. Only `grok`, `codex`, `cursor`, and `claude` may appear.
 
 Admin **Check discovery** only inspects this resolver. It does not spawn the CLI,
 refresh catalogs, sign in, or call a model. **Test** on a named model row is the
@@ -189,7 +204,7 @@ tests before switching callers. Do not claim an operation is supported merely
 because the underlying model might support it.
 
 Run `npm run test:cli-adapter-contract` for the reusable suite (example, Grok,
-Codex, Cursor). Run `npm run test:cli-adapters` for that suite plus
+Codex, Cursor, Claude Code). Run `npm run test:cli-adapters` for that suite plus
 adapter-specific transport tests.
 Run `npm run test:cli-discovery` for executable discovery, override diagnostics
 and PATH/home portability (injected filesystems; no real agent accounts).

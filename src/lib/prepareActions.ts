@@ -1,6 +1,7 @@
 import type { ImageRow } from './types';
 
-export type PageUndoSummary = { token: string; label: string; confirmation: string };
+/** `imageIds` are the pages the undo changes, so Ctrl+Z can keep to the page on screen. */
+export type PageUndoSummary = { token: string; label: string; confirmation: string; imageIds: string[] };
 
 export function preparePageLabel(id: string, images: readonly ImageRow[]): string {
   const index = images.findIndex(image => image.id === id);

@@ -32,7 +32,7 @@ export const PAGE_PROOFREAD_SCHEMA = {
 export const PAGE_PROOFREAD_FOLLOWUP_SYSTEM = `You are a Japanese/Korean scanlation proofreader and lettering editor continuing a conversation about the same page. The editor is asking a follow-up. Answer the follow-up directly. Quote the relevant lettering when you refer to it. Do not edit files or use tools. Return JSON with one critique string, using readable paragraphs and bullets.`;
 export function rawProofreadSystem(lang: OcrLang): string {
   const language = lang === 'korean' ? 'Korean' : 'Japanese';
-  return `You are a ${language} scanlation proofreader. Read the raw page image and give BOTH the exact original ${language} source and your complete recommended English translation for EVERY bubble, caption, sign, sound effect, ellipsis and punctuation region, in reading order. Include supplied region IDs when available and describe their positions. Do not omit silent bubbles or stylized sound effects. Note uncertain readings and speakers when clear. Refer to panel and bubble positions. Do not claim unreadable details as facts. The editor will use your reply manually. Return JSON with one critique string, using readable paragraphs and bullets.`;
+  return `You are a ${language} scanlation proofreader. Read the raw page image and give the exact ${language} source and a natural localized English line for every piece of lettering, including SFX. Be concise: follow the requested line format exactly, with no commentary, positions, speakers or headings beyond it. Do not claim unreadable details as facts. Return JSON with one critique string.`;
 }
 
 const runtime = globalThis as typeof globalThis & {
@@ -57,6 +57,21 @@ export function proofreadCursor() {
 
 export function proofreaderCursor(engine: string) {
   return isProofreaderId(engine) ? cursors[engine] : undefined;
+}
+
+/**
+ * Ids that start with `proofreader-` are the service's names, but a saved model
+ * can reuse that shape (a local row called `proofreader-fixture`). Only a row
+ * the registry marks as a proofreader talks to the proofreading service.
+ */
+function serviceProofreader(engine: string): ProofreaderId | null {
+  if (!isProofreaderId(engine)) return null;
+  try {
+    if (resolveLiveAssistant(engine).row.access !== 'proofreader') return null;
+  } catch {
+    /* No row to contradict the id, so the service still owns it. */
+  }
+  return engine;
 }
 
 export function rememberProofread(engine: ProofreaderId, imageId: string, conversation = "") {
@@ -87,8 +102,22 @@ function runningProofread(episodeId: string, imageId: string) {
 
 async function pageProofreadApiPrompt(seriesId: string, episodeId: string, imageId: string, pageLabel: string, mode: 'raw' | 'critique' = 'critique') {
   if (mode === 'raw') {
-    const regions=(await listLines(episodeId)).filter(line=>line.imageId===imageId && line.sourceState!=='ignored').map(line=>({id:line.id,box:[line.x,line.y,line.w,line.h]}));
-    return `${pageLabel}. Image 1: RAW source. Give the exact original-language source AND a complete recommended English translation for every text region, including SFX, ellipses and punctuation. Use these IDs and normalized page boxes where they match; also identify any lettering outside them. Read the image, not an old draft.\nRegions: ${JSON.stringify(regions)}`;
+    // Number regions as the canvas does (every region on the page, in sort order) so [3] here is region 3 there.
+    const regions=(await listLines(episodeId)).filter(line=>line.imageId===imageId)
+      .map((line,i)=>({n:i+1,box:[line.x,line.y,line.w,line.h],ignored:line.sourceState==='ignored'}))
+      .filter(r=>!r.ignored).map(({n,box})=>({n,box}));
+    return `${pageLabel}. Image 1: RAW source. Read the image, not an old draft.
+Regions (n = region number; box = normalized [x, y, w, h]): ${JSON.stringify(regions)}
+
+Reply in exactly this format, plain text, nothing else:
+[n] source | Localized English
+- One line per region that contains lettering, in region-number order. Join a bubble's lines with spaces. Keep the source's punctuation (ellipses, !, ?).
+- A region with no lettering: [n] (none)
+Then, if there is lettering outside every region (including SFX), add:
+Unboxed:
+[where on the page] source | Localized English
+Then, only if you are unsure of any reading, add:
+Uncertain: [n or where] — what is unclear, in one sentence.`;
   }
   const pack = await loadChapterPack({ seriesId, episodeId });
   const pageScript = formatChapterScript(pack.items.filter((_, i) => pack.targets[i].imageId === imageId));
@@ -135,7 +164,7 @@ export function runPageProofread(opts: { series: Series; episode: Episode; image
   model?: TaskEngine; snapshot?: PageProofreadSnapshot; mode?: 'raw' | 'critique' }) {
   const model = validateModel(opts.model ?? regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi).proofread);
   const mode = opts.mode === 'raw' ? 'raw' : 'critique';
-  if (mode === 'raw' && !isProofreaderId(model.engine)) {
+  if (mode === 'raw' && !serviceProofreader(model.engine)) {
     const row = resolveLiveAssistant(model.engine, model.model).row;
     if (!rowHasOperation(row, 'vision') || !rowHasOperation(row, 'proofreadEnglish'))
       throw new WorkflowError('Proofread Raw needs a vision model that can proofread English.');
@@ -159,7 +188,7 @@ export function runPageProofread(opts: { series: Series; episode: Episode; image
       const images = await jpegBuffers(mode === 'raw' ? [snapshot.raw] : [snapshot.raw, snapshot.typeset!]);
       const director = directorContext();
       signal.throwIfAborted();
-      const site = isProofreaderId(model.engine) ? model.engine : null;
+      const site = serviceProofreader(model.engine);
       const conversation = site
         ? (await proofreaderStatus(site)).context
         : '';
@@ -253,7 +282,7 @@ export async function startChapterRawProofread(opts: { series: Series; episode: 
     ? `All ${skipped} unfinished Review page${skipped === 1 ? ' already has' : 's already have'} a raw proofreading reply. Open a page's Replies tab, or proofread one page again from its Review toolbar.`
     : 'No unfinished Review pages with regions to proofread.', 400);
   const model = validateModel(opts.model ?? regionAiSettings(preferences(opts.episode.id, opts.series.id).regionAi).proofread);
-  if (!isProofreaderId(model.engine)) {
+  if (!serviceProofreader(model.engine)) {
     const row = resolveLiveAssistant(model.engine, model.model).row;
     if (!rowHasOperation(row, 'vision') || !rowHasOperation(row, 'proofreadEnglish'))
       throw new WorkflowError('Proofread Raw needs a vision model that can proofread English.');
@@ -344,7 +373,7 @@ export function startPageProofreadFollowUp(opts: {
           ? { raw: followUpHashes[0], typeset: followUpHashes[0], capturedAt: Date.now(), imageId, pageLabel: 'Follow-up', followUpImages: followUpHashes }
           : undefined;
       if (snapshot) updateJob(id, 'running', { snapshot, prompt });
-      const site = isProofreaderId(model.engine) ? model.engine : null;
+      const site = serviceProofreader(model.engine);
       const pastedJpeg = await jpegBuffers(followUpHashes);
       const serviceImages=opts.includeParentContext && parentSnapshot
         ? [...await jpegBuffers([parentSnapshot.raw]),...pastedJpeg] : pastedJpeg;

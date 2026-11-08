@@ -69,6 +69,12 @@ export function protectedResliceRanges(work: ResliceWork) {
       // The box and its saved lettering must stay on the same output page,
       // including lettering deliberately placed outside the box.
       const rowYs = layout?.rows.flatMap(row => [row.baseline - margin, row.baseline + margin]) ?? [];
+      // The detected bubble outline stays whole too: writing the new pages refuses a cut
+      // through it, so a cut planned there would only fail after the job started. Like that
+      // check, only the part on this page counts.
+      const bubble = saved.region.bubbleBounds;
+      const H = source.image.height;
+      if (bubble && bubble.y < 1 && bubble.y + bubble.h > 0) rowYs.push(Math.max(0, Math.min(H, bubble.y * H)), Math.max(0, Math.min(H, (bubble.y + bubble.h) * H)));
       return [{ id: line.id,
         top: source.top + Math.min(Math.min(...ys) * source.image.height - margin, ...rowYs),
         bottom: source.top + Math.max(Math.max(...ys) * source.image.height + margin, ...rowYs),

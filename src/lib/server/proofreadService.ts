@@ -7,7 +7,19 @@
  * reachable, proofreaders are reported unavailable and their tools stay hidden.
  */
 
-import { isProofreaderId, proofreaderLabel, proofreaderOnlyMessage, PROOFREADER_IDS, type ProofreaderId } from '../proofreaders';
+import {
+	isProofreaderId,
+	isProofreaderSlug,
+	noteProofreaderOptions,
+	proofreaderLabel,
+	proofreaderLabelFromId,
+	proofreaderOnlyMessage,
+	PROOFREADER_UNAVAILABLE_MESSAGE,
+	type ProofreaderId,
+} from '../proofreaders';
+import { isProductionCliAdapterId } from '../cliAdapterDefs';
+import { proofreaderModelRow, RESERVED_LEGACY_HOST_IDS, seedRow } from '../modelRegistry';
+import { listRegistryRows, upsertRegistryRow } from './modelRegistryStore';
 import { WorkflowError } from './workflowStore';
 import { storeAsset } from './workflowStore';
 import { directorAsset, directorContext, directorEvent } from './directorAudit';
@@ -15,10 +27,13 @@ import { readUserSettings } from './userSettings';
 
 export type ProofreaderStatus = {
 	id: ProofreaderId;
+	label: string;
 	ready: boolean;
 	context: string;
 	reason: string;
 };
+
+type ReportedProofreader = ProofreaderStatus & { named: boolean };
 
 const DEFAULT_URL = 'http://127.0.0.1:9231';
 const STATUS_TIMEOUT_MS = 2_000;
@@ -63,33 +78,84 @@ export async function proofreadServiceAvailable(): Promise<boolean> {
 	}
 }
 
-function toStatus(id: ProofreaderId, raw: Record<string, unknown>): ProofreaderStatus {
-	return {
-		id,
-		ready: raw.ready === true,
-		context: typeof raw.context === 'string' ? raw.context : '',
-		reason: String(raw.reason || ''),
-	};
+function acceptableProofreaderId(id: string): boolean {
+	if (!isProofreaderSlug(id)) return false;
+	if ((RESERVED_LEGACY_HOST_IDS as readonly string[]).includes(id)) return false;
+	if (isProductionCliAdapterId(id)) return false;
+	const seed = seedRow(id);
+	return !seed || seed.access === 'proofreader';
+}
+
+/** The service's `/v1/proofreaders` body, in the order it reported. */
+export function readReportedProofreaders(payload: unknown): ReportedProofreader[] {
+	const record = payload && typeof payload === 'object' ? (payload as { proofreaders?: unknown }) : {};
+	const rows = Array.isArray(record.proofreaders) ? record.proofreaders : [];
+	const out: ReportedProofreader[] = [];
+	const seen = new Set<string>();
+	for (const raw of rows) {
+		if (!raw || typeof raw !== 'object') continue;
+		const item = raw as Record<string, unknown>;
+		const id = String(item.id || '').trim();
+		if (!acceptableProofreaderId(id) || seen.has(id)) continue;
+		seen.add(id);
+		const explicit = String(item.label || item.name || '').trim();
+		out.push({
+			id,
+			label: explicit || proofreaderLabelFromId(id),
+			named: Boolean(explicit),
+			ready: item.ready === true,
+			context: typeof item.context === 'string' ? item.context : '',
+			reason: String(item.reason || ''),
+		});
+	}
+	return out;
+}
+
+function present(status: ReportedProofreader): ProofreaderStatus {
+	const { named: _named, ...rest } = status;
+	return rest;
+}
+
+/** Saved rows for options the service no longer reports stay addressable, but are not invented here. */
+async function rememberReported(reported: ReportedProofreader[]): Promise<void> {
+	const rows = listRegistryRows();
+	for (const item of reported) {
+		const existing = rows.find((row) => row.id === item.id);
+		if (existing && existing.access !== 'proofreader') continue;
+		if (!existing) {
+			upsertRegistryRow(proofreaderModelRow(item.id, item.label));
+			continue;
+		}
+		if (item.named && existing.name !== item.label) upsertRegistryRow({ ...existing, name: item.label });
+	}
+	noteProofreaderOptions(
+		reported.map((item) => ({ id: item.id, label: item.label })),
+		{ replace: true },
+	);
+	const reportedIds = new Set(reported.map((item) => item.id));
+	noteProofreaderOptions(
+		listRegistryRows()
+			.filter((row) => row.access === 'proofreader' && !reportedIds.has(row.id))
+			.map((row) => ({ id: row.id, label: row.name })),
+	);
 }
 
 export async function proofreaderStatus(id: ProofreaderId): Promise<ProofreaderStatus> {
-	const payload = await request<{ proofreaders?: Record<string, unknown>[] }>('/v1/proofreaders');
-	const rows = Array.isArray(payload.proofreaders) ? payload.proofreaders : [];
-	const match = rows.find((row) => String(row.id || '') === id);
-	if (!match) return { id, ready: false, context: '', reason: `${proofreaderLabel(id)} is not available.` };
-	return toStatus(id, match);
+	const label = proofreaderLabel(id);
+	if (!proofreadServiceConfigured()) {
+		return { id, label, ready: false, context: '', reason: PROOFREADER_UNAVAILABLE_MESSAGE };
+	}
+	const match = (await listProofreaderStatuses()).find((row) => row.id === id);
+	if (!match) return { id, label, ready: false, context: '', reason: `${label} is not available.` };
+	return match;
 }
 
-/** All proofreaders the service offers, in the application's declared order. */
+/** Proofreaders the service currently reports, in its order. */
 export async function listProofreaderStatuses(): Promise<ProofreaderStatus[]> {
-	const payload = await request<{ proofreaders?: Record<string, unknown>[] }>('/v1/proofreaders');
-	const rows = Array.isArray(payload.proofreaders) ? payload.proofreaders : [];
-	return PROOFREADER_IDS.map((id) => {
-		const match = rows.find((row) => String(row.id || '') === id);
-		return match
-			? toStatus(id, match)
-			: { id, ready: false, context: '', reason: `${proofreaderLabel(id)} is not available.` };
-	});
+	const payload = await request<{ proofreaders?: unknown }>('/v1/proofreaders');
+	const reported = readReportedProofreaders(payload);
+	await rememberReported(reported);
+	return reported.map(present);
 }
 
 export async function startProofreader(id: ProofreaderId): Promise<ProofreaderStatus> {
@@ -98,7 +164,15 @@ export async function startProofreader(id: ProofreaderId): Promise<ProofreaderSt
 		{ method: 'POST', body: JSON.stringify({ proofreader: id }) },
 		30_000,
 	);
-	return toStatus(id, payload.proofreader || {});
+	const raw = payload.proofreader || {};
+	const explicit = String(raw.label || raw.name || '').trim();
+	return {
+		id,
+		label: explicit || proofreaderLabel(id),
+		ready: raw.ready === true,
+		context: typeof raw.context === 'string' ? raw.context : '',
+		reason: String(raw.reason || ''),
+	};
 }
 
 export type ProofreadServiceMode = 'critique' | 'raw';
@@ -142,15 +216,26 @@ export async function proofreadWithService(opts: {
 	};
 }
 
-/** Parse a requested proofreader id, falling back to the first one. */
-export function parseProofreaderId(raw: unknown): ProofreaderId {
+/** True for a reported proofreader, a saved proofreader row, or a `proofreader-*` id. */
+export function isKnownProofreaderEngine(id: string): boolean {
+	if (isProofreaderId(id)) return true;
+	return listRegistryRows().some((row) => row.id === id && row.access === 'proofreader');
+}
+
+/** A requested id. Does not substitute a different proofreader. */
+export async function requireProofreaderId(raw: unknown): Promise<ProofreaderId> {
 	const value = String(raw || '').trim();
-	return isProofreaderId(value) ? value : PROOFREADER_IDS[0];
+	if (!isProofreaderSlug(value)) throw new WorkflowError(`Unknown proofreader: ${value || '(none)'}`);
+	if (isKnownProofreaderEngine(value)) return value;
+	if (!proofreadServiceConfigured()) throw new WorkflowError(`Unknown proofreader: ${value}`);
+	const reported = await listProofreaderStatuses();
+	if (!reported.some((item) => item.id === value)) throw new WorkflowError(`Unknown proofreader: ${value}`);
+	return value;
 }
 
 export function assertProofreaderIdOrThrow(raw: unknown): ProofreaderId {
 	const value = String(raw || '').trim();
-	if (!isProofreaderId(value)) throw new WorkflowError(`Unknown proofreader: ${value || '(none)'}`);
+	if (!isKnownProofreaderEngine(value)) throw new WorkflowError(`Unknown proofreader: ${value || '(none)'}`);
 	return value;
 }
 
@@ -174,16 +259,18 @@ export function assertProofreaderGrant(
 	throw new WorkflowError(`You do not have access to ${proofreaderLabel(id)}`, 403);
 }
 
-/** The proofreaders a user may use, filtered to those the service reports ready. */
+/** The proofreaders a user may use, limited to what the service currently reports. */
 export async function grantedProofreaders(
 	user: { id: string; role?: string | null } | null | undefined,
 ): Promise<ProofreaderStatus[]> {
-	const allowed = user?.role === 'admin'
-		? [...PROOFREADER_IDS]
-		: user
-			? readUserSettings(user.id).proofreaders
-			: [];
-	if (!allowed.length) return [];
-	const all = await listProofreaderStatuses();
+	if (!user || !proofreadServiceConfigured()) return [];
+	let all: ProofreaderStatus[] = [];
+	try {
+		all = await listProofreaderStatuses();
+	} catch {
+		return [];
+	}
+	if (user.role === 'admin') return all;
+	const allowed = readUserSettings(user.id).proofreaders;
 	return all.filter((item) => allowed.includes(item.id));
 }

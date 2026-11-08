@@ -34,8 +34,7 @@ export const DEFAULT_ENGINE_MODELS: Record<string, string> = {
 	grok: '',
 	codex: '',
 	cursor: '',
-	'proofreader-a': '',
-	'proofreader-b': ''
+	claude: ''
 };
 
 export function sanitizeModelId(raw: unknown): string {
@@ -64,8 +63,7 @@ export const FALLBACK_ENGINE_MODELS: Record<string, EngineModelOption[]> = {
 	grok: [],
 	codex: [],
 	cursor: [],
-	'proofreader-a': [],
-	'proofreader-b': []
+	claude: []
 };
 
 export function hydrateTaskEngines(stored: unknown, legacyEngine?: string | null): TaskEngineMap {

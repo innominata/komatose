@@ -25,8 +25,7 @@ import { cancelDescribePages } from './pageEdit';
 import { startAiTranscribe, cancelAiTranslate, startRegionOcr, cancelRegionOcr } from './aiTranslate';
 import { runPageProofread, startPageProofreadFollowUp, cancelPageProofread } from './pageProofread';
 import { capturePageImages } from './pageImages';
-import { isProofreaderId } from '../proofreaders';
-import { assertProofreaderGrant } from './proofreadService';
+import { assertProofreaderGrant, isKnownProofreaderEngine } from './proofreadService';
 import { type RegionData } from '../workflow';
 
 type Scope = 'page' | 'chapter';
@@ -229,7 +228,9 @@ export function directorOverview(episodeId: string, runId?: string, after = 0) {
 }
 
 export async function startDirector(opts: {series:Series;episode:Episode;user:PublicUser;scope:Scope;imageId?:string;
-  model:TaskEngine;recheckAll?:boolean;retryBlocked?:boolean;policy?:Partial<DirectorPolicy>;tasks?:DirectorTask[]}) {
+  model:TaskEngine;recheckAll?:boolean;retryBlocked?:boolean;policy?:Partial<DirectorPolicy>;tasks?:DirectorTask[];
+  /** Chapter scope only: run on just these story pages (the panel's ticked pages). */
+  imageIds?:string[]}) {
   if (!opts.model || typeof opts.model.engine!=='string' || typeof opts.model.model!=='string')
     throw new WorkflowError('Choose a chat and vision model for Director',400);
   if (directorLocked(opts.episode.id)) throw new WorkflowError('Director is already running on this chapter',409);
@@ -249,9 +250,13 @@ export async function startDirector(opts: {series:Series;episode:Episode;user:Pu
   // A passed page that later went stale (edits, settings or a Director update) is still
   // passed for a chapter run: only Recheck all or resetting the page reruns it.
   const done = (id:string) => status.get(id)==='passed' || status.get(id)==='stale';
+  const chosen = opts.scope==='chapter' && opts.imageIds ? new Set(opts.imageIds) : null;
+  if (chosen && !story.some(image => chosen.has(image.id as string))) throw new WorkflowError('Tick at least one page to run Director on',400);
   const ids = opts.scope==='page' ? [opts.imageId!] : story.map(image => image.id as string)
+    .filter(id => !chosen || chosen.has(id))
     .filter(id => opts.retryBlocked ? status.get(id)==='unresolved' : opts.recheckAll || !fullDirectorTasks(policy.tasks) || !done(id));
-  if (!ids.length) throw new WorkflowError('All chapter pages already passed Director. Use Recheck all to rerun them.',400);
+  if (!ids.length) throw new WorkflowError(opts.retryBlocked ? 'No ticked page is blocked.' :
+    `All ${chosen?'ticked':'chapter'} pages already passed Director. Use Recheck all to rerun them.`,400);
   if(directorLocked(opts.episode.id)) throw new WorkflowError('Director is already running on this chapter',409);
   const id = createJob(opts.episode.id,'director',{scope:opts.scope,imageIds:ids,engine:opts.model.engine,model:opts.model.model});
   const now = Date.now();
@@ -338,7 +343,7 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       for(const model of candidates) {
         control.abort.signal.throwIfAborted();
         try {
-          if(isProofreaderId(model.engine)) assertProofreaderGrant(user,model.engine);
+          if(isKnownProofreaderEngine(model.engine)) assertProofreaderGrant(user,model.engine);
           return await proofread({...run,proofreader:JSON.stringify(model)},series,episode,imageId,control,mode,capture);
         } catch(error) {control.abort.signal.throwIfAborted();last=error;}
       }
@@ -464,7 +469,7 @@ function automationContext(run:Run,series:Series,episode:Episode,user:PublicUser
       }
       if(savedOnly || !policy.tasks.includes('proofread-followups')) throw new WorkflowError(`Region ${line.id}: the saved proofread could not resolve this region. Left for manual review; no proofreader follow-up was requested.`);
       const engine=String(saved.payload.engine||'');
-      if(isProofreaderId(engine)) assertProofreaderGrant(user,engine);
+      if(isKnownProofreaderEngine(engine)) assertProofreaderGrant(user,engine);
       const cropHash=await storeAsset(crop);directorAsset(run.id,cropHash);
       directorEvent(run.id,episode.id,imageId,'proofreader:question',{parentJobId:saved.id,lineId:line.id,prompt,crop:cropHash});
       const started=startPageProofreadFollowUp({series,episode,parentJobId:saved.id,prompt,images:[crop],includeParentContext:true});
@@ -511,7 +516,7 @@ export async function directorPreflight(series:Series,episode:Episode,user:Publi
   if(model) check('all',()=>{const row=resolveLiveAssistant(model.engine,model.model).row;if(row.disabled||!rowHasOperation(row,'director')) throw new Error('Select a tested Director model');});
   const proofreader=regionAiSettings(preferences(episode.id,series.id).regionAi).proofread;
   if(policy.tasks.some(task=>['request-raw','proofread-followups','proof'].includes(task))) check('check',()=>{
-    if(isProofreaderId(proofreader.engine)) assertProofreaderGrant(user,proofreader.engine);
+    if(isKnownProofreaderEngine(proofreader.engine)) assertProofreaderGrant(user,proofreader.engine);
     else {const row=resolveLiveAssistant(proofreader.engine,proofreader.model).row;if(row.disabled||!rowHasOperation(row,'pageImageProofread')) throw new Error('Configure a page image proofreader');}
   });
   if(policy.tasks.includes('typeset') && !listFonts(series.id).length) issues.push({stage:'typeset',message:'Upload a series font before lettering can be fitted'});

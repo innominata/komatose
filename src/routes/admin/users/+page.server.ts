@@ -14,7 +14,9 @@ import {
 import { listAllUserActivity } from '$lib/server/activity';
 import { SIGNED_IN_MS } from '$lib/server/signedIn';
 import { createUser, destroyUserSessions, SESSION_COOKIE, setPassword } from '$lib/server/auth';
-import { ALL_PROOFREADER_IDS, readUserSettings, saveUserProofreaders } from '$lib/server/userSettings';
+import { readUserSettings, saveUserProofreaders } from '$lib/server/userSettings';
+import { listProofreaderStatuses, proofreadServiceConfigured } from '$lib/server/proofreadService';
+import { proofreaderLabel } from '$lib/proofreaders';
 import { db } from '$lib/server/db';
 import { series, seriesMembers, users } from '$lib/server/db/schema';
 import { now } from '$lib/server/ids';
@@ -41,6 +43,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 		members.filter((m) => m.userId === actor.id).map((m) => m.seriesId)
 	);
 	const grantableSeries = allSeries.filter((s) => canGrantSeries(actor, s, actorSeriesIds));
+	let reported: { id: string; label: string }[] = [];
+	if (proofreadServiceConfigured()) {
+		try {
+			reported = (await listProofreaderStatuses()).map((item) => ({
+				id: item.id,
+				label: item.label || proofreaderLabel(item.id),
+			}));
+		} catch {
+			reported = [];
+		}
+	}
+	const seen = new Set(reported.map((item) => item.id));
+	const proofreaderOptions = [...reported];
+	for (const user of visibleUsers) {
+		for (const id of readUserSettings(user.id).proofreaders) {
+			if (seen.has(id)) continue;
+			seen.add(id);
+			proofreaderOptions.push({ id, label: proofreaderLabel(id) });
+		}
+	}
 	return {
 		users: visibleUsers.map((u) => ({
 			id: u.id,
@@ -53,7 +75,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		series: grantableSeries.map((s) => ({ id: s.id, title: s.title, test: isTestSeries(s) })),
 		roles: assignableRoles(actor),
-		proofreaderIds: [...ALL_PROOFREADER_IDS],
+		proofreaderOptions,
 		me: actor.id,
 		scanlator: isScanlator(actor),
 		activity: isAdmin(actor) ? await listAllUserActivity(50) : null,
@@ -155,12 +177,21 @@ export const actions: Actions = {
 		const engine = String(form.get('engine') || '');
 		if (!id || !engine) return fail(400, { error: 'Missing user or proofreader' });
 		if (id === AI_USER_ID) return fail(400, { error: 'Cannot change system user' });
-		if (!ALL_PROOFREADER_IDS.includes(engine as never)) return fail(400, { error: 'Unknown proofreader' });
 		const target = await db.select().from(users).where(eq(users.id, id)).get();
 		if (!target) return fail(404, { error: 'User not found' });
+		let reported: string[] = [];
+		if (proofreadServiceConfigured()) {
+			try {
+				reported = (await listProofreaderStatuses()).map((item) => item.id);
+			} catch {
+				reported = [];
+			}
+		}
 		const current = new Set(readUserSettings(id).proofreaders);
-		if (on) current.add(engine as never);
-		else current.delete(engine as never);
+		if (on && !reported.includes(engine)) return fail(400, { error: 'Unknown proofreader' });
+		if (!on && !current.has(engine) && !reported.includes(engine)) return fail(400, { error: 'Unknown proofreader' });
+		if (on) current.add(engine);
+		else current.delete(engine);
 		saveUserProofreaders(id, [...current]);
 		return { ok: true };
 	},

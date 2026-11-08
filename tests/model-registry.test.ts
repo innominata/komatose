@@ -137,7 +137,10 @@ test('unknown engines throw; an unchosen engine needs a passed chat row', () => 
 	// Empty means "not chosen": it only resolves to a chat row that passed its tests.
 	assert.throws(() => resolveAssistant(''), /No chat model has passed/);
 	assert.throws(() => resolveAssistant('', '', undefined, false), /No model is chosen/);
-	assert.throws(() => resolveAssistant('claude'), /Unsupported translation engine: claude/);
+	assert.throws(() => resolveAssistant('not-a-model'), /Unsupported translation engine/);
+	const claude = resolveAssistant('claude');
+	assert.equal(claude.host, 'claude');
+	assert.equal(claude.row.cliAdapter, 'claude');
 });
 
 test('naming Qwen 3.8 27B does not substitute the seeded Qwen3-VL row', async () => {
@@ -182,6 +185,30 @@ test('overlay can add a remote row; seeded rows stay and retired chat rows are g
 test('mergeRegistry keeps seeds when overlay is empty or malformed', () => {
 	assert.ok(mergeRegistry(null).some((row) => row.id === QWEN3_VL_ID));
 	assert.ok(mergeRegistry({ rows: [{ id: '' }] }).some((row) => row.id === 'hayai-ocr-v2'));
+});
+
+test('a fresh registry does not invent proofreaders, and an overlay proofreader stays page-image only', () => {
+	assert.equal(mergeRegistry(null).some((row) => row.id === 'proofreader-a'), false);
+	const row = mergeRegistry({
+		rows: [{
+			id: 'proofreader-a',
+			name: 'Proofreader A',
+			slug: 'proofreader-a',
+			access: 'proofreader',
+			operations: ['translate'],
+			seeded: false,
+			probes: {
+				pageImageProofread: { operation: 'pageImageProofread', ok: true, at: 1, ms: 12 },
+			},
+		}],
+	}).find((item) => item.id === 'proofreader-a');
+	assert.ok(row);
+	assert.equal(row.access, 'proofreader');
+	assert.deepEqual(row.operations, ['pageImageProofread']);
+	assert.equal(row.operationsLocked, true);
+	assert.equal(row.seeded, false);
+	assert.equal(row.probes?.pageImageProofread?.ok, true);
+	assert.equal(row.probes?.pageImageProofread?.ms, 12);
 });
 
 test('Qwen3-VL is one row that widens into a chat model — never a twin entry', () => {
@@ -467,6 +494,11 @@ test('remote OpenAI profile sends json_object, not json_schema', async () => {
 	assert.deepEqual(openaiThinking('https://api.deepseek.com/v1', true, true, true), { type: 'disabled' });
 	assert.deepEqual(openaiThinking('https://api.deepseek.com/v1', false, true, true), { type: 'disabled' });
 	assert.equal(openaiThinking('https://api.openai.com/v1', true, true), undefined);
+	// Tencent TokenHub: hy4 reasoning looped through the whole output budget on JSON/image requests.
+	assert.deepEqual(openaiThinking('https://tokenhub-intl.tencentcloudmaas.com/v1', true, true, true), { type: 'disabled' });
+	assert.deepEqual(openaiThinking('https://tokenhub.tencentmaas.com/v1', true, true), { type: 'disabled' });
+	assert.deepEqual(openaiThinking('https://tokenhub-intl.tencentcloudmaas.com/v1', false, true), { type: 'enabled' });
+	assert.equal(openaiThinking('https://api.hunyuan.cloud.tencent.com/v1', true, true), undefined);
 	assert.equal(openaiMaxTokens('https://api.deepseek.com/v1', 8192), DEEPSEEK_MAX_OUTPUT_TOKENS);
 	assert.equal(openaiMaxTokens('https://api.openai.com/v1', 8192), 8192);
 	const schema = { type: 'json_schema', json_schema: { name: 'scan_translate', strict: true, schema: { type: 'object' } } };
@@ -1104,5 +1136,37 @@ test('translation review uses saved Autorun rather than a client-supplied flag',
 		if (originalKey === undefined) delete process.env.AUTORUN_FIXTURE_KEY;
 		else process.env.AUTORUN_FIXTURE_KEY = originalKey;
 		store.removeOverlayRow(remote.id);
+	}
+});
+
+test('TokenHub image + JSON requests disable hy4 thinking, and a reasoning-only cutoff says so', async () => {
+	const { openaiChatCompletions } = await import('../src/lib/server/openaiHttp');
+	const originalFetch = globalThis.fetch;
+	const bodies: Array<Record<string, unknown>> = [];
+	globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+		bodies.push(JSON.parse(String(init?.body)));
+		return new Response(
+			JSON.stringify({
+				choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'Need include silent bubbles. '.repeat(50) } }],
+				usage: { completion_tokens: 6000, completion_tokens_details: { reasoning_tokens: 6000 } },
+			}),
+			{ status: 200, headers: { 'content-type': 'application/json' } },
+		);
+	}) as typeof fetch;
+	try {
+		await assert.rejects(
+			openaiChatCompletions(
+				[{ role: 'user', content: [{ type: 'text', text: 'Proofread Raw' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AA==' } }] }],
+				{
+					config: { baseUrl: 'https://tokenhub-intl.tencentcloudmaas.com/v1', apiKey: 'test-key', model: 'hy4', profile: 'openai' },
+					schema: { type: 'json_schema', json_schema: { name: 'pageImageProofread', strict: true, schema: { type: 'object' } } },
+					maxTokens: 6000,
+				},
+			),
+			/whole 6000-token output budget on hidden reasoning.*finish_reason=length/,
+		);
+		assert.deepEqual(bodies[0].thinking, { type: 'disabled' });
+	} finally {
+		globalThis.fetch = originalFetch;
 	}
 });

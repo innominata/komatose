@@ -188,10 +188,8 @@ try {
   await page.unroute("**/api/episodes/fixture-episode/ai-transcribe");
   await page.getByRole("navigation", { name: "Chapter workflow" }).getByRole("button", { name: "Prepare", exact: true }).click();
   await expect(page.locator(".pages > button").first()).toHaveAttribute("aria-label", "Open page 1");
-  page.once('dialog', dialog => dialog.accept());
-  await page
-    .getByRole("button", { name: "Renumber pages", exact: true })
-    .click();
+  // Page numbers follow the reading order on their own; there is nothing to renumber.
+  await expect(page.getByRole("button", { name: "Renumber pages", exact: true })).toHaveCount(0);
   await expect.poll(async () => {
     const current = await (await context.request.get(`${base}/api/episodes/fixture-episode/workflow`)).json();
     return current.issues.some(issue => issue.code === 'numbering');

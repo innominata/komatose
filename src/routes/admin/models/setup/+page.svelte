@@ -95,7 +95,7 @@
 			</button>
 			<button class="choice {translate.has('cli') ? 'on' : ''}" onclick={() => (translate = toggleSet(translate, 'cli'))}>
 				<i class="bi bi-terminal"></i><strong>CLI agent</strong>
-				<span class="muted">{cliTools.length ? cliTools.map((tool) => `${tool.label} ✓`).join(' · ') : 'Install Codex, Cursor or Grok on this server.'}</span>
+				<span class="muted">{cliTools.length ? cliTools.map((tool) => `${tool.label} ✓`).join(' · ') : 'Install Codex, Cursor, Grok or Claude Code on this server.'}</span>
 			</button>
 			<button class="choice {translate.has('later') ? 'on' : ''}" onclick={() => (translate = new Set(['later']))}>
 				<i class="bi bi-clock"></i><strong>Decide later</strong>

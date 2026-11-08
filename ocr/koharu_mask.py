@@ -15,7 +15,7 @@ REPO = 'mayocream/koharu-text-sam-ts-l'
 REVISION = '5dd97423e0fbf2404264979136d47e8101144046'
 WEIGHT_SHA256 = 'bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45'
 HI_SAM_REVISION = '69009434d4dba5541f228d8f5acb0754c333d417'
-VERSION = f'koharu-sam-ts-l-{REVISION[:7]}-v1'
+VERSION = f'koharu-sam-ts-l-{REVISION[:7]}-v2'
 IMAGE_SIZE = 1024
 
 _BENCH = ROOT / 'data/bench-lettering/model-comparison'
@@ -117,11 +117,48 @@ def predict(image, device='cpu'):
     if cached is not None:
         _PREDICTIONS.move_to_end(key)
         return cached.copy()
-    mask = _predict(image, device)
+    mask = _predict_tiled(image, device)
     _PREDICTIONS[key] = mask
     while len(_PREDICTIONS) > _PREDICTION_LIMIT:
         _PREDICTIONS.popitem(last=False)
     return mask.copy()
+
+
+# A page longer than this many times its width (or height) is read in overlapping tiles.
+TILE_ASPECT = 1.5
+TILE_OVERLAP = 0.25
+
+
+def tile_spans(length, side):
+    """Overlapping [start, end) spans of `side` covering 0..length, the last one flush with the end."""
+    if length <= side:
+        return [(0, length)]
+    step = max(1, int(side * (1 - TILE_OVERLAP)))
+    spans, start = [], 0
+    while True:
+        end = min(length, start + side)
+        spans.append((end - side, end))
+        if end >= length:
+            return spans
+        start += step
+
+
+def _predict_tiled(image, device):
+    """The model reads a 1024 px square, so a whole long strip (e.g. 690x6490) would be
+    shrunk to about a sixth and come back with broken strokes. Long pages are read in
+    overlapping square tiles along their length, each at up to its own resolution, and
+    the tile masks are combined."""
+    h, w = image.shape[:2]
+    if max(h, w) <= TILE_ASPECT * min(h, w):
+        return _predict(image, device)
+    side = min(max(h, w), max(min(h, w), IMAGE_SIZE))
+    out = np.zeros((h, w), np.uint8)
+    for start, end in tile_spans(max(h, w), side):
+        if h >= w:
+            out[start:end] = np.maximum(out[start:end], _predict(np.ascontiguousarray(image[start:end]), device))
+        else:
+            out[:, start:end] = np.maximum(out[:, start:end], _predict(np.ascontiguousarray(image[:, start:end]), device))
+    return out
 
 
 def _predict(image, device):

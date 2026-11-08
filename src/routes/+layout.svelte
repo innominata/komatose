@@ -9,8 +9,12 @@
 	import RebuildButton from '$lib/components/RebuildButton.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import { initTheme } from '$lib/theme.svelte';
+	import { installTextUndo } from '$lib/textUndo';
 
-	onMount(() => initTheme());
+	onMount(() => {
+		initTheme();
+		return installTextUndo();
+	});
 
 	let { data, children } = $props();
 

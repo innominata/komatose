@@ -96,7 +96,7 @@ export function pageUndoSummary(op: PageUndoOp | undefined, images: readonly Ima
 	if (op.type !== 'pixels') label = op.description || label;
 	const pages = ids.slice(0, 3).map(id => preparePageLabel(id, images)).join('; ');
 	const affected = `${pages}${ids.length > 3 ? `; and ${ids.length - 3} more pages` : ''}`;
-	return { token: pageUndoToken(op), label: `Undo: ${label}${ids.length === 1 ? ` · ${pages}` : ''}`, confirmation: `Undo “${label}”?\n\nAffected: ${affected}.\n\n${effect}` };
+	return { token: pageUndoToken(op), label: `Undo: ${label}${ids.length === 1 ? ` · ${pages}` : ''}`, imageIds: ids, confirmation: `Undo “${label}”?\n\nAffected: ${affected}.\n\n${effect}` };
 }
 
 function undoPath(seriesSlug: string, episodeSlug: string) {

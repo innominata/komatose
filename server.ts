@@ -2,6 +2,10 @@ import { createServer } from 'node:http';
 import { ensureAiUser } from './src/lib/server/aiUser.ts';
 import { attachWss } from './src/lib/server/realtime.ts';
 import { startKomatoseGpu } from './src/lib/server/komatoseGpu.ts';
+import { recordStartupEnvFile } from './src/lib/server/envFile.ts';
+
+// Remember which keys --env-file copied from .env, so later .env edits win over them.
+recordStartupEnvFile();
 
 // A series backup includes artwork and can be much larger than adapter-node's
 // default 512 KB request body. Read the override before loading its handler.

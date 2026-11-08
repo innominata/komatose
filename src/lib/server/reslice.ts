@@ -343,8 +343,7 @@ export async function previewReslice(
   const preview = await (format === "png" ? previewImage.png()
     : previewImage.jpeg({ quality: 70, mozjpeg: true, progressive: true })).toBuffer();
   // Page numbers are the client's business: the sidebar numbers pages by their position in
-  // the chapter, and the stored pageNumber can be stale until a renumber. The offsets are
-  // what only the server knows.
+  // the chapter. The offsets are what only the server knows.
   return {
     imageIds: imgs.map((i) => i.id),
     width: stitch.width,

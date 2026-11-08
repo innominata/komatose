@@ -301,3 +301,31 @@ CREATE TABLE director_assets (
     db.prepare('INSERT INTO schema_versions VALUES(10,?)').run(Date.now());
   })();
 }
+
+/** Page numbers follow reading order automatically, so they can no longer go stale. */
+const RENUMBER = (episode: string) => `
+ UPDATE images SET page_number=ordered.n FROM (
+  SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order,created_at,id) AS n FROM images WHERE episode_id=${episode}
+ ) AS ordered WHERE images.id=ordered.id AND images.page_number IS NOT ordered.n;
+ UPDATE episodes SET numbering_stale=0,revision=revision+1 WHERE id=${episode};`;
+
+export function migrateAutoPageNumbers(db: Database.Database) {
+  if (db.prepare('SELECT 1 FROM schema_versions WHERE version=15').get()) return;
+  db.transaction(() => {
+    db.exec(`
+DROP TRIGGER IF EXISTS images_number_insert;
+DROP TRIGGER IF EXISTS images_number_delete;
+DROP TRIGGER IF EXISTS images_number_order;
+CREATE TRIGGER images_number_insert AFTER INSERT ON images BEGIN${RENUMBER('NEW.episode_id')}
+END;
+CREATE TRIGGER images_number_delete AFTER DELETE ON images BEGIN${RENUMBER('OLD.episode_id')}
+END;
+CREATE TRIGGER images_number_order AFTER UPDATE OF sort_order ON images WHEN NEW.sort_order<>OLD.sort_order BEGIN${RENUMBER('NEW.episode_id')}
+END;
+`);
+    for (const { id } of db.prepare('SELECT id FROM episodes').all() as { id: string }[])
+      db.prepare(RENUMBER('?').split(';')[0]).run(id);
+    db.prepare('UPDATE episodes SET numbering_stale=0').run();
+    db.prepare('INSERT INTO schema_versions VALUES(15,?)').run(Date.now());
+  })();
+}

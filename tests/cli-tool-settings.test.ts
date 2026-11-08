@@ -198,8 +198,8 @@ test('updating one tool preserves others; malformed config is explicit', async (
 
 	await writeFile(cliToolsPath(), '{ "grok": 12 }\n');
 	assert.throws(() => readCliToolSettings(), /single executable path/);
-	await writeFile(cliToolsPath(), '{ "grok": "/opt/grok", "claude": "/opt/claude" }\n');
-	assert.throws(() => readCliToolSettings(), /unknown tool id "claude"/);
+	await writeFile(cliToolsPath(), '{ "grok": "/opt/grok", "gemini": "/opt/gemini" }\n');
+	assert.throws(() => readCliToolSettings(), /unknown tool id "gemini"/);
 	assert.throws(() => setCliToolSetting('grok', 12), /single executable path/);
 	assert.throws(
 		() => applyCliToolAdminAction('save', { id: 'grok', executable: 12 }),

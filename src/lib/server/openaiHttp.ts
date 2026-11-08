@@ -86,14 +86,28 @@ export function openaiMaxTokens(baseUrl: string, requested?: number): number {
 	if (!isDeepSeekHost(baseUrl)) return n;
 	return Math.min(n, DEEPSEEK_MAX_OUTPUT_TOKENS);
 }
+/**
+ * Tencent TokenHub (hy4 and the other hosted models). hy4 thinks by default and
+ * its hidden reasoning shares max_tokens: on a one-bubble Proofread Raw it looped
+ * through all 6000 tokens and returned no answer. `thinking: {type: "disabled"}`
+ * answered the same request in 247 tokens.
+ */
+export function isTencentTokenHubHost(baseUrl: string): boolean {
+	try {
+		return /(^|\.)tencent(cloud)?maas\.com$/i.test(new URL(baseUrl).hostname);
+	} catch {
+		return /tencent(cloud)?maas\.com/i.test(baseUrl);
+	}
+}
+
 export function openaiThinking(
 	baseUrl: string,
 	jsonMode: boolean,
 	thinking: boolean,
 	imageRequest = false,
 ): { type: 'enabled' | 'disabled' } | undefined {
-	if (!isDeepSeekHost(baseUrl)) return undefined;
-	// Flash defaults thinking ON when the field is omitted. Hidden CoT shares max_tokens
+	if (!isDeepSeekHost(baseUrl) && !isTencentTokenHubHost(baseUrl)) return undefined;
+	// Both default thinking ON when the field is omitted. Hidden CoT shares max_tokens
 	// with the visible reading, so a balloon review comes back as a few leftover words.
 	if (imageRequest || jsonMode || !thinking) return { type: 'disabled' };
 	return { type: 'enabled' };
@@ -276,11 +290,27 @@ export async function openaiChatCompletions(
 			const choice = json.choices?.[0];
 			if (choice?.finish_reason === 'length') {
 				const cap = openaiMaxTokens(cfg.baseUrl, opts.maxTokens);
-				throw new Error(
-					isDeepSeekHost(cfg.baseUrl)
-						? `DeepSeek reached its ${cap}-token output limit before finishing. The partial reading was discarded; retry this region.`
-						: `Model reached its output limit (finish_reason=length). Retry with a smaller region.`,
-				);
+				const reasoning = choice.message?.reasoning_content || '';
+				const partial = assistantText(choice.message);
+				const message = isDeepSeekHost(cfg.baseUrl)
+					? `DeepSeek reached its ${cap}-token output limit before finishing. The partial reading was discarded; retry this region.`
+					: reasoning && !partial
+						? `Model spent its whole ${cap}-token output budget on hidden reasoning and returned no answer (finish_reason=length).`
+						: `Model reached its output limit (finish_reason=length). Retry with a smaller region.`;
+				// Keep what came back, so a cut-off reply can be diagnosed from Jobs.
+				const ctx = jobContext();
+				if (ctx) {
+					const summary = summarizeModelOutput(text, Date.now() - started);
+					appendJobLog(ctx.jobId, {
+						engine: cfg.rowId || cfg.model,
+						model: cfg.model,
+						request,
+						response: partial || (reasoning ? `[no answer; last of ${reasoning.length} reasoning chars]\n…${reasoning.slice(-2000)}` : undefined),
+						usage: summary.usage,
+						error: message,
+					});
+				}
+				throw new Error(message);
 			}
 			const out = assistantText(choice?.message);
 			if (!out) {

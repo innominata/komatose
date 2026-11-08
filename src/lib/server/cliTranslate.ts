@@ -3,6 +3,7 @@ import { CliAdapterRegistry } from './cliAdapters/registry';
 import { createCodexAdapter } from './cliAdapters/codex';
 import { createGrokAdapter } from './cliAdapters/grok';
 import { createCursorAdapter } from './cliAdapters/cursor';
+import { claudeArgs, claudeAuthError, claudeReplyText, claudeResult, claudeStdin, createClaudeAdapter } from './cliAdapters/claude';
 import type { AdvisoryRequest, TranslationOptions as CliJobOpts } from './cliAdapters/types';
 import { buildCodexCleanPrompt } from '../codexCleanPrompt';
 import { spawn } from 'node:child_process';
@@ -13,6 +14,7 @@ import { basename, join } from 'node:path';
 import {
 	cliReadiness,
 	codexExecutable,
+	claudeExecutable,
 	cursorExecutable,
 	discoverCli,
 	executablePath,
@@ -55,7 +57,6 @@ import {
 } from './llm';
 import { sanitizeModelId } from '../aiTasks';
 import { isProofreaderProvider } from '../providerCatalog';
-import { proofreadServiceConfigured } from './proofreadService';
 import { sfxTranslateHit, withSfxGlossary } from '../sfx';
 import { komatoseGpuEnabled } from './gpuMode';
 import { appendJobLog, jobContext, summarizeModelOutput } from './jobs';
@@ -132,6 +133,10 @@ export function cursorBin(): string | null {
 	return cursorExecutable();
 }
 
+export function claudeBin(): string | null {
+	return claudeExecutable();
+}
+
 function requireCli(id: CliToolId): string {
 	const result = discoverCli(id);
 	const bin = executablePath(result);
@@ -140,12 +145,12 @@ function requireCli(id: CliToolId): string {
 }
 
 export function listTranslateEngines(): TranslateEngineInfo[] {
-	const configured = proofreadServiceConfigured();
 	// "qwen" is a legacy host alias, not a model: it is never offered as an engine.
-	return TRANSLATE_ENGINES.filter((id) => id !== 'qwen' && (!isProofreaderProvider(id) || configured)).map((id) => {
+	// Proofreaders are not in this list; engineReadiness adds the ones the service reports.
+	return TRANSLATE_ENGINES.filter((id) => id !== 'qwen').map((id) => {
 		let available = true;
 		let reason: string | undefined;
-		if (id !== 'qwen' && !isProofreaderProvider(id)) {
+		if (id !== 'qwen') {
 			try {
 				if (isCliToolId(id)) {
 					const cli = cliReadiness(id);
@@ -202,7 +207,7 @@ function workHasImage(work: string): boolean {
 }
 
 function readWorkPrompt(work: string, stdin?: string): string {
-	if (stdin?.trim()) return stdin.trim();
+	// prompt.txt wins over stdin: Claude Code's stdin is a JSON message with base64 images.
 	const txt = join(work, 'prompt.txt');
 	if (existsSync(txt)) {
 		try {
@@ -212,6 +217,7 @@ function readWorkPrompt(work: string, stdin?: string): string {
 			/* ignore */
 		}
 	}
+	if (stdin?.trim()) return stdin.trim();
 	const jsonPath = join(work, 'prompt.json');
 	if (existsSync(jsonPath)) {
 		try {
@@ -241,6 +247,9 @@ function readWorkOutput(work: string, stdout: string, stderr: string): string {
 			/* ignore */
 		}
 	}
+	// Claude Code stream-json: the final result event carries the reply and usage.
+	const resultLine = stdout.split('\n').reverse().find((line) => /^\{"type":"result"/.test(line.trim()));
+	if (resultLine) return resultLine.trim();
 	return [stdout, stderr].filter((s) => s.trim()).join('\n').trim();
 }
 
@@ -686,6 +695,107 @@ async function runCursorPrompt(opts: {
 	} finally {
 		await rm(work, { recursive: true, force: true });
 	}
+}
+
+async function runClaudePrompt(opts: {
+	prompt: string;
+	images?: Buffer[];
+	jpeg?: Buffer;
+	model?: string;
+	abort?: AbortSignal;
+}): Promise<string> {
+	const bin = requireCli('claude');
+	const work = await mkdtemp(join(tmpdir(), 'scan-claude-'));
+	try {
+		const images = [...(opts.jpeg ? [opts.jpeg] : []), ...(opts.images ?? [])];
+		// prompt.txt and the image files are only for the job log; stdin carries both.
+		await writeFile(join(work, 'prompt.txt'), opts.prompt, 'utf8');
+		for (const [i, bytes] of images.entries()) await writeFile(join(work, `image-${i + 1}.jpg`), bytes);
+		const result = await runCommand({
+			bin,
+			args: claudeArgs(pickCliModel('claude', opts.model)),
+			cwd: work,
+			stdin: claudeStdin(opts.prompt, images),
+			abort: opts.abort
+		});
+		if (result.code !== 0) {
+			const reply = claudeResult(result.stdout);
+			const message = reply?.text || cliOutput(result);
+			throw new Error(claudeAuthError(message) || `Claude Code exited ${result.code}: ${message}`);
+		}
+		return claudeReplyText(result.stdout, result.stderr);
+	} finally {
+		await rm(work, { recursive: true, force: true });
+	}
+}
+
+async function readWithClaude(
+	jpeg: Buffer,
+	opts: { lang?: OcrLang; abort?: AbortSignal; model?: string }
+): Promise<{ source: string; lineType: LineType }> {
+	const copy = readBubbleCopy(opts.lang);
+	const text = await runClaudePrompt({
+		prompt: `${copy.system}\n\n${copy.user}\nThe crop is attached.\nReturn JSON {source, lineType}.`,
+		jpeg,
+		model: opts.model,
+		abort: opts.abort
+	});
+	return parseReadJson(text);
+}
+
+async function translateWithClaude(boxes: DetectedBox[], opts: CliJobOpts): Promise<DetectedBox[]> {
+	const prompt =
+		opts.userPrompt ||
+		(opts.jpeg ? 'An image of the lettering is attached. Prefer the image if the script disagrees.\n\n' : '') +
+			translatePrompt({
+				seriesNotes: opts.seriesNotes,
+				prior: opts.prior,
+				pageLabel: opts.pageLabel,
+				lines: translationLines(boxes, opts),
+				lang: opts.lang,
+				pageCaption: opts.pageCaption,
+				seriesGlossary: opts.seriesGlossary
+			});
+	const text = await runClaudePrompt({
+		prompt: `${opts.systemPrompt || translateSystemPrompt(opts.lang)}\n\n${prompt}\nReturn JSON {items:[{i,literal,translation,reasoning}]}.`,
+		jpeg: opts.jpeg,
+		model: opts.model,
+		abort: opts.abort
+	});
+	return applyTranslations(boxes, parseCliJson(text), opts);
+}
+
+async function describeWithClaude(
+	jpeg: Buffer,
+	opts: { abort?: AbortSignal; model?: string }
+): Promise<string> {
+	const text = await runClaudePrompt({
+		prompt: `${DESCRIBE_SYSTEM}\n\n${DESCRIBE_USER}\nReturn JSON {caption}.`,
+		jpeg,
+		model: opts.model,
+		abort: opts.abort
+	});
+	const caption = parseCaption(text);
+	if (!caption) throw new Error('Claude Code returned an empty scene note');
+	return caption;
+}
+
+async function reviewWithClaude(opts: {
+	seriesNotes: string;
+	seriesGlossary: string;
+	prior: string;
+	pages: string;
+	script: string;
+	abort?: AbortSignal;
+	lang?: OcrLang;
+	model?: string;
+}) {
+	const text = await runClaudePrompt({
+		prompt: `${reviewSystemPrompt()}\n\n${reviewPrompt(opts)}\nReturn JSON {summary, issues:[{page,line,severity,text}], questions:[{page,text}], notes}.`,
+		model: opts.model,
+		abort: opts.abort
+	});
+	return reviewFromModelText(text);
 }
 
 /** Vision read: send the crop to a named CLI when PaddleOCR cannot. */
@@ -1357,6 +1467,18 @@ async function listCursorModels(): Promise<EngineModel[]> {
 	}
 }
 
+/** Claude Code has no model-list command; these are its documented aliases. */
+const CLAUDE_MODELS: EngineModel[] = [
+	{ id: 'sonnet', label: 'Sonnet (latest)' },
+	{ id: 'opus', label: 'Opus (latest)' },
+	{ id: 'haiku', label: 'Haiku (latest)' },
+	{ id: 'fable', label: 'Fable (latest)' }
+];
+
+async function listClaudeModels(): Promise<EngineModel[]> {
+	return CLAUDE_MODELS;
+}
+
 async function listCodexModels(): Promise<EngineModel[]> {
 	const fallback = CODEX_MODELS;
 	const bin = codexBin();
@@ -1374,7 +1496,7 @@ async function listCodexModels(): Promise<EngineModel[]> {
 	}
 }
 
-export { listLocalModels, listQwenModels, listGrokModels, listCursorModels, listCodexModels };
+export { listLocalModels, listQwenModels, listGrokModels, listCursorModels, listCodexModels, listClaudeModels };
 
 export function listRegisteredCliModels(id: string) {
 	return cliAdapters.get(id).listModels();
@@ -1399,10 +1521,13 @@ const cliAdapters = new CliAdapterRegistry([
   createCursorAdapter({
     translate: translateWithCursor, read: readWithCursor, review: reviewWithCursor, describe: describeWithCursor, executable: cursorBin, defaultModel: () => env('CURSOR_MODEL') || 'composer-2.5', listModels: listCursorModels,
   }, { prompt: runCursorPrompt, parse: extractJsonObject }),
+  createClaudeAdapter({
+    translate: translateWithClaude, read: readWithClaude, review: reviewWithClaude, describe: describeWithClaude, executable: claudeBin, defaultModel: () => env('CLAUDE_MODEL'), listModels: listClaudeModels,
+  }, { run: runCommand, parse: (text) => parseCliJson(claudeReplyText(text)) }),
 ]);
 
 export async function listEngineModels(): Promise<Record<TranslateEngine, EngineModel[]>> {
-  const result: Record<string, EngineModel[]> = { qwen: [], grok: [], codex: [], cursor: [], 'proofreader-a': [], 'proofreader-b': [] };
+  const result: Record<string, EngineModel[]> = { qwen: [], grok: [], codex: [], cursor: [], claude: [] };
   await Promise.all([
     listQwenModels().then(models => { result.qwen = models; }),
     ...cliAdapters.list().map(async adapter => {

@@ -29,7 +29,8 @@ export const POST: RequestHandler = async ({locals,params,request}) => {
       if (body.scope!=='page' && body.scope!=='chapter') return fail(400,'Choose page or chapter scope');
       return json(await startDirector({series,episode,user,scope:body.scope,imageId:body.imageId,
         model:body.model,recheckAll:body.recheckAll===true,retryBlocked:body.action==='retry-blocked',policy:body.policy,
-        tasks:Array.isArray(body.tasks)?body.tasks.filter((task:unknown)=>typeof task==='string'):undefined}),{status:202});
+        tasks:Array.isArray(body.tasks)?body.tasks.filter((task:unknown)=>typeof task==='string'):undefined,
+        imageIds:Array.isArray(body.imageIds)?body.imageIds.filter((id:unknown)=>typeof id==='string'):undefined}),{status:202});
     }
     if (body.action==='pause' || body.action==='stop') return json(stopDirector(episode.id,String(body.runId||''),body.action==='stop'));
     if (body.action==='resume') {

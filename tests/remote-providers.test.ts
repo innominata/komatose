@@ -178,3 +178,40 @@ test('envVar resolves .env values from SCAN_ROOT and reports missing variables a
 	delete process.env[name];
 	assert.equal(envVar(name), 'from-dotenv');
 });
+
+test('envVar follows .env edits for keys --env-file loaded at startup, but shell values still win', async () => {
+	const fromFile = 'REMOTE_PROVIDERS_STARTUP_FILE_KEY';
+	const fromShell = 'REMOTE_PROVIDERS_STARTUP_SHELL_KEY';
+	const envPath = join(root, '.env');
+	// Simulate `tsx --env-file=.env`: the file's values are copied into process.env,
+	// except a shell export that already existed (Node does not override it).
+	await writeFile(envPath, `${fromFile}=old-key\n${fromShell}=file-value\n`);
+	process.env[fromFile] = 'old-key';
+	process.env[fromShell] = 'shell-value';
+	delete (globalThis as Record<symbol, unknown>)[Symbol.for('komatose.startupEnvFile')];
+	invalidateEnvFileCache();
+	try {
+		assert.equal(envVar(fromFile), 'old-key');
+		assert.equal(envVar(fromShell), 'shell-value');
+
+		// Rotating the key in .env takes effect without a restart.
+		await writeFile(envPath, `${fromFile}=new-key\n${fromShell}=file-value-2\n`);
+		invalidateEnvFileCache();
+		assert.equal(envVar(fromFile), 'new-key');
+		assert.equal(envVar(fromShell), 'shell-value', 'a real shell export still wins');
+
+		// Removing it from .env removes it, even though process.env still has the startup copy.
+		await writeFile(envPath, `${fromShell}=file-value-2\n`);
+		invalidateEnvFileCache();
+		assert.equal(envVar(fromFile), '');
+
+		// Code that sets process.env at runtime still wins over the file.
+		process.env[fromFile] = 'runtime-value';
+		assert.equal(envVar(fromFile), 'runtime-value');
+	} finally {
+		delete process.env[fromFile];
+		delete process.env[fromShell];
+		delete (globalThis as Record<symbol, unknown>)[Symbol.for('komatose.startupEnvFile')];
+		invalidateEnvFileCache();
+	}
+});

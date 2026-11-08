@@ -32,14 +32,15 @@ const live = [
 ];
 
 test('catalog lists only the existing providers and matches types.ts exports', () => {
-	assert.deepEqual([...PROVIDER_IDS], ['qwen', 'grok', 'codex', 'cursor', 'proofreader-a', 'proofreader-b']);
+	assert.deepEqual([...PROVIDER_IDS], ['qwen', 'grok', 'codex', 'cursor', 'claude']);
 	assert.deepEqual(TRANSLATE_ENGINES, [...PROVIDER_IDS]);
-	assert.equal(TRANSLATE_ENGINE_LABELS['proofreader-a'], providerById('proofreader-a')?.label);
-	assert.equal(TRANSLATE_ENGINE_LABELS['proofreader-b'], providerById('proofreader-b')?.label);
+	assert.equal(providerById('proofreader-a'), undefined);
+	assert.equal(providerById('proofreader-b'), undefined);
+	assert.equal(isKnownProvider('proofreader-a'), false);
 	assert.equal(TRANSLATE_ENGINE_LABELS.qwen, 'Local HTTP');
-	assert.equal(PROVIDER_CATALOG.length, 6);
+	assert.equal(PROVIDER_CATALOG.length, 5);
 	assert.equal(isKnownProvider('qwen'), true);
-	assert.equal(isKnownProvider('claude'), false);
+	assert.equal(isKnownProvider('claude'), true);
 	assert.equal(providerById('unknown'), undefined);
 	assert.equal(providerSupports('unknown', 'translate'), false);
 	assert.equal(isCliProvider('unknown'), false);
@@ -47,7 +48,7 @@ test('catalog lists only the existing providers and matches types.ts exports', (
 });
 
 test('CLI classification is derived from catalog transport, not a second ID list', () => {
-	assert.deepEqual(CLI_PROVIDER_IDS, ['grok', 'codex', 'cursor']);
+	assert.deepEqual(CLI_PROVIDER_IDS, ['grok', 'codex', 'cursor', 'claude']);
 	assert.deepEqual([...CLI_TRANSLATION_ENGINES], [...CLI_PROVIDER_IDS]);
 	assert.equal(isCliProvider('grok'), true);
 	assert.equal(isCliProvider('codex'), true);
@@ -101,7 +102,7 @@ test('an unsupported saved selection stays visible and is not replaced', () => {
 	assert.deepEqual(describe.map((engine) => engine.id), ['qwen', 'grok', 'codex', 'cursor', 'proofreader-a']);
 	const saved = describe.find((engine) => engine.id === 'proofreader-a');
 	assert.equal(saved?.available, false);
-	assert.match(saved?.reason || '', /current passing test/);
+	assert.match(saved?.reason || '', /has not passed this task/);
 	assert.equal(live.find((engine) => engine.id === 'proofreader-a')?.available, true);
 
 	const validDescribe = enginesForRegionAiField('describe', live, 'qwen');
@@ -120,12 +121,15 @@ test('an unsupported saved selection stays visible and is not replaced', () => {
 	assert.equal(missingSupported.at(-1)?.id, 'proofreader-a');
 	assert.equal(missingSupported.at(-1)?.available, false);
 	assert.equal(missingSupported.at(-1)?.label, proofreaderLabel('proofreader-a'));
-	assert.match(missingSupported.at(-1)?.reason || '', /current passing test/i);
+	assert.match(missingSupported.at(-1)?.reason || '', /has not passed this task/i);
 
 	const unknown = selectProvidersForOperation(live, 'translate', 'claude');
 	assert.equal(unknown.at(-1)?.id, 'claude');
 	assert.equal(unknown.at(-1)?.available, false);
-	assert.match(unknown.at(-1)?.reason || '', /Unknown provider/);
+	assert.match(unknown.at(-1)?.reason || '', /current passing test/);
+	const missing = selectProvidersForOperation(live, 'translate', 'not-a-provider');
+	assert.equal(missing.at(-1)?.id, 'not-a-provider');
+	assert.match(missing.at(-1)?.reason || '', /Unknown provider/);
 });
 
 test('settings field mapping keeps live availability for supported providers', () => {

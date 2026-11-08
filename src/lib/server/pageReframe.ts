@@ -823,6 +823,11 @@ async function projectHistory(
     ]),
   );
   const projected = new Map(outputs.map((o) => [o.id, [] as PageData[]]));
+  // An output page depends only on the states of the source pages placed on it. Each history
+  // event changes one or a few sources, so the other outputs reuse their last rendering
+  // instead of re-encoding thumbnails and cleaning finishes for every event (a 60-page strip
+  // with long cleaning histories otherwise spent ten minutes here).
+  const last = new Map<string, PageData>();
   while ([...stacks.values()].some((s) => s.length)) {
     abort?.throwIfAborted();
     const tops = [...stacks.values()]
@@ -838,6 +843,7 @@ async function projectHistory(
         "Edit histories have conflicting order; page boundaries were not changed",
       );
     const related = new Set<string>();
+    const changed = new Set<string>();
     for (const [source, stack] of stacks)
       if (stack.at(-1)?.id === id) {
         const entry = stack.pop()!.data;
@@ -845,16 +851,23 @@ async function projectHistory(
           if (!capture.sources.some((s) => s.image.id === pageId))
             related.add(pageId);
         states.set(source, entry);
+        changed.add(source);
       }
     for (const out of outputs) {
-      const page = await renderPage(
-        capture,
-        out,
-        states,
-        cache,
-        frames.get(out.id)!,
-        abort,
-      );
+      const previous = last.get(out.id);
+      const rendered =
+        previous && !out.placements.some((p) => changed.has(p.imageId))
+          ? previous
+          : await renderPage(
+              capture,
+              out,
+              states,
+              cache,
+              frames.get(out.id)!,
+              abort,
+            );
+      last.set(out.id, rendered);
+      const page: PageData = { ...rendered };
       page.reframeHistory = {
         eventId: id,
         pageIds: [...new Set([...outputs.map((o) => o.id), ...related])],

@@ -19,7 +19,6 @@
     pageUndoCount,
     pageUndoLabel = 'Undo page edit',
     duplicateWarning,
-    numberingStale,
     pendingFiles = $bindable([]),
     chapterDpi = $bindable(""),
     resliceSizing = $bindable<ResliceSizing>("pages"),
@@ -34,7 +33,6 @@
     onaddfiles,
     onupload,
     onreorder,
-    onrenumber,
     onpageop,
     onreslice,
     ondescribe,
@@ -54,7 +52,6 @@
     pageUndoCount: number;
     pageUndoLabel?: string;
     duplicateWarning: string;
-    numberingStale: boolean;
     pendingFiles?: File[];
     chapterDpi?: string;
     resliceSizing?: ResliceSizing;
@@ -69,7 +66,6 @@
     onaddfiles: (files: File[]) => void;
     onupload: () => void;
     onreorder: (delta: number) => void;
-    onrenumber: () => void;
     onpageop: (body: Record<string, unknown>) => void;
     onreslice: () => void;
     ondescribe: () => void;
@@ -97,8 +93,8 @@
   {#if section === "full"}
   <h1>Prepare the chapter</h1>
   <p>
-    Import images in reading order, organize {preferences.pageMode === "strip" ? "strips" : "pages"}, then renumber for
-    export. Use the thumbnail checkboxes to delete pages together or extract a
+    Import images in reading order, and organize {preferences.pageMode === "strip" ? "strips" : "pages"}. Page numbers
+    and export names follow the reading order. Use the thumbnail checkboxes to delete pages together or extract a
     copy to a new chapter. Shift-click selects a range.
   </p>
   {/if}
@@ -137,13 +133,9 @@
         >Move page earlier</button
       ><button onclick={() => onreorder(1)} disabled={!hasPage}
         >Move page later</button
-      ><button class="primary" onclick={onrenumber}>Renumber pages</button>
+      >
     </div>
-    <p class:warning={numberingStale}>
-      {numberingStale
-        ? "Numbering is stale. Renumber after organizing."
-        : "Numbering is current. Export names: 1, 2, 3…"}
-    </p>
+    <p>Page numbers follow the reading order. Export names: 1, 2, 3…</p>
     {/if}
     {#if section === "full" || section === "credits"}
     <h2 data-find="tab-prepare-credits">Series credits</h2>

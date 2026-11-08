@@ -36,6 +36,8 @@
   };
 
   type ScrollAction = (node: HTMLElement) => { destroy(): void };
+  /** A page in the continuous view: its artwork as this step shows it, and its regions in order. */
+  export type StripPage = { page: ImageRow; number: number; image: string; lines: LineRow[] };
 
   let {
     page,
@@ -122,6 +124,8 @@
     onnotify,
     drawTextPath = false,
     ondrawtextpath,
+    stripPages = [],
+    onstrippage,
   }: {
     page: ImageRow | undefined;
     step: string;
@@ -210,6 +214,14 @@
     /** Drawing a new text path for the selected region: clicks place its points. */
     drawTextPath?: boolean;
     ondrawtextpath?: (on: boolean) => void;
+    /**
+     * Every page of the chapter for the continuous view, which stacks them in one scrolling
+     * column. The current page is the full editor; the others are previews, and clicking one,
+     * or scrolling it to the middle of the view, makes it the current page.
+     */
+    stripPages?: StripPage[];
+    /** A preview page was clicked (with the region under the click) or scrolled to the middle. */
+    onstrippage?: (id: string, lineId?: string) => void;
   } = $props();
 
   let brushHover = $state<{ x: number; y: number } | null>(null);
@@ -721,6 +733,79 @@
       return { x: cloneDest.x - cloneOffset.x * page.width, y: cloneDest.y - cloneOffset.y * page.height };
     return { x: cloneSource.x * page.width, y: cloneSource.y * page.height };
   });
+  function scrollToActivePage() {
+    const scroller = canvasScrollEl;
+    const el = scroller?.querySelector("[data-active-page]");
+    if (!scroller || !(el instanceof HTMLElement)) return;
+    const s = scroller.getBoundingClientRect();
+    const c = el.getBoundingClientRect();
+    // The page's top near the top of the view, or a short page centred, so it covers the
+    // middle of the view and stays the current page.
+    const top = c.height >= s.height / 2 - 18 ? c.top - s.top - 18 : c.top - s.top - (s.height - c.height) / 2;
+    ignoreScrollUntil = performance.now() + 150;
+    scroller.scrollTo({
+      left: scroller.scrollLeft + c.left - s.left - Math.max(0, (scroller.clientWidth - c.width) / 2),
+      top: scroller.scrollTop + top,
+    });
+  }
+  /** Updates which previews are drawn and, after a scroll, which page is current. */
+  function trackStrip(fromScroll: boolean) {
+    const scroller = canvasScrollEl;
+    if (!continuous || !scroller || !page) return;
+    const s = scroller.getBoundingClientRect();
+    const mid = s.top + s.height / 2;
+    const margin = s.height * 1.5;
+    const near = new Set<string>();
+    let centre = "";
+    for (const el of scroller.querySelectorAll<HTMLElement>(":scope > [data-page-id]")) {
+      const r = el.getBoundingClientRect();
+      const id = el.dataset.pageId ?? "";
+      if (r.bottom > s.top - margin && r.top < s.bottom + margin) near.add(id);
+      if (r.top <= mid && r.bottom > mid) centre = id;
+    }
+    if (near.size !== nearIds.size || [...near].some((id) => !nearIds.has(id))) nearIds = near;
+    if (!fromScroll || holding) return;
+    // Just after this canvas scrolled to a page itself; look again once that has settled.
+    const wait = ignoreScrollUntil - performance.now();
+    if (wait > 0) {
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => trackStrip(true), wait + 10);
+      return;
+    }
+    if (centre && centre !== page.id) {
+      ownSwitch = centre;
+      onstrippage?.(centre);
+    }
+  }
+  let stripFrame = 0;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  function onStripScroll() {
+    if (!continuous || stripFrame) return;
+    stripFrame = requestAnimationFrame(() => {
+      stripFrame = 0;
+      trackStrip(true);
+    });
+  }
+  // Zooming, resizing, or the chapter changing moves the previews: redraw the nearby ones.
+  $effect(() => {
+    void stripPages;
+    void zoom;
+    if (!continuous) return;
+    const frame = requestAnimationFrame(() => trackStrip(false));
+    return () => cancelAnimationFrame(frame);
+  });
+  function previewDown(e: PointerEvent, sp: StripPage) {
+    if (e.button > 2) return;
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
+    const hit = showRegions && e.button === 0
+      ? [...sp.lines].reverse().find((l) => x >= (l.x ?? 0) && x <= (l.x ?? 0) + (l.w ?? 0.2) && y >= (l.y ?? 0) && y <= (l.y ?? 0) + (l.h ?? 0.1))
+      : undefined;
+    ownSwitch = sp.page.id;
+    onstrippage?.(sp.page.id, hit?.id);
+  }
   function flowPath(from: LineRow, to: LineRow, width: number, height: number) {
     const a = regionCenter(from);
     const b = regionCenter(to);
@@ -737,13 +822,32 @@
   // The page sits in a gutter of empty canvas so its edges and corners can be scrolled clear
   // of the floating toolbars. Not for side-by-side review (two pages share the row).
   // Entering a view or changing page centres the view back on the page.
-  const gutter = $derived(step === "Prepare" || !reviewSideBySide);
+  const continuous = $derived(step !== "Prepare" && !reviewSideBySide && !!page && stripPages.length > 1);
+  const gutter = $derived(!continuous && (step === "Prepare" || !reviewSideBySide));
+  const stripIndex = $derived(continuous && page ? stripPages.findIndex((sp) => sp.page.id === page!.id) : -1);
+  const stripBefore = $derived(stripIndex > 0 ? stripPages.slice(0, stripIndex) : []);
+  const stripAfter = $derived(stripIndex >= 0 ? stripPages.slice(stripIndex + 1) : []);
+  /** The page this canvas made current itself (a click or a scroll): the view stays where it is. */
+  let ownSwitch = "";
+  let ignoreScrollUntil = 0;
+  /** Previews within about a screen and a half of the view; the rest are blank placeholders. */
+  let nearIds = $state<Set<string>>(new Set());
+  const holding = $derived(!!drawing || polygonDraft.length > 0 || !!cropDraft || !!pathDrag || pathDraft.length > 0);
   let overscrollFor = "";
   $effect(() => {
-    const key = gutter && page ? `${step}:${page.id}` : "";
+    const key = page ? `${step}:${page.id}:${continuous ? "strip" : gutter ? "page" : ""}` : "";
     if (key === overscrollFor) return;
     overscrollFor = key;
-    if (!key) return;
+    if (!key || (!continuous && !gutter)) return;
+    if (continuous) {
+      // Without waiting a frame, so a region scroll that follows (a card picked in the list)
+      // starts from this page rather than being undone by it.
+      const own = ownSwitch === page!.id;
+      ownSwitch = "";
+      if (!own) scrollToActivePage();
+      trackStrip(false);
+      return;
+    }
     requestAnimationFrame(() => {
       const scroller = canvasScrollEl;
       const canvas = scroller?.querySelector(".canvas-page.overscroll");
@@ -760,7 +864,51 @@
 
 <svelte:window onkeydown={draftKey} />
 
-<div class="canvas-scroll" class:zoom-mode={zooming} bind:this={canvasScrollEl} use:scrollAction>
+{#snippet stripPreview(sp: StripPage)}
+  <div
+    class="canvas-page strip-preview"
+    data-page-id={sp.page.id}
+    style={`aspect-ratio:${sp.page.width}/${sp.page.height};--page-w:${zoom}%;width:var(--page-w)`}
+    role="button"
+    tabindex="-1"
+    aria-label={`Page ${sp.number}. Click to edit it.`}
+    onpointerdown={(e) => previewDown(e, sp)}
+  >
+    {#if nearIds.has(sp.page.id)}
+      <img class="artwork" src={sp.image} alt={`Page ${sp.number}`} draggable="false" />
+      {#if (step === "Typeset" || step === "Review") && !compare}{#each sp.lines.filter((l) => l.sourceState !== "ignored") as l (l.id)}{@const layout =
+            regionLayout(l.id)}{#if layout}<div class="text-clip"><img
+              class="text-overlay"
+              style={[overlayStyle(l, layout), textMaskCss(regionTextMask(l.id))].filter(Boolean).join(";")}
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(layout.svg)}`}
+              alt=""
+            /></div>{/if}{/each}{/if}
+      {#if showRegions && sp.lines.length}
+        <svg viewBox={`0 0 ${sp.page.width} ${sp.page.height}`} aria-hidden="true" pointer-events="none">
+          <g opacity={ghostRegions ? 0.1 : 1}>
+            {#each sp.lines as l (l.id)}
+              <rect
+                class:ignored={l.sourceState === "ignored"}
+                x={(l.x ?? 0) * sp.page.width}
+                y={(l.y ?? 0) * sp.page.height}
+                width={(l.w ?? 0.2) * sp.page.width}
+                height={(l.h ?? 0.1) * sp.page.height}
+                fill="transparent"
+                stroke={colorFor(l.lineType)}
+                stroke-opacity="0.8"
+                stroke-width="1.5"
+                vector-effect="non-scaling-stroke"
+              />
+            {/each}
+          </g>
+        </svg>
+      {/if}
+    {/if}
+    <span class="strip-label">{sp.number}</span>
+  </div>
+{/snippet}
+
+<div class="canvas-scroll" class:zoom-mode={zooming} class:continuous bind:this={canvasScrollEl} use:scrollAction onscroll={onStripScroll}>
   {#if page && step === "Prepare"}
     <div
       bind:this={prepElement}
@@ -800,9 +948,12 @@
         <span class="review-page-label">Raw</span>
       </div>
     {/if}
+    {#each stripBefore as sp (sp.page.id)}{@render stripPreview(sp)}{/each}
     <div
       class="canvas-page"
       class:overscroll={gutter}
+      data-page-id={continuous ? page.id : undefined}
+      data-active-page={continuous ? "" : undefined}
       bind:clientWidth={canvasWidth}
       class:zoom-tool={zooming}
       class:brush-tool={!zooming && (tool === "brush" || tool === "erase" || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
@@ -823,6 +974,7 @@
         alt={`Page ${page.pageNumber ?? page.originalName}`}
         draggable="false"
       />
+      {#if continuous}<span class="strip-label current">{stripIndex + 1}</span>{/if}
       {#if reviewSideBySide}<span class="review-page-label">Normal</span>{/if}
       {#if !compare}<PlacedAssetsCanvas width={page.width} height={page.height} placements={placedAssets} selectedId={selectedAssetId} editable={step==='Clean'&&editAssets&&canClean&&!busy} asset={graphicAsset??asset} onselect={onassetselect} onchange={onassetschange}/>{/if}
       {#if step === "Clean" && (tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
@@ -1163,18 +1315,31 @@
           >{/each}
         {#if showRegions && selected && canEdit && ["Translate", "Review"].includes(step)}
           {#each [[selected.x ?? 0, selected.y ?? 0], [(selected.x ?? 0) + (selected.w ?? 0.2), selected.y ?? 0], [(selected.x ?? 0) + (selected.w ?? 0.2), (selected.y ?? 0) + (selected.h ?? 0.1)], [selected.x ?? 0, (selected.y ?? 0) + (selected.h ?? 0.1)]] as [x, y], corner}
-            <rect
-              x={x * page.width - 5}
-              y={y * page.height - 5}
-              width="10"
-              height="10"
-              fill={colorFor(selected.lineType)}
+            <!-- Sized in screen pixels (regionLabelScale is page px per screen px), so the
+                 handles stay easy to grab at any zoom: a 12 px square in a 28 px grab area. -->
+            {@const grab = 28 * regionLabelScale}
+            {@const mark = 12 * regionLabelScale}
+            <g
+              class="corner-handle"
+              style:cursor={corner % 2 ? "nesw-resize" : "nwse-resize"}
               role="button"
               tabindex="0"
               aria-label={`Resize region corner ${corner + 1}`}
               onpointerdown={(e) =>
                 dragRegion(e, selected!, corner)}
-            />
+            >
+              <rect x={x * page.width - grab / 2} y={y * page.height - grab / 2} width={grab} height={grab} fill="transparent" />
+              <rect
+                x={x * page.width - mark / 2}
+                y={y * page.height - mark / 2}
+                width={mark}
+                height={mark}
+                fill={colorFor(selected.lineType)}
+                stroke="#fff"
+                stroke-width={1.5 * regionLabelScale}
+                pointer-events="none"
+              />
+            </g>
           {/each}
         {/if}
         {#if showRegions && drawing?.bounds}{@const bounds =
@@ -1402,7 +1567,9 @@
           </g>
         {/if}
       </svg>
-    </div>{:else}<p class="empty">
+    </div>
+    {#each stripAfter as sp (sp.page.id)}{@render stripPreview(sp)}{/each}
+  {:else}<p class="empty">
       Add images in Prepare to begin.
     </p>{/if}
 </div>
@@ -1433,6 +1600,45 @@
   }
   .canvas-scroll.zoom-mode {
     overflow: hidden;
+  }
+  /* Continuous view: the pages stacked edge to edge, with the same gutter as one page. */
+  .canvas-scroll.continuous {
+    flex-direction: column;
+    gap: 0;
+    /* The current page's element is reused for whichever page becomes current. Chrome's scroll
+       anchoring would follow that element to its new place and jump the view a page on, which
+       makes the next page current, and so on to the end of the chapter. */
+    overflow-anchor: none;
+  }
+  .canvas-scroll.continuous > .canvas-page {
+    margin: 0 max(45%, calc((100% - var(--page-w)) / 2));
+    align-self: flex-start;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.45);
+  }
+  .canvas-scroll.continuous > .canvas-page:first-child {
+    margin-top: 45vh;
+  }
+  .canvas-scroll.continuous > .canvas-page:last-child {
+    margin-bottom: 45vh;
+  }
+  .strip-preview {
+    cursor: pointer;
+  }
+  .strip-label {
+    position: absolute;
+    top: 0;
+    right: calc(100% + 10px);
+    padding: 3px 7px;
+    border-radius: 4px;
+    font: 600 12px/1 Inter, system-ui, sans-serif;
+    color: var(--hud-muted, #8a94a6);
+    background: var(--hud-panel, #1b2230);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .strip-label.current {
+    color: #10161f;
+    background: var(--hud-teal-ink, #3fc2a4);
   }
   .canvas-page {
     position: relative;

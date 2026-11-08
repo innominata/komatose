@@ -281,6 +281,16 @@ export const REMOTE_PROVIDERS: RemoteProvider[] = [
 		models: ['hunyuan-turbo', 'hunyuan-vision'],
 	},
 	{
+		id: 'hunyuan-intl',
+		name: 'Tencent international (TokenHub)',
+		group: 'china',
+		baseUrl: 'https://tokenhub-intl.tencentcloudmaas.com/v1',
+		apiKeyEnv: 'HUNYUAN_INTL_API_KEY',
+		keyUrl: 'https://console.tencentcloud.com/tokenhub/apikey',
+		models: ['hunyuan-turbo', 'hunyuan-vision'],
+		notes: 'OpenAI-compatible Tencent endpoint for keys issued on the international console (tencentcloud.com).',
+	},
+	{
 		id: 'ark',
 		name: 'Volcengine Ark',
 		group: 'china',

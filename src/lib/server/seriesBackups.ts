@@ -460,9 +460,9 @@ function restoreRows(manifest: Manifest, current: Snapshot | null, actor: Public
   for (const id of oldEpisodes) sqlite.prepare('DELETE FROM workflow_revisions WHERE episode_id=?').run(id);
   sqlite.prepare("DELETE FROM workflow_revisions WHERE entity_id='series:'||?").run(seriesId);
   for (const table of tables) insertRows(sqlite, table, saved[table], table === 'global_font_assets');
-  // Insert triggers advance episode revisions/numbering. Restore the saved flags
-  // after all child inserts, using fresh revisions to reject stale editor saves.
-  for (const episode of saved.episodes) sqlite.prepare('UPDATE episodes SET revision=?,numbering_stale=? WHERE id=?').run(episode.revision, episode.numbering_stale, episode.id);
+  // Insert triggers advance episode revisions and number the pages in reading order.
+  // Restore the saved revisions after all child inserts, to reject stale editor saves.
+  for (const episode of saved.episodes) sqlite.prepare('UPDATE episodes SET revision=?,numbering_stale=0 WHERE id=?').run(episode.revision, episode.id);
   sqlite.prepare('INSERT INTO activity(id,series_id,user_id,action,payload,created_at) VALUES(?,?,?,\'restored_series_backup\',?,?)')
     .run(operationId, seriesId, actor.id, JSON.stringify({ label: manifest.label, backupCreatedAt: manifest.createdAt, safetyBackupId }), Date.now());
   if ((sqlite.prepare('PRAGMA foreign_key_check').all() as unknown[]).length) throw new WorkflowError('Restore failed its database integrity check.');

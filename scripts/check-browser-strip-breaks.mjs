@@ -68,7 +68,7 @@ try {
   await expect(page.locator('[data-find="floating-reslice-strip"]')).toHaveCount(0);
   for (const y of [1200, 2400, 3600]) expect(layout.bands.some(b => b.top <= top + y && b.bottom > top + y)).toBeTruthy();
   await stripPoint(layout.pages[1].top, layout.height);
-  await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Add page break (A)" }).click();
+  await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Add page break (N)" }).click();
   await page.screenshot({ path: "/tmp/komatose-strip-breaks-boundary.png" });
   await page.keyboard.press("Escape");
 
@@ -85,7 +85,7 @@ try {
   await expect(page.locator('[data-find="floating-reslice-strip"]')).toHaveCount(0);
 
   // The + tool adds a break that snaps into the nearby gutter.
-  await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Add page break (A)" }).click();
+  await page.getByRole("toolbar", { name: "Tools" }).getByRole("button", { name: "Add page break (N)" }).click();
   let p = await stripPoint(top + 1210, layout.height);
   await page.mouse.click(p.x, p.y);
   await expect.poll(breakValues).toContain(top + 1200);
