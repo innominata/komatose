@@ -50,15 +50,23 @@ export function compareOcrReadings(
   }
   // A model reading both the crop and its silhouette is one voice, not two.
   const votes = (list: OcrReading[]) => new Set(list.map((reading) => reading.model)).size;
-  const ranked = [...clusters.values()].sort((a, b) => votes(b) - votes(a));
+  // On a tie, readings of the crop itself outrank silhouette second opinions, so one
+  // model whose silhouette read differs from its crop read does not disagree with itself.
+  const cropVotes = (list: OcrReading[]) => new Set(list.filter((reading) => reading.view !== 'silhouette').map((reading) => reading.model)).size;
+  const ranked = [...clusters.values()].sort((a, b) => votes(b) - votes(a) || cropVotes(b) - cropVotes(a));
   const top = ranked[0];
   const second = ranked[1];
-  const agreed = Boolean(top && (!second || votes(top) > votes(second)));
+  const agreed = Boolean(top && (!second || votes(top) > votes(second) ||
+    (votes(top) === votes(second) && cropVotes(top) > cropVotes(second))));
   let source = '';
   if (agreed && top) {
     const preferred = preferIds.map((id) => top.find((reading) => reading.model === id)).find(Boolean);
     const longest = [...top].sort((a, b) => b.source.length - a.source.length)[0];
     source = (preferred || longest).source.trim();
   }
-  return { agreed, source, readings };
+  // A silhouette read only breaks ties; one that lost is not a reading of its own.
+  const kept = agreed && top
+    ? readings.filter((reading) => reading.view !== 'silhouette' || top.includes(reading))
+    : readings;
+  return { agreed, source, readings: kept };
 }

@@ -394,7 +394,7 @@
           >{/if}{#if canAddRegionType}<button
             type="button"
             disabled={!canClean || busy || regionDoc.data.locked}
-            title="Create a region type from this style"
+            title="Save this style as a region type and use it on this region. An existing type’s name replaces its style."
             onclick={() => onsavestyleas?.()}
             >Save style as…</button
           >{/if}

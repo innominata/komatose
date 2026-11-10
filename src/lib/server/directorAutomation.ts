@@ -40,7 +40,7 @@ import {
   readiness,
   resolveStyle,
   ensureOwnRegionStyles,
-  restyleForType,
+  rebaseStyleForType,
 } from "./workflowService";
 import { fitText, listFonts, loadFont, validateStyle } from "./typesetting";
 import { capturePageImages } from "./pageImages";
@@ -1417,7 +1417,7 @@ async function classify(
                 ? {
                     layout: undefined,
                     ...(region.data.style
-                      ? { style: restyleForType(ctx.series.id, region.data.style, line.lineType, type) }
+                      ? { style: rebaseStyleForType(ctx.series.id, region.data.style, line.lineType, type) }
                       : {}),
                   }
                 : {}),

@@ -381,6 +381,21 @@ test('plurality: two-agree, 2-vs-1, n=1, tie, all fail', () => {
 	]);
 	assert.equal(settled.agreed, true, 'a silhouette reading can settle a disagreement between models');
 	assert.equal(settled.source, 'コンコン');
+	// One selected model: a differing silhouette read is not a disagreement or a suggestion.
+	const alone = compareOcrReadings([
+		{ model: 'a', source: 'ドン' },
+		{ model: 'a', source: 'ボン', view: 'silhouette' },
+	]);
+	assert.equal(alone.agreed, true);
+	assert.equal(alone.source, 'ドン');
+	assert.deepEqual(alone.readings, [{ model: 'a', source: 'ドン' }]);
+	// The silhouette still stands in when the crop read found nothing.
+	const fallback = compareOcrReadings([
+		{ model: 'a', source: '', error: 'empty' },
+		{ model: 'a', source: 'ドン', view: 'silhouette' },
+	]);
+	assert.equal(fallback.agreed, true);
+	assert.equal(fallback.source, 'ドン');
 });
 
 test('estimate math: vision serial, batched translate, Hy-MT serial, parallel transcribe set', () => {

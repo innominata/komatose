@@ -182,17 +182,19 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
         })();
       }
     }
-    // A new type brings its series style. The region's saved style is usually a stamped copy
-    // of the old type's default (or a fit of it), so only fields someone changed survive;
-    // the rest follow the new type, and the next fit uses them.
+    // A new type brings its series style, as Reset to Default would; the next fit uses it.
     const retyped = "lineType" in body && line.lineType !== existing.lineType;
+    // Sent back with the line, so the browser never keeps (and later re-saves) the old type's style.
+    let restyled = false;
     if (retyped) {
       const region = getDoc<RegionData>(`region:${line.id}`, {});
-      if (!region.data.locked && region.data.style)
+      if (!region.data.locked && region.data.style) {
+        restyled = true;
         putDoc(episode.id, region.id, {
           ...region.data,
           style: restyleForType(episode.seriesId, region.data.style, existing.lineType, line.lineType),
         }, region.revision);
+      }
     }
     if (patch.status === "approved")
       rejectPendingSuggestions(episode.id, line.id);
@@ -223,11 +225,11 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
         try {
           return json({ line, doc: await fitRegion(series, episode, line.id, region.revision) });
         } catch (e) {
-          return json({ line, fitError: messageOf(e) });
+          return json({ line, fitError: messageOf(e), ...(restyled ? { doc: getDoc<RegionData>(`region:${line.id}`, {}) } : {}) });
         }
       }
     }
-    return json({ line });
+    return json({ line, ...(restyled ? { doc: getDoc<RegionData>(`region:${line.id}`, {}) } : {}) });
   } catch (e) {
     return fail(statusOf(e), messageOf(e));
   }

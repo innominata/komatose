@@ -249,7 +249,16 @@ export function saveStyleAsRegionType(
   style: Partial<TextStyle>,
 ) {
   const current = getDoc<Partial<Preferences>>(`series:${seriesId}`, {});
-  const kind = regionKindFromLabel(label, activeRegionKinds(current.data.regionKinds));
+  const active = activeRegionKinds(current.data.regionKinds);
+  // A name already in use replaces that type's style, the same as saving it as the type's
+  // series default: other regions of that type keep their current look.
+  const name = label.trim().replace(/\s+/g, " ").toLowerCase();
+  const existing = active.find((item) => item.label.toLowerCase() === name);
+  if (existing) {
+    const doc = saveSeriesTypeSettings(seriesId, expectedRevision, { styles: { [existing.id]: style } });
+    return { doc, kind: existing, replaced: true };
+  }
+  const kind = regionKindFromLabel(label, active);
   const kinds = normalizeRegionKinds([
     ...activeRegionKinds(current.data.regionKinds),
     kind,
@@ -269,7 +278,7 @@ export function saveStyleAsRegionType(
     },
     expectedRevision,
   );
-  return { doc, kind };
+  return { doc, kind, replaced: false };
 }
 
 function sameStyle(a: Partial<TextStyle>, b: Partial<TextStyle>) {
@@ -313,9 +322,10 @@ function seriesTypeStyle(seriesId: string, lineType: string): TextStyle {
 
 /**
  * A region's saved style re-based on a new type: fields still matching the old type's
- * series default follow the new type, and fields someone changed are kept.
+ * series default follow the new type, and fields that differ are kept. The Director's
+ * automatic type corrections use this, so a correction does not discard a region's look.
  */
-export function restyleForType(
+export function rebaseStyleForType(
   seriesId: string,
   style: Partial<TextStyle> | undefined,
   fromType: string,
@@ -328,6 +338,21 @@ export function restyleForType(
     if (style[key] !== undefined && style[key] !== previous[key])
       (next as Record<string, unknown>)[key] = style[key];
   return pickStyle(next);
+}
+
+/**
+ * A region's saved style after a type change: the new type's series default, as Reset to
+ * Default gives. Fields the region had from fitting (auto-contrast colours) or from an older
+ * default pinned onto it cannot be told apart from deliberate changes, so none carry over.
+ */
+export function restyleForType(
+  seriesId: string,
+  style: Partial<TextStyle> | undefined,
+  _fromType: string,
+  toType: string,
+) {
+  if (!style) return undefined;
+  return pickStyle(seriesTypeStyle(seriesId, toType));
 }
 
 /** Keys a complete saved style may leave out: absent means "none" (no layer style). */

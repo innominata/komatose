@@ -48,7 +48,7 @@
     pageNumber: (id: string) => number;
     onselectpage: (id: string) => void;
     oncrop: (rect: { imageId: string; x: number; y: number; w: number; h: number }) => void;
-    onzoom: (dir: 1 | -1) => void;
+    onzoom: (dir: 1 | -1, at?: { clientX: number; clientY: number }) => void;
     scrollEl?: HTMLDivElement;
     scrollAction?: (node: HTMLElement) => { destroy?: () => void } | void;
   } = $props();
@@ -127,7 +127,7 @@
   }
   function down(e: PointerEvent) {
     if (e.button !== 0) return;
-    if (zooming) { onzoom(e.altKey ? -1 : 1); return; }
+    if (zooming) { onzoom(e.altKey ? -1 : 1, e); return; }
     const p = stripPoint(e);
     const near = breakNear(p);
     if (near !== null && !disabled && tool !== "crop") { startDrag(e, near); return; }

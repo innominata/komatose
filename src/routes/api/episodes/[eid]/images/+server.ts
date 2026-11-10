@@ -7,7 +7,7 @@ import { assertEpisodeIdle, fail, messageOf, requireEpisodeAccess, requireUpload
 import { nid, now } from '$lib/server/ids';
 import { listImages, toImage } from '$lib/server/queries';
 import { broadcast } from '$lib/server/realtime';
-import { packForStitch, removeImageFile, saveImageFile, sniffMime, stitchPack, STITCH_MIN_COUNT } from '$lib/server/storage';
+import { removeImageFile, saveImageFile, sniffMime } from '$lib/server/storage';
 import sharp from 'sharp';
 import { isPsd, psdToPng, readLayeredPsd } from '$lib/server/replaceImage';
 import { createImportedRegions, layerToRegion, pageDpi, psdPageParts, psdTextLayers, psdTxt2, setUploadedArtwork } from '$lib/server/psdRegions';
@@ -112,31 +112,28 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				height: meta.height || 0
 			});
 		}
-		const packs = form.get('stitch') === 'true' ? packForStitch(incoming) : incoming.map((item) => [item]);
+		// One page per uploaded file. Long-strip uploads are never joined here;
+		// Reslice strips joins and recuts pages when the user asks for it.
 		for (let i = existing.length - 1; i >= insertAt; i--) {
 			const img = existing[i];
-			await db.update(images).set({ sortOrder: img.sortOrder + packs.length }).where(eq(images.id, img.id));
+			await db.update(images).set({ sortOrder: img.sortOrder + incoming.length }).where(eq(images.id, img.id));
 		}
 		const created = [];
-		let slice = 0;
-		for (let p = 0; p < packs.length; p++) {
-			const pack = packs[p];
-			const from = slice + 1;
-			slice += pack.length;
-			const stitched = await stitchPack(pack, { from, to: slice });
+		for (let p = 0; p < incoming.length; p++) {
+			const upload = incoming[p];
 			const saved = await saveImageFile({
 				seriesSlug: series.slug,
 				episodeSlug: episode.slug,
 				sortOrder: insertAt + p,
-				originalName: stitched.originalName,
-				bytes: stitched.bytes,
-				mime: stitched.mime
+				originalName: upload.originalName,
+				bytes: upload.bytes,
+				mime: upload.mime
 			});
 			const row = {
 				id: nid(),
 				episodeId: episode.id,
 				filename: saved.filename,
-				originalName: stitched.originalName,
+				originalName: upload.originalName,
 				sortOrder: insertAt + p,
 				width: saved.width,
 				height: saved.height,
@@ -150,9 +147,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			const image = toImage(row);
 			created.push(image);
 			broadcast(episode.id, { type: 'image:upsert', image });
-			const psd = pack.length === 1 ? (pack[0] as { psd?: PsdUpload }).psd : undefined;
-			if (pack.length > 1 && pack.some((item) => (item as { psd?: PsdUpload }).psd))
-				warnings.push('PSDs stitched into a strip keep only their image; upload them separately to keep their artwork and text.');
+			const psd = upload.psd;
 			if (psd) {
 				// The raw page is prepared first; the PSD's artwork and text go on top of it.
 				await preparePage(series, episode, image);

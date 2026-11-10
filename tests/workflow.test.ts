@@ -3442,10 +3442,14 @@ test("saving a style as a new region type keeps the built-in types and stores th
       resolveStyle({ ...line, lineType: "whisper" as typeof line.lineType }, {}, "e", "s").size,
       22,
     );
-    assert.throws(
-      () => saveStyleAsRegionType("s", saved.doc.revision, "whisper", { size: 9 }),
-      /already a region type/,
-    );
+    // The same name (any case) replaces that type's style instead of adding a second type.
+    const replaced = saveStyleAsRegionType("s", saved.doc.revision, "whisper ", { size: 9 });
+    assert.equal(replaced.replaced, true);
+    assert.equal(replaced.kind.id, "whisper");
+    assert.equal(replaced.doc.data.regionKinds?.filter((kind) => kind.label === "Whisper").length, 1);
+    assert.equal(replaced.doc.data.styles?.whisper?.size, 9);
+    assert.equal(replaced.doc.data.styles?.whisper?.fill, "#112233", "fields not sent keep the type's saved value");
+    assert.equal(saved.replaced, false);
   } finally {
     putDoc(null, "series:s", previous, getDoc("series:s", {}).revision);
   }
@@ -3555,10 +3559,10 @@ test("fitting with resetStyle drops region overrides and uses the current type",
     assert.ok(result.doc.data.layout.rows.map((row: {text: string}) => row.text).join(" ").includes("NEW TEXT"));
     assert.equal(result.doc.revision, changed.revision + 1);
 
-    // Changing the type (here before any refit) re-bases the saved style: a stamped copy of
-    // the old type's default follows the new type, and a field someone changed is kept.
+    // Changing the type (here before any refit) gives the region the new type's whole default,
+    // as Reset to Default does: no field of the old style carries over.
     const stamped = getDoc<any>("region:type-refit", {});
-    putDoc("e", stamped.id, { ...stamped.data, style: { ...stamped.data.style, size: 8, leading: 1.4 } }, stamped.revision);
+    putDoc("e", stamped.id, { ...stamped.data, style: { ...stamped.data.style, size: 8, leading: 1.4, fill: "#123456" } }, stamped.revision);
     const typed = (await listLines("e")).find(l => l.id === "type-refit")!;
     const retype = await PATCH({
       locals: { user: { id: "u", username: "test", role: "admin" } },
@@ -3569,11 +3573,29 @@ test("fitting with resetStyle drops region overrides and uses the current type",
     assert.equal(retype.status, 200);
     const restyled = getDoc<any>("region:type-refit", {}).data.style;
     assert.equal(restyled.size, 16, "the old type's size gives way to the new type's");
-    assert.equal(restyled.leading, 1.4, "a changed field survives the type change");
+    assert.notEqual(restyled.leading, 1.4, "the old leading gives way too");
+    assert.notEqual(restyled.fill, "#123456", "the old colour gives way too");
     // The fitted lettering follows in the same save: no separate refit is needed.
     const retyped = await retype.json();
     assert.equal(retyped.doc?.data.layout?.style.size, 16, "the layout is refitted with the new type's style");
     assert.equal(getDoc<any>("region:type-refit", {}).data.layout.style.size, 16);
+
+    // With nothing to refit (no fitted lettering), the re-based style still comes back in the
+    // response, so the browser does not keep showing, and later re-save, the old type's style.
+    const unfit = getDoc<any>("region:type-refit", {});
+    const { layout: _layout, ...withoutLayout } = unfit.data;
+    putDoc("e", unfit.id, withoutLayout, unfit.revision);
+    const plain = (await listLines("e")).find(l => l.id === "type-refit")!;
+    const back = await PATCH({
+      locals: { user: { id: "u", username: "test", role: "admin" } },
+      params: { eid: "e", lid: plain.id },
+      request: new Request("http://local/lines/type-refit", { method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lineType: "::", expectedRevision: plain.revision }) }),
+    } as any);
+    const unfitted = await back.json();
+    assert.equal(unfitted.doc?.data.style.size, 8, "the response carries the new type's style");
+    assert.equal(unfitted.doc?.data.layout, undefined);
+    assert.equal(unfitted.doc?.revision, getDoc<any>("region:type-refit", {}).revision);
   } finally {
     sqlite.prepare("DELETE FROM lines WHERE id='type-refit'").run();
     sqlite.prepare("DELETE FROM workflow_docs WHERE id='region:type-refit'").run();

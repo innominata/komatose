@@ -184,7 +184,7 @@ export async function readOcrConsensus(crop: Buffer, abort: AbortSignal,
     }
     // Agreeing readers differ only in spacing or punctuation; the Transcribe default's spelling wins.
     const result = compareOcrReadings(readings, [effectiveDefault('transcribe')]);
-    result.decision = await decideTranscription(crop, readings, signal, lang, hooks?.decider, hooks?.onDecide);
+    result.decision = await decideTranscription(crop, result.readings, signal, lang, hooks?.decider, hooks?.onDecide);
     if (result.decision) result.source = acceptedDecisionSource(result.decision);
     const translations = new Map<string, string>();
     let announced = false;

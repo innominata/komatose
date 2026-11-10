@@ -1154,7 +1154,7 @@
   function prepDown(e: PointerEvent) {
     if (e.button !== 0 || busy) return;
     if (zooming) {
-      nudgeZoom(e.altKey ? -1 : 1);
+      nudgeZoom(e.altKey ? -1 : 1, e);
       return;
     }
     if (!canUpload) return;
@@ -1893,7 +1893,9 @@
     // delay, so the new lettering shows straight away.
     edit(line, { lineType });
     const region = studioState?.regions[line.id];
-    if (selected?.id === line.id && !region?.data.layout)
+    // A region following the series shows the new type at once. One with its own saved
+    // style shows it when the save returns the server's re-based style.
+    if (selected?.id === line.id && !region?.data.layout && !region?.data.style)
       regionStyle = shownStyle(lineType, region?.data);
     if (!(await saves.flushAll())) notify("The region type is saved once the other unsaved edits are resolved.");
   }
@@ -2160,7 +2162,7 @@
     }
     if (!page || e.button !== 0 || busy) return;
     if (zooming) {
-      nudgeZoom(e.altKey ? -1 : 1);
+      nudgeZoom(e.altKey ? -1 : 1, e);
       return;
     }
     if (
@@ -3133,7 +3135,6 @@
     error = "";
     const form = new FormData();
     pendingFiles.forEach((f) => form.append("files", f));
-    form.append("stitch", String(pageMode === "strip"));
     for (const [key, value] of Object.entries(insertPosition))
       if (value) form.append(key, value);
     try {
@@ -3305,16 +3306,25 @@
   }
   async function saveStyleAs() {
     if (!selected || !regionDoc || !canClean || !canEditSeriesKinds || busy || regionDoc.data.locked) return;
-    const name = window.prompt("Name the new region type. It is added to this series and uses this region’s style.");
+    const name = window.prompt("Name the region type. A new name adds a type to this series; an existing name replaces that type’s style. This region then uses it.");
     if (name == null || !name.trim()) return;
+    const wanted = name.trim().replace(/\s+/g, " ").toLowerCase();
+    const existing = regionKinds.find((kind) => kind.label.toLowerCase() === wanted);
+    if (existing && !window.confirm(`Replace the “${existing.label}” style with this region’s style? Other “${existing.label}” regions keep their current look until you Reset to Default or Refit ${existing.label} in chapter.`)) return;
+    const line = selected;
     const result = await act({
       action: "save-style-as",
       expectedRevision: studioState?.seriesDefaults.revision ?? 0,
       label: name,
       style: { ...regionStyle },
     });
-    if (result?.kind)
-      notify(`Saved “${result.kind.label}” as a region type. Choose it from the type menu to use this style.`);
+    if (!result?.kind) return;
+    // The region takes the type it was saved as; the type change re-bases its style and refits it.
+    const current = studioState?.lines.find((row) => row.id === line.id);
+    if (current && current.lineType !== result.kind.id) await setLineType(current, result.kind.id);
+    notify(result.replaced
+      ? `Replaced the “${result.kind.label}” style. This region now uses it.`
+      : `Saved “${result.kind.label}” as a region type. This region now uses it.`);
   }
   async function refitCategory() {
     if (!selected || !canClean || busy || typesetRunning()) return;
@@ -3602,8 +3612,44 @@
   function dismissToast(id: number) {
     toasts = toasts.filter((t) => t.id !== id);
   }
-  function nudgeZoom(dir: 1 | -1) {
-    zoom = clamp(zoom + dir * 10, 30, 2000);
+  function nudgeZoom(dir: 1 | -1, at?: { clientX: number; clientY: number }) {
+    setZoom(zoom + dir * 10, at);
+  }
+  /** Changes the zoom while keeping the artwork under the pointer (or the middle of the view) still. */
+  function setZoom(next: number, at?: { clientX: number; clientY: number }, min = 30) {
+    next = clamp(next, min, 2000);
+    if (next === zoom) return;
+    const scroller = canvasScrollEl;
+    const pages = scroller ? [...scroller.querySelectorAll<HTMLElement>(":scope > .canvas-page, :scope > .strip")] : [];
+    if (!scroller || !pages.length) {
+      zoom = next;
+      return;
+    }
+    const view = scroller.getBoundingClientRect();
+    const x = at?.clientX ?? view.left + view.width / 2;
+    const y = at?.clientY ?? view.top + view.height / 2;
+    // The page under the point, or the one nearest to it.
+    let index = 0;
+    let best = Infinity;
+    pages.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const d = Math.max(r.top - y, 0, y - r.bottom) + Math.max(r.left - x, 0, x - r.right);
+      if (d < best) {
+        best = d;
+        index = i;
+      }
+    });
+    const before = pages[index].getBoundingClientRect();
+    const fx = before.width ? (x - before.left) / before.width : 0;
+    const fy = before.height ? (y - before.top) / before.height : 0;
+    zoom = next;
+    void tick().then(() => {
+      const el = scroller.querySelectorAll<HTMLElement>(":scope > .canvas-page, :scope > .strip")[index];
+      if (!el) return;
+      const after = el.getBoundingClientRect();
+      scroller.scrollLeft += after.left + fx * after.width - x;
+      scroller.scrollTop += after.top + fy * after.height - y;
+    });
   }
   function typesetRunning() {
     return !!studioState?.jobs?.some(
@@ -3784,7 +3830,7 @@
       }
       if (!zooming && !e.altKey) return;
       e.preventDefault();
-      nudgeZoom(e.deltaY > 0 ? -1 : 1);
+      nudgeZoom(e.deltaY > 0 ? -1 : 1, e);
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return {
@@ -4549,7 +4595,7 @@
       else jobsPanel = jobsPanel === "collapsed" ? "shown" : "collapsed";
     }}
     onzoom={nudgeZoom}
-    onresetzoom={() => (zoom = 100)}
+    onresetzoom={() => setZoom(100)}
     onshortcuts={() => (keysOpen = true)}
     ontutorial={openTutorial}
   >
@@ -5064,7 +5110,7 @@
                   compare = reviewView === "raw";
                 } else compare = !compare;
               }}
-              onzoom={(next) => { zoom = next === "fit" ? 100 : clamp(next, 25, 2000); }}
+              onzoom={(next) => setZoom(next === "fit" ? 100 : next, undefined, 25)}
             />
             </div>
           </div>

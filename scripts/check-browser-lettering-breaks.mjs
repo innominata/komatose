@@ -93,8 +93,12 @@ try {
   // could not run; with the font present the save returns the refitted region instead.
   if (!hadLayout) {
     // Nothing is fitted yet, so the type change only re-bases the style for the first fit.
-    expect(saved.doc).toBeUndefined();
+    // A region with its own style gets the re-based style back, so the browser shows it.
     expect(saved.fitError).toBeUndefined();
+    if (saved.doc) {
+      expect(saved.doc.data.layout).toBeFalsy();
+      await expect.poll(async () => (await state()).regions[line.id].revision).toBe(saved.doc.revision);
+    }
   } else if (saved.doc) {
     expect(saved.doc.data.layout).toBeTruthy();
     await expect.poll(async () => (await state()).regions[line.id].revision).toBe(saved.doc.revision);
