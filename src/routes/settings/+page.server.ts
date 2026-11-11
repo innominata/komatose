@@ -7,11 +7,13 @@ import {
 } from "$lib/server/http";
 import { canClean } from "$lib/server/access";
 import { listFonts, uploadFont } from "$lib/server/typesetting";
+import { listPatterns } from "$lib/server/patterns";
 import type { Actions, PageServerLoad } from "./$types";
 export const load: PageServerLoad = ({ locals }) => {
   const user = requireUser(locals.user);
   return {
     fonts: listFonts(null),
+    patterns: listPatterns(),
     canManage: canClean(user),
   };
 };

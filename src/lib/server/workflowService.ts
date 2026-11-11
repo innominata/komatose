@@ -355,8 +355,8 @@ export function restyleForType(
   return pickStyle(seriesTypeStyle(seriesId, toType));
 }
 
-/** Keys a complete saved style may leave out: absent means "none" (no layer style). */
-const OPTIONAL_STYLE_KEYS = new Set<string>(["effects"]);
+/** Keys a complete saved style may leave out: absent means "none" (no layer style, not stacked). */
+const OPTIONAL_STYLE_KEYS = new Set<string>(["effects", "stacked"]);
 
 function styleIsOwned(style: Partial<TextStyle> | undefined) {
   return !!style && STYLE_KEYS.every((key) => OPTIONAL_STYLE_KEYS.has(key) || style[key] !== undefined);

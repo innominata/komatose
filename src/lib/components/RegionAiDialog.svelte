@@ -74,6 +74,8 @@
     pending?: boolean;
     idle?: boolean;
     cropScale?: ReviewCropZoom;
+    /** Degrees the crop was turned before it was sent. */
+    rotation?: number;
     /** What the reviewer was shown: crop, mask, silhouette, or trace. */
     sent?: string;
   };
@@ -115,9 +117,64 @@
   let originalCropSize = $state({ width: 0, height: 0 });
   let originalCropWrapWidth = $state(0);
   let originalCropWrapHeight = $state(0);
+  /** Degrees clockwise the crop is turned before it is sent (e.g. 90 to stand vertical text up). */
+  let cropRotation = $state(0);
+  /** The angle while the rotate handle is being dragged; committed on release. */
+  let dragRotation = $state<number | null>(null);
+  const shownRotation = $derived(dragRotation ?? cropRotation);
+  /**
+   * The crop's footprint once turned, per pixel of crop: room for the turned image. It follows
+   * the committed angle, not the drag, so the crop's centre stays put under the pointer.
+   */
+  const turnedBox = $derived.by(() => {
+    const rad = (cropRotation * Math.PI) / 180, c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
+    const { width, height } = originalCropSize;
+    return { width: width * c + height * s, height: width * s + height * c };
+  });
+  // 100 px leaves room for the rotate handle above the crop, whichever way it is turned.
   const originalCropScale = $derived(Math.min(4,
-    Math.max(1, originalCropWrapHeight - 16) / (originalCropSize.height || 1),
-    Math.max(1, originalCropWrapWidth - 16) / (originalCropSize.width || 1)) * reviewCropZoom);
+    Math.max(1, originalCropWrapHeight - 104) / (turnedBox.height || 1),
+    Math.max(1, originalCropWrapWidth - 104) / (turnedBox.width || 1)) * reviewCropZoom);
+  function normalizeRotation(deg: number) {
+    const r = Math.round(((((deg % 360) + 540) % 360) - 180) * 10) / 10;
+    return r === -180 ? 180 : r;
+  }
+  function rotationLabel(deg: number) {
+    return `${Number.isInteger(deg) ? deg : deg.toFixed(1)}°`;
+  }
+  /** Turns the crop. The mask and trace are drawn over the turned crop, so both start over. */
+  function setCropRotation(deg: number) {
+    const next = normalizeRotation(deg);
+    dragRotation = null;
+    if (next === cropRotation) return;
+    abortReviews();
+    cropRotation = next;
+    maskReady = false;
+    traced = false;
+    reviewSession++;
+  }
+  let rotor = $state<HTMLElement>();
+  function handleAngle(e: PointerEvent) {
+    const r = rotor!.getBoundingClientRect();
+    const deg = (Math.atan2(e.clientX - (r.left + r.width / 2), -(e.clientY - (r.top + r.height / 2))) * 180) / Math.PI;
+    // Shift snaps to 15°; without it, a few degrees either side of a right angle snaps to it.
+    if (e.shiftKey) return Math.round(deg / 15) * 15;
+    const right = Math.round(deg / 90) * 90;
+    return Math.abs(deg - right) < 3 ? right : Math.round(deg);
+  }
+  function rotateDown(e: PointerEvent) {
+    if (e.button !== 0 || !rotor) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragRotation = normalizeRotation(handleAngle(e));
+  }
+  function rotateMove(e: PointerEvent) {
+    if (dragRotation == null || !rotor) return;
+    dragRotation = normalizeRotation(handleAngle(e));
+  }
+  function rotateUp() {
+    if (dragRotation != null) setCropRotation(dragRotation);
+  }
   let maskReady = $state(false);
   let reviewSession = $state(0);
   let maskExpansion = $state(3);
@@ -133,11 +190,14 @@
       : view === "trace" && !traced ? "Trace the text first"
       : "");
   const sentLabel = $derived(view === "mask" && silhouette ? "silhouette" : view);
-  const cropSrc = $derived(
+  /** The crop as it is on the page; the Crop view turns it on screen. */
+  const plainCropSrc = $derived(
     line
       ? `${imageBase}?lineId=${encodeURIComponent(line.id)}&revision=${line.revision}`
       : "",
   );
+  /** The crop turned on the server, as the mask and trace editors draw over and models receive. */
+  const cropSrc = $derived(plainCropSrc && cropRotation ? `${plainCropSrc}&rotate=${cropRotation}` : plainCropSrc);
   const enquireGate = $derived(providerRunGate(model.engine, "advisory", engines));
   function reviewerLabel(model: TaskEngine) {
     // The live engine catalog knows display names for models this machine
@@ -209,6 +269,8 @@
     silhouette = false;
     traced = false;
     reviewCropZoom = 1;
+    cropRotation = 0;
+    dragRotation = null;
     originalCropSize = { width: 0, height: 0 };
     maskReady = false;
     reviewSession++;
@@ -271,6 +333,7 @@
     if (!selected.length || !line || viewBlocked) return;
     const targetId = line.id;
     const sentView = view;
+    const rotation = cropRotation;
     const sent = sentLabel;
     const useSilhouette = sentView === "mask" && silhouette;
     const cropScale = reviewCropZoom;
@@ -298,6 +361,7 @@
         idle: false,
         cropScale,
         sent,
+        rotation,
       });
     }
     await tick();
@@ -319,6 +383,7 @@
                 view: sentView,
                 maskEnabled: sentView === "mask",
                 cropScale,
+                ...(rotation ? { rotation } : {}),
                 ...(useSilhouette ? { silhouette: true } : {}),
                 ...(individuallySelected ? { selectedReviewer: model } : {}),
                 ...(mask ? { mask } : {}),
@@ -338,6 +403,7 @@
               idle: false,
               cropScale,
               sent,
+              rotation,
             });
           } catch (e) {
             if (controller.signal.aborted) return;
@@ -348,6 +414,7 @@
               idle: false,
               cropScale,
               sent,
+              rotation,
             });
           }
         }),
@@ -393,6 +460,7 @@
           lineId: line.id,
           expectedRevision: line.revision,
           expansion: Number.isFinite(Number(maskExpansion)) ? Number(maskExpansion) : 3,
+          ...(cropRotation ? { rotation: cropRotation } : {}),
         },
         controller.signal,
       );
@@ -612,15 +680,39 @@
       {#key reviewSession}
         <div class="mode-pane" hidden={view !== "crop"}>
           <div class="original-crop" bind:clientWidth={originalCropWrapWidth} bind:clientHeight={originalCropWrapHeight}>
-            <img
-              class="review-crop"
-              src={cropSrc}
-              alt="Original text region sent to reviewers"
-              onload={e => { const image = e.currentTarget as HTMLImageElement; originalCropSize = { width: image.naturalWidth, height: image.naturalHeight }; }}
-              style={originalCropSize.width ? `width:${originalCropSize.width * originalCropScale}px;height:${originalCropSize.height * originalCropScale}px` : undefined}
-            />
+            <div class="rotate-stage"
+              style={originalCropSize.width ? `width:${turnedBox.width * originalCropScale + 100}px;height:${turnedBox.height * originalCropScale + 100}px` : undefined}>
+              <div class="rotor" bind:this={rotor}
+                style={`transform:translate(-50%,-50%) rotate(${shownRotation}deg);${originalCropSize.width ? `width:${originalCropSize.width * originalCropScale}px;height:${originalCropSize.height * originalCropScale}px` : ""}`}>
+                <img
+                  class="review-crop"
+                  src={plainCropSrc}
+                  alt="Original text region sent to reviewers"
+                  draggable="false"
+                  onload={e => { const image = e.currentTarget as HTMLImageElement; originalCropSize = { width: image.naturalWidth, height: image.naturalHeight }; }}
+                />
+                <span class="rotate-stem" aria-hidden="true"></span>
+                <button type="button" class="rotate-handle" data-find="review-crop-rotate"
+                  aria-label={`Rotate crop (now ${rotationLabel(shownRotation)})`}
+                  title="Drag to turn the crop, e.g. to stand vertical text up. Shift snaps to 15°. Double-click to straighten."
+                  onpointerdown={rotateDown} onpointermove={rotateMove} onpointerup={rotateUp} onpointercancel={() => (dragRotation = null)}
+                  ondblclick={() => setCropRotation(0)}
+                  onkeydown={(e) => {
+                    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                      e.preventDefault();
+                      setCropRotation(cropRotation + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 15 : 1));
+                    }
+                  }}><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></button>
+              </div>
+            </div>
           </div>
           <div class="crop-tools">
+            <span class="zoom-group" role="group" aria-label="Crop rotation">
+              <button type="button" aria-label="Turn crop 90° anticlockwise" title="Turn 90° anticlockwise" onclick={() => setCropRotation(cropRotation - 90)}><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> 90°</button>
+              <button type="button" aria-label="Turn crop 90° clockwise" title="Turn 90° clockwise" onclick={() => setCropRotation(cropRotation + 90)}><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> 90°</button>
+              <button type="button" disabled={!cropRotation} title="Send the crop as it is on the page" onclick={() => setCropRotation(0)}>Straighten</button>
+              <span class="rotation-value" aria-live="polite">{rotationLabel(shownRotation)}</span>
+            </span>
             <span class="zoom-group" role="group" aria-label="Crop zoom">
               {#each REVIEW_CROP_ZOOMS as amount}<button type="button" aria-pressed={reviewCropZoom === amount}
                 aria-label={`View crop at ${amount}×`} title={`View at ${amount}× and send a ${amount}× crop on the next transcription request`}
@@ -662,7 +754,7 @@
           onclick={() => void reviewAutomatic()}
           >{automaticAttempted || reviewing || pendingReviews ? "Resubmit" : "Send to automatic reviewers"}</button
         >
-        <small>{viewBlocked || `Sends ${sentLabel} · ${reviewCropZoom}×`}</small>
+        <small>{viewBlocked || `Sends ${sentLabel} · ${reviewCropZoom}×${cropRotation ? ` · turned ${rotationLabel(cropRotation)}` : ""}`}</small>
       </div>
     {/if}
   {/if}
@@ -705,7 +797,7 @@
       <div class="reading-group" class:pending={entry.pending} aria-busy={entry.pending || undefined}>
         <div class="reading-model">
           <strong>{entry.label}</strong>
-          {#if entry.sent}<small>{entry.sent} · {entry.cropScale ?? 1}×</small>{/if}
+          {#if entry.sent}<small>{entry.sent} · {entry.cropScale ?? 1}×{entry.rotation ? ` · turned ${rotationLabel(entry.rotation)}` : ""}</small>{/if}
         </div>
         {#if !cards.length}
           <p class="reading-status" class:failed={entry.content.startsWith("Review failed")}
@@ -1031,6 +1123,51 @@
     display: block;
     background: white;
   }
+  .rotate-stage {
+    position: relative;
+    min-width: 100px;
+    min-height: 100px;
+  }
+  .rotor {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+  }
+  .rotor .review-crop {
+    width: 100%;
+    height: 100%;
+    user-select: none;
+  }
+  .rotate-stem {
+    position: absolute;
+    left: 50%;
+    bottom: 100%;
+    width: 2px;
+    height: 18px;
+    transform: translateX(-50%);
+    background: var(--hud-teal, #2bb5a0);
+    pointer-events: none;
+  }
+  .rotate-handle {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 16px);
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    transform: translateX(-50%);
+    display: grid;
+    place-items: center;
+    border: 2px solid var(--hud-teal, #2bb5a0);
+    border-radius: 50%;
+    background: #fff;
+    color: #10161f;
+    font-size: 12px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .rotate-handle:active { cursor: grabbing; }
+  .rotation-value { min-width: 3.5em; font-variant-numeric: tabular-nums; font-size: 0.8rem; padding: 0.2rem 0.3rem; }
   .crop-tools {
     display: flex;
     gap: 0.5rem;

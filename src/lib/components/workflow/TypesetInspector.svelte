@@ -57,6 +57,7 @@
     pageSize,
     oncharruns,
     ontextpaths,
+    onsizeramp,
     drawingTextPath = false,
     ondrawtextpath,
   }: {
@@ -98,6 +99,8 @@
     pageSize?: { width: number; height: number };
     oncharruns?: (runs: CharRun[], body: string) => void;
     ontextpaths?: (paths: TextPath[]) => void;
+    /** Removes the region's size ramp (null). */
+    onsizeramp?: (ramp: null) => void;
     drawingTextPath?: boolean;
     ondrawtextpath?: (on: boolean) => void;
   } = $props();
@@ -337,6 +340,8 @@
               ><option>center</option><option>left</option><option>right</option
               ></select
             ></label
+          ><label class="check-label" title="Each character on its own line, stacked under the one before (a blank line between words). Photoshop gets the same line breaks."
+            ><input type="checkbox" data-find="stacked-text" bind:checked={regionStyle.stacked} /> Stack letters vertically</label
           ><label
             >Emphasis<select bind:value={regionStyle.emphasis}
               ><option>normal</option><option>bold</option><option>italic</option
@@ -436,6 +441,14 @@
           <button type="button" disabled={busy || !canClean || regionDoc.data.locked} onclick={() => onrectangle?.()}><i class="bi bi-bounding-box" aria-hidden="true"></i> Set polygon to region bounds</button>
           <button type="button" disabled={busy || !canClean} data-find="approve-geometry" onclick={() => onapprovegeometry?.()}><i class="bi bi-check2-square" aria-hidden="true"></i> Approve geometry</button>
         </div>
+        <div class="size-ramp" data-find="size-ramp">
+          {#if regionDoc.data.sizeRamp}
+            <span>Size ramp: {regionDoc.data.sizeRamp.from}% → {regionDoc.data.sizeRamp.to}% along {regionStyle.stacked ? "the column" : "each line"}</span>
+            <button type="button" disabled={busy || !canClean || regionDoc.data.locked} onclick={() => onsizeramp?.(null)}>Remove size ramp</button>
+          {:else}
+            <span class="panel-hint">Shift-drag a corner of a four-point polygon to slant its edge: the text grows or shrinks glyph by glyph to follow it, on a steady baseline{regionStyle.stacked ? " (stacked text: drag sideways; it ramps down the column)" : ""}.</span>
+          {/if}
+        </div>
         {#if regionDoc.data.geometryApproved}
           <p class="muted">Geometry approved{#if regionDoc.data.geometryConfidence != null} · confidence {Math.round(regionDoc.data.geometryConfidence * 100)}%{/if}</p>
         {:else}
@@ -517,6 +530,8 @@
 {/if}
 
 <style>
+  .size-ramp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; }
+  .check-label { display: flex; align-items: center; gap: 6px; }
   .english-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 3px; }
   .english-box { display: block; margin-bottom: 8px; }
   .english-head label { margin: 0; }

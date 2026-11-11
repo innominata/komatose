@@ -349,6 +349,39 @@ export async function checkRegionAi({
     ["paddleocr-vl-1.6"],
     ["reviewer-grok-fixture"],
   ]);
+  // Rotate: drag the handle above the crop a quarter turn clockwise to stand vertical text up.
+  const handle = review.locator('[data-find="review-crop-rotate"]');
+  const cropImage = review.getByAltText("Original text region sent to reviewers");
+  await handle.scrollIntoViewIfNeeded();
+  const handleBox = await handle.boundingBox();
+  const cropBox = await cropImage.boundingBox();
+  const centre = { x: cropBox.x + cropBox.width / 2, y: cropBox.y + cropBox.height / 2 };
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 60, centre.y - 40, { steps: 4 });
+  await page.mouse.move(centre.x + 120, centre.y + 2, { steps: 4 });
+  await page.mouse.up();
+  await expect(handle).toHaveAttribute("aria-label", "Rotate crop (now 90°)");
+  await expect(review.getByText(/· turned 90°$/)).toBeVisible();
+  // The server turns the crop: its width and height swap.
+  const cropUrl = new URL(await cropImage.getAttribute("src"), base).href;
+  const plain = await context.request.get(cropUrl);
+  const turned = await context.request.get(`${cropUrl}&rotate=90`);
+  expect(plain.ok() && turned.ok()).toBe(true);
+  const size = (bytes) => page.evaluate(async (b64) => {
+    const img = await createImageBitmap(await (await fetch(`data:image/jpeg;base64,${b64}`)).blob());
+    return [img.width, img.height];
+  }, bytes.toString("base64"));
+  const [pw, ph] = await size(await plain.body());
+  expect(await size(await turned.body())).toEqual([ph, pw]);
+  await review.getByRole("button", { name: "Run reviewer-grok-fixture again", exact: true }).first().click();
+  await expect.poll(() => requests.filter(item => item.action === "review").at(-1)?.rotation).toBe(90);
+  await expect(review.getByText("crop · 4× · turned 90°", { exact: true })).toBeVisible();
+  await expect(review.getByText("Waiting for response…")).toHaveCount(0);
+  await review.getByRole("button", { name: "Turn crop 90° anticlockwise", exact: true }).click();
+  await expect(handle).toHaveAttribute("aria-label", "Rotate crop (now 0°)");
+  await expect(review.getByRole("button", { name: "Straighten", exact: true })).toBeDisabled();
+  await page.screenshot({ path: "/tmp/scan-acceptance/region-review-rotate.png", fullPage: true });
   // Trace: nothing can be sent until the text is drawn, then only the strokes go out.
   await review.getByRole("tab", { name: "Trace", exact: true }).click();
   await expect(review.getByRole("button", { name: "Resubmit", exact: true })).toBeDisabled();

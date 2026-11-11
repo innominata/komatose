@@ -217,7 +217,7 @@
         <div class="gslot">
           <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
           <strong>Add images</strong>
-          <small>Drop, choose, or paste · order is previewed before upload</small>
+          <small>Drop, choose, or paste images or a zip · order is previewed before upload</small>
           <input type="file" accept={PAGE_FILE_ACCEPT} multiple onchange={(e) => onaddfiles([...(e.currentTarget.files ?? [])])} />
         </div>
       </label>

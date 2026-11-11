@@ -1,4 +1,5 @@
 import { CHAR_STYLE_KEYS, type CharRun, type CharStyle } from "./workflow";
+import { rampAt, type SizeRamp } from "./sizeRamp";
 
 const NUMERIC: Record<string, [number, number]> = {
   size: [10, 400],
@@ -137,4 +138,63 @@ export function remapCharRuns(runs: CharRun[] | undefined, from: string | undefi
 /** Every run's font id, for checking they all belong to the series. */
 export function charRunFonts(runs: CharRun[] | undefined): string[] {
   return [...new Set((runs ?? []).map((r) => r.style.fontId).filter((f): f is string => !!f))];
+}
+
+/**
+ * Multiplies each character's size by a ramp along its paragraph. Glyphs count along the
+ * ramp; spaces take the size of the glyph after them (or before, at the end).
+ */
+export function applySizeRamp(runs: CharRun[] | undefined, body: string, ramp: SizeRamp): CharRun[] {
+  const chars = perChar(runs, body.length);
+  let start = 0;
+  for (const paragraph of body.split("\n")) {
+    const glyphs: number[] = [];
+    for (let i = 0; i < paragraph.length; i++) if (!/\s/.test(paragraph[i]) && !isLowSurrogate(paragraph, i)) glyphs.push(start + i);
+    const factors = new Map(glyphs.map((at, k) => [at, rampAt(ramp, k, glyphs.length)]));
+    let next = glyphs.length ? factors.get(glyphs[glyphs.length - 1])! : 100;
+    const scale = new Array<number>(paragraph.length);
+    for (let i = paragraph.length - 1; i >= 0; i--) {
+      const at = start + i;
+      if (factors.has(at)) next = factors.get(at)!;
+      scale[i] = isLowSurrogate(paragraph, i) ? factors.get(at - 1) ?? next : next;
+    }
+    for (let i = 0; i < paragraph.length; i++) {
+      const at = start + i;
+      const size = Math.round(((chars[at].size ?? 100) * scale[i]) / 10) / 10;
+      chars[at] = { ...chars[at], size: Math.min(400, Math.max(10, size)) };
+    }
+    start += paragraph.length + 1;
+  }
+  return toRuns(chars);
+}
+
+const isLowSurrogate = (text: string, i: number) => i > 0 && /[\uDC00-\uDFFF]/.test(text[i]) && /[\uD800-\uDBFF]/.test(text[i - 1]);
+
+/**
+ * Stacked (vertical) text: every character on its own line, a blank line between words and
+ * between paragraphs. Character styles follow their characters.
+ */
+export function stackText(body: string, runs: CharRun[] | undefined): { body: string; runs: CharRun[] } {
+  const chars = perChar(runs, body.length);
+  let out = "";
+  const styles: CharStyle[] = [];
+  let gap = false;
+  for (let i = 0; i < body.length; i++) {
+    const cp = body.codePointAt(i)!;
+    const width = cp > 0xffff ? 2 : 1;
+    const c = body.slice(i, i + width);
+    if (/\s/.test(c)) {
+      gap = gap || out.length > 0;
+      continue;
+    }
+    if (out) {
+      out += gap ? "\n\n" : "\n";
+      styles.push(...(gap ? [{}, {}] : [{}]));
+    }
+    gap = false;
+    out += c;
+    for (let k = 0; k < width; k++) styles.push(chars[i + k]);
+    i += width - 1;
+  }
+  return { body: out, runs: toRuns(styles) };
 }

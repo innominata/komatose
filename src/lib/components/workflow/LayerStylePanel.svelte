@@ -10,6 +10,8 @@
     type TextEffects,
   } from "$lib/textEffects";
   import { throttle } from "$lib/throttle";
+  import type { PatternAsset } from "$lib/workflow";
+  import { onMount } from "svelte";
 
   /**
    * Photoshop's Layer Style dialog for a text region: tick an effect to turn it on with
@@ -43,6 +45,7 @@
     innerGlow: [blend, colour, opacity, { key: "source", label: "Source", kind: "select", options: ["edge", "center"] }, { key: "spread", label: "Choke", kind: "range", min: 0, max: 100, unit: "%" }, size(), { key: "range", label: "Range", kind: "range", min: 1, max: 100, unit: "%" }],
     satin: [blend, colour, opacity, angle, { key: "distance", label: "Distance", kind: "range", min: 1, max: 100, step: 0.5, unit: "pt" }, size(), { key: "invert", label: "Invert", kind: "check" }],
     colorOverlay: [blend, colour, opacity],
+    patternOverlay: [blend, opacity, { key: "scale", label: "Scale", kind: "range", min: 1, max: 400, unit: "%" }],
     gradientOverlay: [blend, opacity, { key: "style", label: "Style", kind: "select", options: ["linear", "radial", "reflected"] }, angle, { key: "scale", label: "Scale", kind: "range", min: 10, max: 150, unit: "%" }, { key: "reverse", label: "Reverse", kind: "check" }],
     bevel: [
       { key: "style", label: "Style", kind: "select", options: ["inner bevel", "outer bevel", "emboss", "pillow emboss"] },
@@ -93,6 +96,61 @@
   }
   const liveStop = throttle((i: number, patch: Partial<GradientStop>) => setStop(i, patch), 1000);
   const anyOn = $derived(EFFECT_ORDER.some(on));
+
+  // ── Pattern overlay: the shared pattern library ─────────────────────
+  let patterns = $state<PatternAsset[] | null>(null);
+  let patternError = $state("");
+  let patternBusy = $state(false);
+  let patternInput = $state<HTMLInputElement>();
+  async function loadPatterns() {
+    try {
+      const res = await fetch("/settings/patterns");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Could not load patterns");
+      patterns = body.patterns;
+      patternError = "";
+    } catch (e) {
+      patternError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  onMount(() => {
+    if (effects?.patternOverlay) loadPatterns();
+  });
+  $effect(() => {
+    if (open === "patternOverlay" && patterns === null) loadPatterns();
+  });
+  const chosenPattern = $derived(String(value("patternOverlay", "patternId") ?? ""));
+  const chosenPatternInfo = $derived(patterns?.find((p) => p.id === chosenPattern));
+  /** Turning the overlay on with no pattern chosen picks the first one, so something shows. */
+  async function toggleWith(kind: EffectKind, enabled: boolean) {
+    if (kind !== "patternOverlay" || !enabled || chosenPattern) return toggle(kind, enabled);
+    if (patterns === null) await loadPatterns();
+    if (!effects?.patternOverlay) open = kind;
+    update(kind, { enabled, ...(patterns?.length ? { patternId: patterns[0].id } : {}) });
+  }
+  async function addPatterns(files: File[]) {
+    if (!files.length) return;
+    patternBusy = true;
+    patternError = "";
+    let last = "";
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append("pattern", file);
+        const res = await fetch("/settings/patterns", { method: "POST", body: form });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`${file.name}: ${body.error || res.statusText}`);
+        patterns = body.patterns;
+        last = body.added?.[0] ?? last;
+      }
+      if (last) update("patternOverlay", { patternId: last });
+    } catch (e) {
+      patternError = e instanceof Error ? e.message : String(e);
+    } finally {
+      patternBusy = false;
+      if (patternInput) patternInput.value = "";
+    }
+  }
 </script>
 
 <details class="ls" open={anyOn}>
@@ -102,7 +160,7 @@
     {#each EFFECT_ORDER as kind (kind)}
       <li class:on={on(kind)}>
         <div class="ls-row">
-          <label class="ls-name"><input type="checkbox" checked={on(kind)} {disabled} onchange={(e) => toggle(kind, e.currentTarget.checked)} /> {EFFECT_LABELS[kind]}</label>
+          <label class="ls-name"><input type="checkbox" checked={on(kind)} {disabled} onchange={(e) => toggleWith(kind, e.currentTarget.checked)} /> {EFFECT_LABELS[kind]}</label>
           {#if effects?.[kind]}
             <button type="button" class="ls-icon" title="Remove and reset" aria-label={`Remove ${EFFECT_LABELS[kind]}`} {disabled} onclick={() => remove(kind)}><i class="bi bi-x-lg" aria-hidden="true"></i></button>
           {/if}
@@ -133,6 +191,34 @@
                 </label>
               {/if}
             {/each}
+            {#if kind === "patternOverlay"}
+              <div class="ls-patterns">
+                <span class="ls-phead">Pattern{#if chosenPatternInfo}<small>{chosenPatternInfo.name} · {chosenPatternInfo.width} × {chosenPatternInfo.height} px</small>{/if}</span>
+                {#if patterns === null && !patternError}
+                  <small class="ls-muted">Loading patterns…</small>
+                {:else if patterns?.length}
+                  <div class="ls-pgrid" role="listbox" aria-label="Pattern">
+                    {#each patterns as p (p.id)}
+                      <button type="button" role="option" aria-selected={p.id === chosenPattern} class="ls-pswatch" class:chosen={p.id === chosenPattern}
+                        title={`${p.name} (${p.width} × ${p.height} px)`} aria-label={p.name}
+                        style={`background-image:url('/settings/patterns/${p.id}');background-size:${Math.max(16, Math.min(p.width, 600) / 8)}px auto`}
+                        onclick={() => update("patternOverlay", { patternId: p.id })}></button>
+                    {/each}
+                  </div>
+                {:else if patterns}
+                  <small class="ls-muted">The pattern library is empty. Add a screentone or other tile.</small>
+                {/if}
+                {#if chosenPattern && patterns && !chosenPatternInfo}<small class="ls-muted">The chosen pattern is no longer in the library; pick another.</small>{/if}
+                {#if patternError}<small class="ls-error" role="alert">{patternError}</small>{/if}
+                <div class="ls-prow">
+                  <input class="visually-hidden" bind:this={patternInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple
+                    onchange={(e) => addPatterns([...(e.currentTarget.files ?? [])])} />
+                  <button type="button" disabled={patternBusy} onclick={() => patternInput?.click()}><i class="bi bi-plus-lg" aria-hidden="true"></i> {patternBusy ? "Adding…" : "Add pattern…"}</button>
+                  <a href="/settings#patterns" target="_blank" rel="noopener">Manage library</a>
+                </div>
+                <small class="ls-muted">Scale is a percentage of the tile's pixels; tiling is anchored to the page, so neighbouring bubbles share one tone. Multiply keeps the text colour under dark dots.</small>
+              </div>
+            {/if}
             {#if kind === "gradientOverlay"}
               <div class="ls-stops">
                 <span>Gradient</span>
@@ -173,6 +259,17 @@
   .ls-range input[type="number"] { min-width: 0; padding: 1px 4px; }
   .ls-range span { color: var(--hud-muted); }
   .ls-check { grid-template-columns: auto 1fr; }
+  .ls-patterns { display: grid; gap: 5px; font-size: 11.5px; }
+  .ls-patterns small { font-size: 10.5px; }
+  .ls-phead { display: flex; gap: 8px; align-items: baseline; }
+  .ls-phead small { color: var(--hud-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ls-muted { color: var(--hud-muted); }
+  .ls-error { color: var(--hud-danger); }
+  .ls-pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; max-height: 172px; overflow-y: auto; padding: 1px; }
+  .ls-pswatch { aspect-ratio: 1; padding: 0; border: 1px solid var(--hud-line); border-radius: 3px; background-color: #fff; background-repeat: repeat; cursor: pointer; }
+  .ls-pswatch.chosen { outline: 2px solid var(--hud-teal-ink); outline-offset: 1px; }
+  .ls-prow { display: flex; gap: 10px; align-items: center; }
+  .ls-prow a { font-size: 11px; }
   .ls-stops { display: grid; gap: 4px; font-size: 11.5px; }
   .ls-bar { height: 14px; border-radius: 3px; border: 1px solid var(--hud-line); }
   .ls-stop { display: grid; grid-template-columns: 3em 4.2em 1.4em auto; gap: 4px; align-items: center; }

@@ -11,7 +11,7 @@
  * - the blur of an effect of `size` px is two box passes of that width, a Gaussian of
  *   σ ≈ size / √6;
  * - a glow's coverage goes through its Range: min(v / range, 1), 50 % by default;
- * - stacking: drop shadow, outer glow, then the text with colour/gradient overlay, satin,
+ * - stacking: drop shadow, outer glow, then the text with colour/gradient/pattern overlay, satin,
  *   inner glow, inner shadow, and bevel highlights and shadows on top.
  *
  * Rendering is SVG filters in page space, so the preview (the browser) and the exports
@@ -37,6 +37,12 @@ export type GradientEffect = Omit<Common, "color"> & {
   reverse: boolean;
   scale: number;
 };
+/**
+ * A tile from the pattern library over the glyphs, as Photoshop's Pattern Overlay: `scale` is a
+ * percentage of the tile's pixels, and the tiling is anchored to the page origin (Photoshop's
+ * "Link with Layer" off), so neighbouring bubbles share one continuous screentone.
+ */
+export type PatternEffect = Omit<Common, "color"> & { patternId: string; scale: number };
 export type BevelEffect = {
   enabled: boolean;
   style: "inner bevel" | "outer bevel" | "emboss" | "pillow emboss";
@@ -62,6 +68,7 @@ export type TextEffects = {
   satin?: SatinEffect;
   colorOverlay?: OverlayEffect;
   gradientOverlay?: GradientEffect;
+  patternOverlay?: PatternEffect;
   bevel?: BevelEffect;
 };
 export type EffectKind = keyof TextEffects;
@@ -78,6 +85,7 @@ export const EFFECT_DEFAULTS: { [K in EffectKind]-?: NonNullable<TextEffects[K]>
     enabled: true, opacity: 100, blend: "normal", angle: 90, style: "linear", reverse: false, scale: 100,
     stops: [{ color: "#000000", location: 0 }, { color: "#ffffff", location: 100 }],
   },
+  patternOverlay: { enabled: true, opacity: 100, blend: "normal", patternId: "", scale: 100 },
   bevel: {
     enabled: true, style: "inner bevel", depth: 100, direction: "up", size: 3, soften: 0, angle: 120, altitude: 30,
     highlightColor: "#ffffff", highlightOpacity: 75, highlightBlend: "screen",
@@ -92,11 +100,12 @@ export const EFFECT_LABELS: Record<EffectKind, string> = {
   satin: "Satin",
   colorOverlay: "Color Overlay",
   gradientOverlay: "Gradient Overlay",
+  patternOverlay: "Pattern Overlay",
   outerGlow: "Outer Glow",
   dropShadow: "Drop Shadow",
 };
 /** Photoshop's Layer Style list order. */
-export const EFFECT_ORDER: EffectKind[] = ["bevel", "innerShadow", "innerGlow", "satin", "colorOverlay", "gradientOverlay", "outerGlow", "dropShadow"];
+export const EFFECT_ORDER: EffectKind[] = ["bevel", "innerShadow", "innerGlow", "satin", "colorOverlay", "gradientOverlay", "patternOverlay", "outerGlow", "dropShadow"];
 
 const clamp = (v: unknown, min: number, max: number, fallback: number) => {
   const n = Number(v);
@@ -161,6 +170,16 @@ export function normalizeEffects(input: unknown): TextEffects | undefined {
       scale: clamp(e.scale, 10, 150, d.scale),
     };
   }
+  if (rec.patternOverlay && typeof rec.patternOverlay === "object") {
+    const e = rec.patternOverlay, d = EFFECT_DEFAULTS.patternOverlay;
+    out.patternOverlay = {
+      enabled: e.enabled !== false,
+      opacity: clamp(e.opacity, 0, 100, d.opacity),
+      blend: pick(e.blend, EFFECT_BLENDS, d.blend),
+      patternId: typeof e.patternId === "string" && /^[a-f\d]{32}$/.test(e.patternId) ? e.patternId : "",
+      scale: clamp(e.scale, 1, 1000, d.scale),
+    };
+  }
   if (rec.bevel && typeof rec.bevel === "object") {
     const e = rec.bevel, d = EFFECT_DEFAULTS.bevel;
     out.bevel = {
@@ -210,14 +229,20 @@ const f = (n: number) => String(Math.round(n * 1000) / 1000);
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 export type FxRect = { x: number; y: number; width: number; height: number };
+/** A pattern tile ready to embed: its pixels as a data URI and its size in pixels. */
+export type FxPattern = { uri: string; width: number; height: number };
+
+/** CSS `mix-blend-mode` for an effect blend; linear dodge has no CSS mode and adds as screen. */
+const cssBlend = (b: EffectBlend) => (b === "linear dodge" ? "screen" : b.replace(" ", "-"));
 
 /**
  * SVG filters for `effects` at `px` pixels per point, over `rect` (page space): `exterior`
  * draws only what lies behind the text (shadow, glow, outer bevel); `interior` takes the text
  * and returns it with its interior effects; `overlay` (a gradient overlay) is drawn over the
- * text inside the interior group, before the filter.
+ * text inside the interior group, before the filter. A pattern overlay needs its tile in
+ * `pattern`; without one (no pattern chosen, or removed from the library) it is skipped.
  */
-export function effectFilters(effects: TextEffects | undefined, px: number, rect: FxRect, bounds: FxRect, fillRef = "#tx-f") {
+export function effectFilters(effects: TextEffects | undefined, px: number, rect: FxRect, bounds: FxRect, fillRef = "#tx-f", pattern?: FxPattern) {
   const e = activeEffects(effects);
   const region = `filterUnits="userSpaceOnUse" x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}" color-interpolation-filters="sRGB"`;
   const ext: string[] = [];
@@ -285,6 +310,21 @@ export function effectFilters(effects: TextEffects | undefined, px: number, rect
   // rect of the gradient masked to the glyphs, drawn into the interior filter's source.
   let overlay = "";
   let overlayDefs = "";
+  const glyphMask = () =>
+    overlayDefs.includes('id="fx-gmask"')
+      ? ""
+      : `<filter id="fx-white" ${region}><feFlood flood-color="#ffffff" result="w"/><feComposite in="w" in2="SourceAlpha" operator="in"/></filter>` +
+        `<mask id="fx-gmask" maskUnits="userSpaceOnUse" x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}"><use href="${fillRef}" filter="url(#fx-white)"/></mask>`;
+  const blendStyle = (b: EffectBlend) => (b === "normal" ? "" : ` style="mix-blend-mode:${cssBlend(b)}"`);
+  // Photoshop stacks the pattern under the gradient overlay, and both under the colour overlay.
+  if (e.patternOverlay && pattern && pattern.width > 0 && pattern.height > 0) {
+    const p = e.patternOverlay, k = p.scale / 100;
+    const w = pattern.width * k, h = pattern.height * k;
+    overlayDefs +=
+      `<pattern id="fx-pat" patternUnits="userSpaceOnUse" x="0" y="0" width="${f(w)}" height="${f(h)}"><image href="${pattern.uri}" width="${f(w)}" height="${f(h)}" preserveAspectRatio="none"/></pattern>` +
+      glyphMask();
+    overlay += `<rect x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}" fill="url(#fx-pat)" opacity="${f(p.opacity / 100)}" mask="url(#fx-gmask)"${blendStyle(p.blend)}/>`;
+  }
   if (e.gradientOverlay) {
     const g = e.gradientOverlay;
     const stops = (g.reverse ? [...g.stops].reverse().map((s) => ({ ...s, location: 100 - s.location })) : g.stops)
@@ -301,11 +341,8 @@ export function effectFilters(effects: TextEffects | undefined, px: number, rect
         : g.style === "reflected"
           ? `<linearGradient id="fx-grad" gradientUnits="userSpaceOnUse" x1="${f(cx)}" y1="${f(cy)}" x2="${f(cx + Math.cos(a) * half)}" y2="${f(cy - Math.sin(a) * half)}" spreadMethod="reflect">${stops}</linearGradient>`
           : `<linearGradient id="fx-grad" gradientUnits="userSpaceOnUse" x1="${f(cx - Math.cos(a) * half)}" y1="${f(cy + Math.sin(a) * half)}" x2="${f(cx + Math.cos(a) * half)}" y2="${f(cy - Math.sin(a) * half)}">${stops}</linearGradient>`;
-    overlayDefs =
-      grad +
-      `<filter id="fx-white" ${region}><feFlood flood-color="#ffffff" result="w"/><feComposite in="w" in2="SourceAlpha" operator="in"/></filter>` +
-      `<mask id="fx-gmask" maskUnits="userSpaceOnUse" x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}"><use href="${fillRef}" filter="url(#fx-white)"/></mask>`;
-    overlay = `<rect x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}" fill="url(#fx-grad)" opacity="${f(g.opacity / 100)}" mask="url(#fx-gmask)"/>`;
+    overlayDefs += grad + glyphMask();
+    overlay += `<rect x="${f(rect.x)}" y="${f(rect.y)}" width="${f(rect.width)}" height="${f(rect.height)}" fill="url(#fx-grad)" opacity="${f(g.opacity / 100)}" mask="url(#fx-gmask)"/>`;
   }
   if (e.colorOverlay) over(paint("SourceAlpha", e.colorOverlay.color, e.colorOverlay.opacity, int));
   if (e.satin) {
@@ -405,8 +442,19 @@ const pxv = (pt: number, dpi: number) => ({ units: "Pixels" as const, value: Mat
 const pct = (v: number) => ({ units: "Pixels" as const, value: v });
 const ptOf = (u: { value?: number } | undefined, dpi: number, fallback: number) => (u?.value !== undefined ? Math.round(((u.value * 72) / dpi) * 10) / 10 : fallback);
 
-/** ag-psd layer effects for `effects`; Photoshop draws them from the layer's own pixels. */
-export function psdEffects(effects: TextEffects | undefined, dpi: number) {
+/**
+ * Photoshop identifies a pattern by a UUID; a library pattern's id is 32 hex digits, so its
+ * UUID is that id with dashes and reads back by dropping them.
+ */
+export const psdPatternUuid = (id: string) => id.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+const patternIdOfUuid = (uuid: unknown) => (typeof uuid === "string" ? uuid.replace(/-/g, "").toLowerCase() : "");
+
+/**
+ * ag-psd layer effects for `effects`; Photoshop draws them from the layer's own pixels. A
+ * pattern overlay names its pattern (`patternName` gives the library name); the document
+ * must carry the pattern's pixels too (see finishedExport).
+ */
+export function psdEffects(effects: TextEffects | undefined, dpi: number, patternName?: (id: string) => string | undefined) {
   const e = effects ?? {};
   const out: Record<string, unknown> = {};
   const shadow = (s: ShadowEffect) => ({
@@ -443,6 +491,15 @@ export function psdEffects(effects: TextEffects | undefined, dpi: number) {
         opacityStops: [{ opacity: 1, location: 0, midpoint: 0.5 }, { opacity: 1, location: 1, midpoint: 0.5 }],
       },
     }];
+  }
+  if (e.patternOverlay?.patternId) {
+    const p = e.patternOverlay;
+    out.patternOverlay = {
+      present: true, showInDialog: true, enabled: p.enabled, opacity: p.opacity / 100, blendMode: p.blend, scale: p.scale / 100,
+      pattern: { name: patternName?.(p.patternId) ?? p.patternId, id: psdPatternUuid(p.patternId) },
+      // Not linked: the tiling stays anchored to the document origin, as the preview draws it.
+      align: false, phase: { x: 0, y: 0 },
+    };
   }
   if (e.bevel) {
     const b = e.bevel;
@@ -491,6 +548,13 @@ export function effectsFromPsd(fx: Record<string, any> | undefined, dpi: number)
       enabled: grad.enabled !== false, opacity: Math.round((grad.opacity ?? 1) * 100), blend: blend(grad.blendMode, "normal"), angle: grad.angle ?? 90,
       style: grad.type === "radial" || grad.type === "reflected" ? grad.type : "linear", reverse: !!grad.reverse, scale: Math.round((grad.scale ?? 1) * 100),
       stops: grad.gradient.colorStops.map((s: any) => ({ color: toHex(s.color, "#000000"), location: Math.round((s.location ?? 0) * 100) })),
+    };
+  }
+  const pat = first(fx.patternOverlay);
+  if (pat?.pattern?.id) {
+    out.patternOverlay = {
+      enabled: pat.enabled !== false, opacity: Math.round((pat.opacity ?? 1) * 100), blend: blend(pat.blendMode, "normal"),
+      scale: Math.round((pat.scale ?? 1) * 100), patternId: patternIdOfUuid(pat.pattern.id),
     };
   }
   if (fx.bevel) {

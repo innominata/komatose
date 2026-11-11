@@ -237,7 +237,9 @@ test("text path Beziers follow the layout curve and trim from the start", async 
 
 test("layer styles validate, round-trip through Photoshop's effects, and build filters", async () => {
   const { EFFECT_DEFAULTS, EFFECT_ORDER, effectFilters, effectsFromPsd, effectsReach, normalizeEffects, psdEffects } = await import("../src/lib/textEffects");
-  const all = Object.fromEntries(EFFECT_ORDER.map((k) => [k, EFFECT_DEFAULTS[k]]));
+  const all: Record<string, unknown> = Object.fromEntries(EFFECT_ORDER.map((k) => [k, EFFECT_DEFAULTS[k]]));
+  // A pattern overlay only reaches Photoshop once a pattern is chosen.
+  all.patternOverlay = { ...EFFECT_DEFAULTS.patternOverlay, patternId: "0123456789abcdef0123456789abcdef" };
   const norm = normalizeEffects(all)!;
   assert.deepEqual(Object.keys(norm).sort(), [...EFFECT_ORDER].sort());
   assert.equal(normalizeEffects({ dropShadow: { opacity: 500, color: "red" } })!.dropShadow!.opacity, 100);

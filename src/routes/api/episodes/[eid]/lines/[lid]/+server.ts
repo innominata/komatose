@@ -218,10 +218,14 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
     // edit must never turn an already-saved text edit into a failed save.
     // A type change refits here, in the same request, so the lettering shows the new type's
     // style at once. A separate refit from the browser raced this save and could fit the old type.
-    const refitForType = retyped && !!getDoc<RegionData>(`region:${line.id}`, {}).data.layout && !!line.body.trim();
+    // In Typeset the browser sends `refit` with the type, so text that was never lettered is
+    // lettered in the new type, as Reset to Default does there.
+    const unfittedRefit = retyped && body.refit === true && !!line.imageId;
+    const refitForType = retyped && !!line.body.trim() &&
+      (!!getDoc<RegionData>(`region:${line.id}`, {}).data.layout || unfittedRefit);
     if ((body.refit === true && "body" in body) || refitForType) {
       const region = getDoc<RegionData>(`region:${line.id}`, {});
-      if (!region.data.locked && (line.placed || region.data.layout)) {
+      if (!region.data.locked && (line.placed || region.data.layout || unfittedRefit)) {
         try {
           return json({ line, doc: await fitRegion(series, episode, line.id, region.revision) });
         } catch (e) {

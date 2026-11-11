@@ -22,6 +22,25 @@ export function parseReviewCropScale(value: unknown): ReviewCropZoom {
   return value as ReviewCropZoom;
 }
 
+/** Degrees clockwise to turn a review crop before it is sent, e.g. 90 to stand vertical text up. */
+export function parseReviewRotation(value: unknown): number {
+  if (value == null || value === "") return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || Math.abs(n) > 360) throw new WorkflowError("Review crop rotation must be between -360 and 360 degrees");
+  const turned = Math.round(((((n % 360) + 540) % 360) - 180) * 10) / 10;
+  return turned === -180 ? 180 : turned;
+}
+
+/**
+ * Turns a crop (white corners) or its mask (black corners) clockwise. The canvas grows to hold
+ * the whole turned crop, and a crop and its mask turned by the same angle stay the same size.
+ */
+export async function rotateReviewImage(image: Buffer, degrees: number, kind: "crop" | "mask") {
+  if (!degrees) return image;
+  const turned = sharp(image).rotate(degrees, { background: kind === "mask" ? "#000000" : "#ffffff" });
+  return kind === "mask" ? turned.greyscale().png().toBuffer() : turned.flatten({ background: "#ffffff" }).jpeg({ quality: 95 }).toBuffer();
+}
+
 export async function regionSource(
   series: Series,
   episode: Episode,
@@ -111,6 +130,16 @@ export async function croppedPageMask(
   line: LineRow,
   series: Series,
   episode: Episode,
+  rotation = 0,
+) {
+  return rotateReviewImage(await unrotatedPageMask(page, line, series, episode), rotation, "mask");
+}
+
+async function unrotatedPageMask(
+  page: ImageRow,
+  line: LineRow,
+  series: Series,
+  episode: Episode,
 ) {
   const { bubble, width, height } = await regionSource(series, episode, line, page);
   const empty = () =>
@@ -150,11 +179,12 @@ export async function detectReviewMask(
   expansion: unknown,
   abort?: AbortSignal,
   run: typeof localOperation = localOperation,
+  rotation = 0,
 ) {
   const src = await regionSource(series, episode, line, page);
   const polygon = maskRegion(line, getDoc<RegionData>(`region:${line.id}`, {}).data);
   const mask = await detectLetteringMask(src.raw, [polygon], expansion, abort, run);
-  return cropLetteringMask(mask, src.bubble);
+  return rotateReviewImage(await cropLetteringMask(mask, src.bubble), rotation, "mask");
 }
 
 /** Detect once on the source page; reuse the result for every recognition crop. */
@@ -292,16 +322,20 @@ export async function regionReviewCrop(
   page: ImageRow | undefined,
   view: ReviewCropView = { kind: "crop" },
   scale: ReviewCropZoom = 1,
+  rotation = 0,
 ) {
   const { raw, bubble } = await regionSource(series, episode, line, page);
+  // Turn first: masks and traces are drawn over the turned crop, at its size.
+  const crop = await rotateReviewImage(await cropBubble(raw, bubble), rotation, "crop");
+  const { width = bubble.width, height = bubble.height } = rotation ? await sharp(crop).metadata() : bubble;
   // Build the native-size image before resizing so brush coordinates stay exact.
-  const image = view.kind === "trace" ? await traceCrop(view.trace, bubble.width, bubble.height)
+  const image = view.kind === "trace" ? await traceCrop(view.trace, width, height)
     : view.kind === "mask" && view.silhouette ? await maskSilhouette(view.mask)
-    : view.kind === "mask" ? await applyLetteringMask(await cropBubble(raw, bubble), view.mask)
-    : await cropBubble(raw, bubble);
+    : view.kind === "mask" ? await applyLetteringMask(crop, view.mask)
+    : crop;
   if (scale === 1) return image;
   return sharp(image)
-    .resize(bubble.width * scale, bubble.height * scale, { kernel: sharp.kernel.lanczos3 })
+    .resize(width * scale, height * scale, { kernel: sharp.kernel.lanczos3 })
     .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
     .toBuffer();
 }

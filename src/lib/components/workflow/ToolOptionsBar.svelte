@@ -11,6 +11,10 @@
     radius = $bindable(24),
     feather = $bindable(100),
     growAmount = $bindable(10),
+    showWand = false,
+    wand = $bindable(false),
+    wandTolerance = $bindable(32),
+    wandGrow = $bindable(1),
     polygonCount = 0,
     canCompletePolygon = false,
     nudgeAmount = $bindable(10),
@@ -31,6 +35,11 @@
     radius?: number;
     feather?: number;
     growAmount?: number;
+    /** Typeset text mask: offer the magic wand next to the brush. */
+    showWand?: boolean;
+    wand?: boolean;
+    wandTolerance?: number;
+    wandGrow?: number;
     polygonCount?: number;
     canCompletePolygon?: boolean;
     nudgeAmount?: number;
@@ -60,7 +69,12 @@
     polygon: { icon: "bi-pentagon", label: "Draw polygon", hint: "Click to add points. Shift-click a point to remove it. Enter saves." },
     "style-brush": { icon: "bi-brush-fill", label: "Style brush", hint: "Click other regions to apply the copied style. Esc stops." },
   };
-  const info = $derived(TOOL_INFO[tool]);
+  const WAND_INFO: Record<string, { icon: string; label: string; hint: string }> = {
+    brush: { icon: "bi-magic", label: "Mask wand", hint: "Click a colour to mask the connected area of similar colour around it. Alt-click to unmask." },
+    erase: { icon: "bi-magic", label: "Unmask wand", hint: "Click a colour, such as a balloon outline, to remove the connected area of similar colour from the mask. Alt-click to mask." },
+  };
+  const wanding = $derived(showWand && wand && (tool === "brush" || tool === "erase"));
+  const info = $derived(wanding ? WAND_INFO[tool] : TOOL_INFO[tool]);
   const brushTools = ["brush", "erase", "blur", "restore", "raw", "clone-stamp", "bubble-fill"];
   const show = $derived(
     brushTools.includes(tool) ||
@@ -91,7 +105,21 @@
       <button type="button" onclick={onmanagecharacters}>Manage characters</button>
       <button type="button" onclick={onstopcharacter}>Done assigning</button>
     {/if}
-    {#if brushTools.includes(tool)}
+    {#if showWand && (tool === "brush" || tool === "erase")}
+      <div class="mode" role="group" aria-label="Text mask mode">
+        <button type="button" aria-pressed={!wand} title="Paint with a round brush" onclick={() => (wand = false)}><i class="bi bi-brush" aria-hidden="true"></i> Brush</button>
+        <button type="button" aria-pressed={wand} data-find="text-mask-wand" title="Select a connected area of similar colour" onclick={() => (wand = true)}><i class="bi bi-magic" aria-hidden="true"></i> Wand</button>
+      </div>
+    {/if}
+    {#if wanding}
+      <label title="How far a colour may differ from the clicked pixel, per channel (0–255)">Tolerance
+        <input type="range" min="0" max="255" bind:value={wandTolerance} aria-label="Wand tolerance" />
+        <input type="number" min="0" max="255" bind:value={wandTolerance} aria-label="Wand tolerance value" />
+      </label>
+      <label title="Grow the selection outwards to cover anti-aliased edges">Grow
+        <input type="number" min="0" max="8" bind:value={wandGrow} aria-label="Wand grow pixels" />px
+      </label>
+    {:else if brushTools.includes(tool)}
       <div class="brush-size" role="toolbar" aria-label="Brush size">
         <label>Size
           <input type="range" min="2" max="120" bind:value={radius} aria-label="Brush size" />
@@ -169,6 +197,7 @@
   .hint { color: var(--hud-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 80px; }
   .spacer { flex: 0 0 8px; }
   .brush-size { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex: none; }
+  .mode { display: inline-flex; gap: 4px; flex: none; }
   .tool-options input[type="range"] { width: 110px; padding: 0; accent-color: var(--hud-teal-ink); }
   .tool-options label { display: inline-flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; color: var(--hud-text); }
   .tool-options input[type="number"] { width: 60px; }

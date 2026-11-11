@@ -190,6 +190,10 @@ client.exec(`CREATE TABLE IF NOT EXISTS global_font_assets (
  id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, filename TEXT NOT NULL,
  metadata TEXT NOT NULL, created_at INTEGER NOT NULL
 )`);
+client.exec(`CREATE TABLE IF NOT EXISTS global_pattern_assets (
+ id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, filename TEXT NOT NULL,
+ metadata TEXT NOT NULL, created_at INTEGER NOT NULL
+)`);
 migrateEditorHotPath(client);
 migrateLinePlacementRevisions(client);
 migrateSeriesReadingPreferences(client);

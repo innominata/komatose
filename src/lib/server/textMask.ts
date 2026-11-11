@@ -5,6 +5,10 @@ import type { MaskStroke, Point, RegionData, WorkflowDoc } from "../workflow";
 import { getDoc, putDoc, readAsset, storeAsset, WorkflowError } from "./workflowStore";
 import { listLines } from "./queries";
 import type { PixelData } from "ag-psd";
+import { wandSelect, wandWindow, WAND_GROW_MAX, WAND_TOLERANCE_MAX } from "../maskWand";
+
+/** A magic wand click on the text mask: page-normalised point, colour tolerance, grow in px. */
+export type TextMaskWand = { x: number; y: number; tolerance: number; grow: number; erase: boolean };
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -186,6 +190,82 @@ export async function maskPixelData(png: Buffer): Promise<PixelData> {
     height: info.height,
     data: new Uint8ClampedArray(data),
   };
+}
+
+/**
+ * Applies a wand click to a page-sized text mask. The contiguous area of similar colour in
+ * `artwork` around the click, limited to the window around the region, is painted black (masked)
+ * or, with `erase`, white (shown). Returns the new mask, or null when nothing was selected.
+ */
+export async function applyTextMaskWand(opts: {
+  width: number;
+  height: number;
+  existing?: Buffer;
+  artwork: Buffer;
+  bounds: { x: number; y: number; w: number; h: number };
+  wand: TextMaskWand;
+}) {
+  const { width, height, wand } = opts;
+  const px = clamp(Math.floor(wand.x * width), 0, width - 1), py = clamp(Math.floor(wand.y * height), 0, height - 1);
+  const win = wandWindow(opts.bounds, width, height);
+  if (px < win.left || py < win.top || px >= win.left + win.width || py >= win.top + win.height)
+    throw new WorkflowError("Click inside or near the selected region");
+  const art = sharp(opts.artwork).removeAlpha().toColourspace("srgb");
+  const meta = await sharp(opts.artwork).metadata();
+  const sized = meta.width === width && meta.height === height ? art : art.resize(width, height, { fit: "fill" });
+  const { data, info } = await sized.extract(win).raw().toBuffer({ resolveWithObject: true });
+  const sel = wandSelect(new Uint8Array(data.buffer, data.byteOffset, data.length), info.width, info.height,
+    info.channels, px - win.left, py - win.top, clamp(wand.tolerance, 0, WAND_TOLERANCE_MAX), clamp(Math.round(wand.grow), 0, WAND_GROW_MAX));
+  const value = wand.erase ? 255 : 0;
+  const overlay = Buffer.alloc(info.width * info.height * 4);
+  let count = 0;
+  for (let i = 0; i < sel.length; i++) {
+    if (!sel[i]) continue;
+    count++;
+    overlay[i * 4] = overlay[i * 4 + 1] = overlay[i * 4 + 2] = value;
+    overlay[i * 4 + 3] = 255;
+  }
+  if (!count) return null;
+  const base = opts.existing ? await normalizeTextMask(opts.existing, width, height) : await blankTextMask(width, height);
+  return sharp(base)
+    .composite([{ input: overlay, raw: { width: info.width, height: info.height, channels: 4 }, left: win.left, top: win.top }])
+    .greyscale()
+    .png()
+    .toBuffer();
+}
+
+/** The region's extent on the page: its box joined with its saved polygon. */
+export function regionExtent(line: LineRow, data: RegionData) {
+  const pts = [
+    { x: line.x ?? 0, y: line.y ?? 0 },
+    { x: (line.x ?? 0) + (line.w ?? 0.2), y: (line.y ?? 0) + (line.h ?? 0.1) },
+    ...maskRegion(line, data),
+  ];
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+export async function saveRegionTextMaskWand(
+  episodeId: string,
+  line: LineRow,
+  image: ImageRow,
+  expectedRevision: number,
+  artwork: Buffer,
+  wand: TextMaskWand,
+): Promise<WorkflowDoc<RegionData>> {
+  const doc = getDoc<RegionData>(`region:${line.id}`, {});
+  const existing = doc.data.textMask ? await readAsset(doc.data.textMask) : undefined;
+  const png = await applyTextMaskWand({
+    width: image.width,
+    height: image.height,
+    existing,
+    artwork,
+    bounds: regionExtent(line, doc.data),
+    wand,
+  });
+  if (!png) throw new WorkflowError("Nothing to select there");
+  return putDoc(episodeId, doc.id, { ...doc.data, textMask: await storeAsset(png) }, expectedRevision);
 }
 
 export async function saveRegionTextMask(

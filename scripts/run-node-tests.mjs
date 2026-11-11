@@ -3,6 +3,11 @@ import { spawnSync } from "node:child_process";
 const groups = {
   unit: [
     "tests/prepare-actions.test.ts",
+    "tests/page-files-zip.test.ts",
+    "tests/mask-wand.test.ts",
+    "tests/review-crop-rotation.test.ts",
+    "tests/size-ramp.test.ts",
+    "tests/pattern-overlay.test.ts",
     "tests/audit-fixes.test.ts",
     "tests/chapter-safety.test.ts",
     "tests/director-workflow.test.ts",

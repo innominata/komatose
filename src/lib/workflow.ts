@@ -70,6 +70,8 @@ export type TextStyle = {
   emphasis: "normal" | "bold" | "italic";
   /** Photoshop layer styles on the whole region (the outline is its Stroke). */
   effects?: import("./textEffects").TextEffects;
+  /** Vertical text: each character on its own line, stacked under the one before. */
+  stacked?: boolean;
 };
 /**
  * Character overrides on part of a region's text, like Photoshop's Character panel. Unset
@@ -254,6 +256,7 @@ export const STYLE_KEYS = [
   "tracking",
   "emphasis",
   "effects",
+  "stacked",
 ] as const satisfies readonly (keyof TextStyle)[];
 
 export function pickStyle(input: unknown): Partial<TextStyle> {
@@ -311,8 +314,8 @@ export function styleDiff(
 
 /** A region owns its style once every field is stored on it, not filled in from the series default. */
 export function styleIsOwned(style: Partial<TextStyle> | undefined): boolean {
-  // A layer style is optional: absent means none.
-  return !!style && STYLE_KEYS.every((key) => key === "effects" || style[key] !== undefined);
+  // Layer styles and stacking are optional: absent means none / off.
+  return !!style && STYLE_KEYS.every((key) => key === "effects" || key === "stacked" || style[key] !== undefined);
 }
 
 /**
@@ -400,6 +403,11 @@ export type RegionData = {
   geometryApproved?: boolean;
   geometryConfidence?: number;
   style?: Partial<TextStyle>;
+  /**
+   * Glyph sizes ramp from `from` to `to` percent along each paragraph (down it when the text
+   * is stacked), on top of any character sizes. Set by Shift-dragging a polygon corner.
+   */
+  sizeRamp?: import("./sizeRamp").SizeRamp;
   /** Character overrides, valid for the body `charRunsBody`; see `remapCharRuns`. */
   charRuns?: CharRun[];
   charRunsBody?: string;
@@ -579,6 +587,17 @@ export type FontAsset = {
   category?: string;
   /** True for fonts from the shared library, which a series can use but not edit or remove. */
   shared?: boolean;
+};
+/** A tile from the shared pattern library, for the Pattern Overlay layer style. */
+export type PatternAsset = {
+  id: string;
+  hash: string;
+  filename: string;
+  /** Display name: the uploaded filename without its extension. */
+  name: string;
+  width: number;
+  height: number;
+  mime: "image/png" | "image/jpeg";
 };
 export type ReadinessIssue = {
   code: string;

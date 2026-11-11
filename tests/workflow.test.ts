@@ -3371,6 +3371,10 @@ test("series type settings apply per text type and reset clears region overrides
     assert.equal(resolveStyle(line, {}, "e", "s").size, 9);
   } finally {
     putDoc(null, "series:s", previous, getDoc("series:s", {}).revision);
+    // The region's history holds the partial layout above; left on page p, a later crop of
+    // that page would transform it.
+    sqlite.prepare("DELETE FROM lines WHERE id='type-reset'").run();
+    sqlite.prepare("DELETE FROM workflow_docs WHERE id='region:type-reset'").run();
   }
 });
 

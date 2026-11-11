@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { PAGE_FILE_ACCEPT, isPageFile } from "$lib/pageFiles";
+  import { WAND_GROW_DEFAULT, WAND_TOLERANCE_DEFAULT } from "$lib/maskWand";
+  import { rampDragPoint, rampGeometry } from "$lib/sizeRamp";
+  import { PAGE_FILE_ACCEPT, expandPageFiles, isPageFile, isZipFile } from "$lib/pageFiles";
   import { deciderPageStamp } from "$lib/decider";
   import { glossaryCharacters, resolveCharacter, characterLabel } from '$lib/characters';
   import { glossaryNames } from '$lib/letteringBreaks';
@@ -311,6 +313,11 @@
   let feather = $state(100);
   let brushSizeOpen = $state(false);
   let growAmount = $state(MASK_GROW_DEFAULT);
+  /** Typeset text mask: the brush and erase tools click a magic wand instead of painting. */
+  let maskWand = $state(false);
+  let wandTolerance = $state(WAND_TOLERANCE_DEFAULT);
+  let wandGrow = $state(WAND_GROW_DEFAULT);
+  const textMaskWand = $derived(maskWand && step === "Typeset" && (tool === "brush" || tool === "erase"));
   let growToolbarDismissed = $state(false);
   /** Temporary grow-amount toolbar, like the brush size one: shown while the grow tool is picked. */
   const growToolbarOpen = $derived(
@@ -333,6 +340,7 @@
     end: Point;
     points: Point[];
     vertex?: number;
+    ramp?: boolean;
     revision?: number;
     bounds?: { x: number; y: number; w: number; h: number };
     regionId?: string;
@@ -1810,9 +1818,11 @@
   });
   function edit(line: LineRow, patch: Record<string, unknown>) {
     saves.queue(line.id, patch, line.revision ?? 0, "body" in patch ? 150 : 400);
+    // `refit` is a request to the server, not a field of the line.
+    const { refit: _refit, ...fields } = patch;
     if (studioState)
       studioState.lines = studioState.lines.map((l) =>
-        l.id === line.id ? { ...l, ...patch } : l,
+        l.id === line.id ? { ...l, ...fields } : l,
       );
     if (studioState && patch.status === "approved")
       studioState.suggestions = studioState.suggestions.map((s) =>
@@ -1890,9 +1900,12 @@
     if (!canChangeType || line.lineType === lineType) return;
     // The server switches the saved style to the new type and refits a fitted region in the
     // same save, whose region comes back with it. Save at once rather than after the typing
-    // delay, so the new lettering shows straight away.
-    edit(line, { lineType });
+    // delay, so the new lettering shows straight away. In Typeset, text not yet lettered is
+    // lettered in the new type too, when that type has a font.
     const region = studioState?.regions[line.id];
+    const letter = step === "Typeset" && canClean && !region?.data.layout && !region?.data.locked &&
+      !!line.imageId && !!line.body.trim() && !!pickStyle(inheritedStyle(lineType as LineType)).fontId;
+    edit(line, letter ? { lineType, refit: true } : { lineType });
     // A region following the series shows the new type at once. One with its own saved
     // style shows it when the save returns the server's re-based style.
     if (selected?.id === line.id && !region?.data.layout && !region?.data.style)
@@ -2153,6 +2166,15 @@
     polygonDraft = [];
     tool = "select";
   }
+  async function clickTextMaskWand(p: { x: number; y: number }, erase: boolean) {
+    if (!selected || !regionDoc || !canClean) return;
+    await act({
+      action: "text-mask",
+      id: selected.id,
+      expectedRevision: regionDoc.revision,
+      wand: { x: p.x, y: p.y, tolerance: Number(wandTolerance) || 0, grow: Number(wandGrow) || 0, erase },
+    });
+  }
   function down(e: PointerEvent) {
     // Bubble fill clicks queue while another fill (or save) runs, rather than being dropped.
     if (page && e.button === 0 && busy && tool === "bubble-fill" && !zooming && canClean) {
@@ -2236,6 +2258,11 @@
     if (tool === "brush" || tool === "erase") setMaskVisibility(true);
     if ((tool === "brush" || tool === "erase") && step === "Typeset" && !selected) {
       notify("Select a region to mask its text.");
+      return;
+    }
+    if (textMaskWand) {
+      // Alt inverts the tool, as in image editors: Alt-click with the wand mask unmasks.
+      void clickTextMaskWand(coords(e), (tool === "erase") !== e.altKey);
       return;
     }
     if (["region", "read-area", "detect-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) regionVisibility = "shown";
@@ -2472,7 +2499,8 @@
   }
   function move(e: PointerEvent) {
     if (!drawing) return;
-    const p = coords(e, step === "Typeset" && (drawing.vertex != null || drawing.polygonDrag || tool === "rectangle" || tool === "oval"));
+    let p = coords(e, step === "Typeset" && (drawing.vertex != null || drawing.polygonDrag || tool === "rectangle" || tool === "oval"));
+    if (drawing.ramp) p = rampDragPoint(drawing.start, p, !!regionStyle.stacked);
     if (tool === "rectangle" || tool === "oval") {
       drawing = { ...drawing, end: p };
       return;
@@ -2513,6 +2541,27 @@
       } catch (e) {
         error = String(e);
       }
+      return;
+    }
+    if (d.ramp && d.vertex != null && selected && regionDoc) {
+      // Barely moved: a Shift-click, which removes the point as before.
+      if (Math.abs(d.end.x - d.start.x) * (page?.width ?? 1) + Math.abs(d.end.y - d.start.y) * (page?.height ?? 1) < 3) {
+        if (selectedPolygon.length > 3)
+          await act({ action: "region", id: selected.id, expectedRevision: d.revision ?? regionDoc.revision,
+            data: { polygon: selectedPolygon.filter((_, n) => n !== d.vertex), geometryApproved: false } });
+        return;
+      }
+      const geometry = rampGeometry(selectedPolygon, d.vertex, d.end, !!regionStyle.stacked);
+      if (!geometry) {
+        notify("That would make one side too short. A size ramp goes down to 10%.");
+        return;
+      }
+      await act({
+        action: "region",
+        id: selected.id,
+        expectedRevision: d.revision ?? regionDoc.revision,
+        data: { polygon: geometry.polygon, sizeRamp: geometry.ramp, geometryApproved: false },
+      });
       return;
     }
     if (d.vertex != null && selected && regionDoc) {
@@ -3155,17 +3204,28 @@
       busy = false;
     }
   }
-  function addFiles(files: File[]) {
+  /** Adds images to the upload preview; zip and cbz archives are unpacked into their images first. */
+  async function addFiles(picked: File[]) {
+    if (picked.length) step = "Prepare";
+    let files = picked, skipped: string[] = [];
+    const zips = picked.filter(isZipFile).length;
+    if (zips) {
+      notify(zips === 1 ? "Unpacking archive…" : `Unpacking ${zips} archives…`);
+      ({ files, skipped } = await expandPageFiles(picked));
+      const found = files.length - (picked.length - zips);
+      if (found) notify(`Found ${found} image${found === 1 ? "" : "s"} in ${zips === 1 ? "the archive" : `${zips} archives`}.`);
+    }
     pendingFiles = [...pendingFiles, ...files].sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { numeric: true }),
     );
-    duplicateWarning = pendingFiles
-      .filter((f, i, a) =>
-        a.some((o, j) => j < i && o.name === f.name && o.size === f.size),
-      )
-      .map((f) => `Possible duplicate: ${f.name}`)
-      .join(" · ");
-    if (files.length) step = "Prepare";
+    duplicateWarning = [
+      ...skipped,
+      ...pendingFiles
+        .filter((f, i, a) =>
+          a.some((o, j) => j < i && o.name === f.name && o.size === f.size),
+        )
+        .map((f) => `Possible duplicate: ${f.name}`),
+    ].join(" · ");
   }
   function cancelUpload() {
     pendingFiles = [];
@@ -4923,6 +4983,10 @@
             bind:radius
             bind:feather
             bind:growAmount
+            showWand={step === "Typeset" && canClean}
+            bind:wand={maskWand}
+            bind:wandTolerance
+            bind:wandGrow
             polygonCount={polygonDraft.length}
             canCompletePolygon={polygonDraft.length >= 3}
             oncompletepolygon={() => void completePolygon()}
@@ -4985,6 +5049,7 @@
               {/if}
             {:else}
             <WorkflowCanvas
+              maskWand={textMaskWand}
               graphicAsset={h=>pageDoc?.data.placedAssets?.some(g=>g.hash===h)?asset(h):`/api/series/${series.id}/clean-assets?hash=${h}`}
               placedAssets={pageAssets}
               selectedAssetId={selectedAssetId}
@@ -5436,6 +5501,7 @@
             pageSize={page ? { width: page.width, height: page.height } : undefined}
             oncharruns={saveCharRuns}
             ontextpaths={(textPaths) => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { textPaths } })}
+            onsizeramp={(sizeRamp) => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { sizeRamp } })}
             drawingTextPath={drawingTextPath}
             ondrawtextpath={setDrawingTextPath}
             onrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderEnabled:regionDoc.data.renderEnabled===false}})}

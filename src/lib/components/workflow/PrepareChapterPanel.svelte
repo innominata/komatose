@@ -99,7 +99,7 @@
   </p>
   {/if}
   {#if canUpload && (section === "full" || section === "upload")}<label class="upload" data-find="upload-order"
-      >Add images or PSDs, or paste from clipboard<input
+      >Add images, PSDs or a zip of them, or paste from clipboard<input
         type="file"
         accept={PAGE_FILE_ACCEPT}
         multiple

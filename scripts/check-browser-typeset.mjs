@@ -27,6 +27,12 @@ async function operation(data) {
   expect(response.ok(), JSON.stringify(result)).toBeTruthy();
   return result;
 }
+/** Selects Region 1 unless it already is: over a selected region a click starts a move. */
+async function selectRegion1() {
+  const region = page.getByRole('button', { name: /^Region 1(,.*)?$/ });
+  if ((await region.getAttribute('aria-pressed')) !== 'true') await region.click();
+  await expect(region).toHaveAttribute('aria-pressed', 'true');
+}
 try {
   const upload = await context.request.post(url, { multipart: {
     font: { name: 'FreeSans.ttf', mimeType: 'font/ttf', buffer: readFileSync('/usr/share/fonts/gnu-free/FreeSans.ttf') },
@@ -45,9 +51,9 @@ try {
   await expect(page.getByRole('button', { name: 'Rebuild and restart', exact: true })).toBeVisible();
   await page.locator('.pages > button').first().click();
   await page.getByRole('navigation', { name: 'Chapter workflow' }).getByRole('button', { name: 'Typeset', exact: true }).click();
-  await page.getByRole('button', { name: /^Region 1(,.*)?$/ }).click();
+  await selectRegion1();
   await page.getByRole('tab', { name: 'Shape & mask', exact: true }).click();
-  await expect(page.getByRole('button', { name: /Fit bubble/ })).toBeVisible();
+  await expect(page.locator('[data-find="fit-bubble"]')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve geometry', exact: true })).toBeVisible();
   const tools = page.getByRole('toolbar', { name: 'Tools' });
   await expect(tools.getByRole('button', { name: 'Draw polygon', exact: true })).toBeVisible();
@@ -62,7 +68,9 @@ try {
   await expect.poll(async () => (await state()).regions[id].data.layout?.style.rotation).toBe(12);
   let current = await state();
   expect(current.lines.find(l => l.id === id).lineType).toBe('::');
-  expect(current.regions[id].data.style.size).toBeUndefined();
+  // A type change gives the region the new type's whole default (as Reset to Default does):
+  // the region's own size 24 does not carry over.
+  expect(current.regions[id].data.style.size).toBe(8);
   expect(current.regions[id].data.layout.style.size).toBe(8);
   expect(current.regions[id].data.polygon).toEqual(originalPolygon);
   await page.getByRole('tab', { name: 'Text', exact: true }).click();
@@ -73,21 +81,21 @@ try {
   for (const name of ['Review', 'Translate']) {
     await page.getByRole('navigation', { name: 'Chapter workflow' })
       .getByRole('button', { name, exact: true }).click();
-    await page.getByRole('button', { name: /^Region 1(,.*)?$/ }).click();
+    await selectRegion1();
     const stepType = page.getByRole('group', { name: /Bilingual region 1/ }).getByLabel('Region type', { exact: true });
     await stepType.selectOption('::');
     await expect.poll(async () => (await state()).regions[id].data.layout?.style.size).toBe(8);
-    expect((await state()).regions[id].data.style?.size).toBeUndefined();
+    expect((await state()).regions[id].data.style?.size).toBe(8);
     await stepType.selectOption('""');
     await expect.poll(async () => (await state()).regions[id].data.layout?.style.size).toBe(16);
   }
   await page.getByRole('navigation', { name: 'Chapter workflow' })
     .getByRole('button', { name: 'Typeset', exact: true }).click();
-  await page.getByRole('button', { name: /^Region 1(,.*)?$/ }).click();
+  await selectRegion1();
   await expect(type).toHaveValue('""');
   current = await state();
   const beforeLayoutKey = current.regions[id].data.layout?.key;
-  const rectangle = page.getByRole('button', { name: 'Set polygon to region bounds', exact: true });
+  const rectangle = page.locator('[data-find="rail-region-bounds"]');
   await expect(rectangle).toBeEnabled();
   await rectangle.click();
   current = await state();
@@ -101,7 +109,7 @@ try {
   expect(current.regions[id].data.geometryApproved).toBe(true);
   expect(current.regions[id].data.layout).toBeTruthy();
 
-  const svg = page.locator('.canvas-page svg');
+  const svg = page.getByRole('application', { name: 'Page regions and cleaning mask' });
   await expect(svg).toBeVisible();
   const box = await svg.boundingBox();
   if (!box) throw new Error('page canvas is not visible');

@@ -130,7 +130,10 @@ import { isAdmin } from "$lib/server/access";
 import { normalizeRegionKinds } from "$lib/regionCatalog";
 import { DETECTORS, type Episode, type PublicUser, type Series } from "$lib/types";
 import { pickStyle, pageArtwork, pageRawArtwork, MASK_GROW_MAX, MASK_GROW_MIN, type PageData, type RegionData, type Point, type Preferences, type WorkflowDoc } from "$lib/workflow";
-import { saveRegionTextMask } from "$lib/server/textMask";
+import { saveRegionTextMask, saveRegionTextMaskWand } from "$lib/server/textMask";
+import { readWorkingOrOrig } from "$lib/server/storage";
+import { WAND_GROW_MAX, WAND_TOLERANCE_MAX } from "$lib/maskWand";
+import { parseSizeRamp } from "$lib/sizeRamp";
 import { saveCleaningSample } from "$lib/server/cleaningSamples";
 import type { RequestHandler } from "./$types";
 
@@ -998,6 +1001,22 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       if (!line?.imageId) throw new WorkflowError("Region not found", 404);
       const img = (await listImages(episode.id)).find((p) => p.id === line.imageId);
       if (!img) throw new WorkflowError("Page not found", 404);
+      if (b.wand) {
+        const { x, y, tolerance, grow } = b.wand;
+        if (![x, y, tolerance, grow].every(Number.isFinite) || x < 0 || x > 1 || y < 0 || y > 1)
+          throw new WorkflowError("Click a point on the page");
+        if (tolerance < 0 || tolerance > WAND_TOLERANCE_MAX || grow < 0 || grow > WAND_GROW_MAX)
+          throw new WorkflowError("Invalid wand settings");
+        // The artwork shown in Typeset: the cleaned page when it matches the current image.
+        const pageDoc = getDoc<PageData>(`page:${img.id}`, {});
+        const prepared = pageDoc.data.preparedAt === img.updatedAt ? pageArtwork(pageDoc.data) : undefined;
+        const artwork = prepared ? await readAsset(prepared) : await readWorkingOrOrig(series.slug, episode.slug, img.filename);
+        if (!artwork) throw new WorkflowError("Missing page image", 404);
+        return json({
+          doc: await saveRegionTextMaskWand(episode.id, line, img, b.expectedRevision, artwork,
+            { x, y, tolerance, grow, erase: !!b.wand.erase }),
+        });
+      }
       const strokes = (b.strokes ?? []).map((s: { points?: unknown; radius?: number; erase?: boolean }) => {
         if (!Number.isFinite(s.radius) || (s.radius ?? 0) < 1 || (s.radius ?? 0) > 200)
           throw new WorkflowError("Invalid brush size");
@@ -1078,6 +1097,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
             delete data.charRunsBody;
           }
         }
+        if ("sizeRamp" in b.data) {
+          if (doc.data.locked) throw new WorkflowError("Unlock this layout before changing its size ramp");
+          const ramp = parseSizeRamp(b.data.sizeRamp);
+          if (b.data.sizeRamp != null && !ramp && !(typeof b.data.sizeRamp === "object"))
+            throw new WorkflowError("Invalid size ramp");
+          if (ramp) data.sizeRamp = ramp;
+          else delete data.sizeRamp;
+        }
         if ("textPaths" in b.data) {
           if (doc.data.locked) throw new WorkflowError("Unlock this layout before changing its text paths");
           const list = b.data.textPaths;
@@ -1108,7 +1135,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           b.history || "save",
         );
         if (
-          ("polygon" in b.data || "geometryRotation" in b.data || "charRuns" in b.data || "textPaths" in b.data) &&
+          ("polygon" in b.data || "geometryRotation" in b.data || "charRuns" in b.data || "textPaths" in b.data || "sizeRamp" in b.data) &&
           !saved.data.locked &&
           line.body?.trim() &&
           (doc.data.layout || b.data.geometryApproved)

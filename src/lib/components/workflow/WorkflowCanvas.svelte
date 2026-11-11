@@ -1,3 +1,12 @@
+<script lang="ts" module>
+  /**
+   * Where the centre of the view sat on the current page, as a fraction of the page, and in
+   * which step and view mode. Kept outside the component so it survives the canvas being
+   * rebuilt when the step changes.
+   */
+  let viewAnchor: { pageId: string; step: string; mode: string; fx: number; fy: number } | null = null;
+</script>
+
 <script lang="ts">
   import PlacedAssetsCanvas from "./PlacedAssetsCanvas.svelte";
   import {ASSET_DRAG_TYPE,type CleanAsset,type PlacedAsset} from "$lib/cleanAssets";
@@ -25,6 +34,8 @@
     end: Point;
     points: Point[];
     vertex?: number;
+    /** A Shift-drag of a polygon corner: slants that edge and ramps the text size along it. */
+    ramp?: boolean;
     revision?: number;
     bounds?: { x: number; y: number; w: number; h: number };
     regionId?: string;
@@ -86,6 +97,7 @@
     scrollAction,
     regionLayout,
     regionTextMask,
+    maskWand = false,
     overlayStyle,
     adjustedBounds,
     graphicAsset,
@@ -174,6 +186,8 @@
     scrollAction: ScrollAction;
     regionLayout: (id: string) => FittedLayout | undefined;
     regionTextMask: (id: string) => string | undefined;
+    /** The text mask brush and erase are in magic wand mode: click, no brush circle. */
+    maskWand?: boolean;
     overlayStyle: (line: LineRow, layout: { style: TextStyle }) => string | undefined;
     adjustedBounds: (d: StudioDrawing) => { x: number; y: number; w: number; h: number };
     graphicAsset?: (hash:string)=>string;
@@ -346,6 +360,8 @@
     const drag = drawing;
     if (drag?.polygonDrag)
       return translatePolygon(points, drag.end.x - drag.start.x, drag.end.y - drag.start.y);
+    if (drag?.vertex != null && drag.vertex < points.length)
+      return points.map((p, i) => (i === drag.vertex ? drag.end : p));
     if (drag?.rotation && page && drag.regionId === selected?.id) {
       const angle = rotationAngle(drag);
       if (!angle) return drag.rotation.polygon;
@@ -780,6 +796,7 @@
   let stripFrame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   function onStripScroll() {
+    recordView();
     if (!continuous || stripFrame) return;
     stripFrame = requestAnimationFrame(() => {
       stripFrame = 0;
@@ -834,11 +851,55 @@
   let nearIds = $state<Set<string>>(new Set());
   const holding = $derived(!!drawing || polygonDraft.length > 0 || !!cropDraft || !!pathDrag || pathDraft.length > 0);
   let overscrollFor = "";
+  const viewMode = $derived(continuous ? "strip" : gutter ? "page" : "");
+  function activePageEl() {
+    const scroller = canvasScrollEl;
+    const el = scroller?.querySelector("[data-active-page]") ?? scroller?.querySelector(".canvas-page.overscroll");
+    return el instanceof HTMLElement ? el : null;
+  }
+  let anchorFrame = 0;
+  /** Remembers the spot on the page at the centre of the view (throttled to a frame). */
+  function recordView() {
+    if (anchorFrame) return;
+    anchorFrame = requestAnimationFrame(() => {
+      anchorFrame = 0;
+      const scroller = canvasScrollEl, el = activePageEl();
+      if (!scroller || !el || !page || !viewMode) return;
+      const s = scroller.getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      viewAnchor = { pageId: page.id, step, mode: viewMode,
+        fx: (s.left + s.width / 2 - r.left) / r.width, fy: (s.top + s.height / 2 - r.top) / r.height };
+    });
+  }
+  /** Scrolls so the remembered spot on the page is at the centre of the view again. */
+  function restoreView(anchor: NonNullable<typeof viewAnchor>) {
+    const scroller = canvasScrollEl, el = activePageEl();
+    if (!scroller || !el) return false;
+    const s = scroller.getBoundingClientRect(), r = el.getBoundingClientRect();
+    ignoreScrollUntil = performance.now() + 150;
+    scroller.scrollTo({
+      left: scroller.scrollLeft + r.left + anchor.fx * r.width - (s.left + s.width / 2),
+      top: scroller.scrollTop + r.top + anchor.fy * r.height - (s.top + s.height / 2),
+    });
+    return true;
+  }
   $effect(() => {
-    const key = page ? `${step}:${page.id}:${continuous ? "strip" : gutter ? "page" : ""}` : "";
+    const key = page ? `${step}:${page.id}:${viewMode}` : "";
     if (key === overscrollFor) return;
     overscrollFor = key;
     if (!key || (!continuous && !gutter)) return;
+    // Changing step or view mode on the same page keeps the view where it was on the page.
+    const anchor = viewAnchor;
+    if (anchor && anchor.pageId === page!.id && (anchor.step !== step || anchor.mode !== viewMode)) {
+      ownSwitch = "";
+      viewAnchor = { ...anchor, step, mode: viewMode };
+      // Again a frame later, once panels that the new step opens or closes have settled.
+      if (restoreView(anchor)) requestAnimationFrame(() => {
+        restoreView(anchor);
+        if (continuous) trackStrip(false);
+      });
+      return;
+    }
     if (continuous) {
       // Without waiting a frame, so a region scroll that follows (a card picked in the list)
       // starts from this page rather than being undone by it.
@@ -956,8 +1017,8 @@
       data-active-page={continuous ? "" : undefined}
       bind:clientWidth={canvasWidth}
       class:zoom-tool={zooming}
-      class:brush-tool={!zooming && (tool === "brush" || tool === "erase" || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
-      class:click-tool={!zooming && (tool === "bubble-fill" || tool === "mask-grow")}
+      class:brush-tool={!zooming && (((tool === "brush" || tool === "erase") && !maskWand) || tool === "clone-stamp" || tool === "blur" || tool === "restore" || tool === "raw")}
+      class:click-tool={!zooming && (tool === "bubble-fill" || tool === "mask-grow" || ((tool === "brush" || tool === "erase") && maskWand))}
       class:style-brush-tool={tool === "style-brush"}
       style={`aspect-ratio:${page.width}/${page.height};--page-w:${reviewSideBySide ? `calc(${zoom / 2}% - 8px)` : `${zoom}%`};width:var(--page-w)`}
       oncontextmenu={handleContext}
@@ -1062,7 +1123,7 @@
           </defs>
           <rect width={page.width} height={page.height} fill="#6c4ce0" opacity=".4" mask="url(#text-conceal-mask)" pointer-events="none" />
         {/if}
-        {#if brushHover && (tool === "brush" || tool === "erase" || tool === "blur" || tool === "restore" || tool === "raw")}
+        {#if brushHover && (((tool === "brush" || tool === "erase") && !maskWand) || tool === "blur" || tool === "restore" || tool === "raw")}
           <circle
             cx={brushHover.x}
             cy={brushHover.y}
@@ -1390,6 +1451,13 @@
               onpointerdown={(e) => {
                 e.stopPropagation();
                 if (!canClean || busy || !["select", "polygon"].includes(tool)) return;
+                // Shift-drag a corner of a four-point polygon to ramp the text size along the
+                // slanted edge; a Shift-click without moving still removes the point (on release).
+                if (e.shiftKey && tool === "select" && selectedPolygon.length === 4 && !regionDoc?.data.geometryRotation) {
+                  svgEl!.setPointerCapture(e.pointerId);
+                  drawing = { start: p, end: p, points: [], vertex: i, ramp: true, revision: regionDoc?.revision };
+                  return;
+                }
                 if (e.shiftKey) {
                   if (tool === "polygon") polygonDraft = polygonDraft.filter((_, n) => n !== i);
                   else if (selectedPolygon.length > 3) void onact({

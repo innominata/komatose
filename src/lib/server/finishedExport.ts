@@ -16,7 +16,8 @@ import { createJob, updateJob, pageResult } from "./jobs";
 import { exportJobPayload, pruneExportJobs, unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
 import { textMatrix } from "./typesetting";
 import { psdTextWarp, warpPad } from "../textWarp";
-import { activeEffects, effectsReach, psdEffects } from "../textEffects";
+import { activeEffects, effectsReach, psdEffects, psdPatternUuid } from "../textEffects";
+import { getPattern, patternPixels } from "./patterns";
 import { regionTextPaths, textPathBeziers, trimBeziers } from "../textPath";
 import { buildTxt2, type Txt2Layer, type Txt2Run } from "./txt2";
 import { metaLayer, pixelHash, regionSnapshot, writeMeta, type ExportMeta } from "./psdMeta";
@@ -269,6 +270,7 @@ export async function finishedPsd(
   const r = rendered ?? (await renderPage(page));
   const original = await pixels(await readAsset(page.source.original!));
   const prepared = await pixels(await readAsset(page.source.prepared!));
+  const usedPatterns = new Set<string>();
   const children: Layer[] = [
     { name: "Original upload", hidden: true, imageData: original },
     { name: "Prepared source", hidden: true, imageData: prepared },
@@ -350,7 +352,10 @@ export async function finishedPsd(
     const layerTop = layer.top;
     const layerWidth = layer.width;
     const layerHeight = layer.height;
-    const layerFx = psdEffects(activeEffects(s.effects), page.dpi) as Layer["effects"];
+    const active = activeEffects(s.effects);
+    const patternId = active.patternOverlay?.patternId;
+    if (patternId) usedPatterns.add(patternId);
+    const layerFx = psdEffects(active, page.dpi, (id) => getPattern(id)?.name) as Layer["effects"];
     const effects: Layer["effects"] =
       s.outlineWidth > 0
         ? {
@@ -498,10 +503,18 @@ export async function finishedPsd(
     txt2Layers.push({ text: hidden.text!.text, runs: [txt2Run({ length: hidden.text!.text.length, style: { font: { name: "ArialMT" }, fontSize: 1, leading: 1, fauxBold: false, fauxItalic: false, horizontalScale: 1, verticalScale: 1, fillColor: { r: 0, g: 0, b: 0 }, strokeColor: { r: 0, g: 0, b: 0 } } })], justification: "left", frame: { box: [0, 0, 1, 1] } });
   }
   children.push(hidden);
+  // A pattern overlay names its pattern; the pixels travel in the document's pattern resource.
+  const patterns: NonNullable<Psd["patterns"]> = [];
+  for (const id of usedPatterns) {
+    const tile = await patternPixels(id);
+    if (!tile) continue;
+    patterns.push({ name: tile.pattern.name, id: psdPatternUuid(id), x: 0, y: 0, bounds: { x: 0, y: 0, w: tile.width, h: tile.height }, data: tile.data });
+  }
   const psd: Psd = {
     width,
     height,
     children,
+    ...(patterns.length ? { patterns } : {}),
     ...(writeTxt2 ? { engineData: Buffer.from(buildTxt2(txt2Layers)).toString("base64") } : {}),
     imageData: await pixels(r.composite),
     imageResources: {

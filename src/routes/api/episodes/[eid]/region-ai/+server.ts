@@ -31,8 +31,10 @@ import {
   detectReviewMask,
   parseReviewMaskPng,
   parseReviewCropScale,
+  parseReviewRotation,
   parseReviewView,
   regionReviewCrop,
+  rotateReviewImage,
 } from "$lib/server/reviewMask";
 import { saveCleanExample, parseComparisonFormat, regionComparison } from "$lib/server/regionCompare";
 import { getDoc, WorkflowError } from "$lib/server/workflowStore";
@@ -73,11 +75,13 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     if (b.action === "detect-mask") {
       if (!page) throw new WorkflowError("Region needs image bounds");
       const expansion = b.expansion == null ? 3 : Number(b.expansion);
-      const mask = await detectReviewMask(series, episode, line, page, expansion, request.signal);
+      const mask = await detectReviewMask(series, episode, line, page, expansion, request.signal, undefined,
+        parseReviewRotation(b.rotation));
       return json({ mask: `data:image/png;base64,${mask.toString("base64")}` });
     }
     if (b.action === "review") {
       const cropScale = parseReviewCropScale(b.cropScale);
+      const rotation = parseReviewRotation(b.rotation);
       const reviewers = validateReviewers(b.reviewers, b.selectedReviewer);
       await reserve(reviewers);
       if (!page) throw new WorkflowError("Region needs image bounds");
@@ -88,8 +92,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           : view === "crop" ? { kind: "crop" }
           : { kind: "mask", silhouette: b.silhouette === true,
               mask: b.mask != null ? parseReviewMaskPng(b.mask)
-                : await detectReviewMask(series, episode, line, page, b.expansion, request.signal) },
-        cropScale);
+                : await detectReviewMask(series, episode, line, page, b.expansion, request.signal, undefined, rotation) },
+        cropScale, rotation);
       const results = [];
       // Sequential calls also support local servers that load one model at a time.
       for (const model of reviewers) {
@@ -116,7 +120,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
           results.push({ model, error: messageOf(e), cards: [] });
         }
       }
-      return json({ results, cropScale });
+      return json({ results, cropScale, rotation });
     }
     if (b.action === "read-drawing") {
       const prefs = preferences(episode.id, series.id);
@@ -201,10 +205,10 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
         },
       });
     }
-    const crop = await regionImage(series, episode, line, page);
+    const rotation = parseReviewRotation(url.searchParams.get("rotate"));
     if (variant === "mask") {
       if (!page) throw new WorkflowError("Region needs image bounds");
-      const mask = await croppedPageMask(page, line, series, episode);
+      const mask = await croppedPageMask(page, line, series, episode, rotation);
       return new Response(new Uint8Array(mask), {
         headers: {
           "content-type": "image/png",
@@ -212,6 +216,9 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
         },
       });
     }
+    const crop = rotation
+      ? await rotateReviewImage(await regionImage(series, episode, line, page), rotation, "crop")
+      : await regionImage(series, episode, line, page);
     return new Response(new Uint8Array(crop), {
       headers: {
         "content-type": "image/jpeg",

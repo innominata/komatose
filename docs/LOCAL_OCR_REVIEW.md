@@ -61,6 +61,15 @@ and SFX. The Clean-step text detector masks the source page once; each
 recognition crop retains lettering and whites out surrounding artwork. Region
 OCR, image rereads, and fill-missing OCR also mask their inputs before reading.
 
+**Review Transcription** can turn the crop before it is sent. On the **Crop** tab, drag
+the handle above the crop (Shift snaps to 15°; double-click straightens), or use the
+90° buttons, for example to stand rotated or sideways text up for models that read
+upright text better. The server turns the crop (white corners) and, by the same
+angle, the detected mask, so the Mask and Trace tabs draw over the turned crop and
+every reviewer receives it turned. Changing the angle runs mask detection again and
+clears a trace. Each reading is labelled with the angle it was sent at. The angle is
+for this dialog only; it is not saved on the region.
+
 **Installable transcription decider:** Admin → Models → Install → Transcription
 deciders → **Liquid AI d1-3B Q8** installs the Q8 model, F16 vision projector,
 and a dedicated pinned llama.cpp Vulkan runtime. On Linux the runtime build

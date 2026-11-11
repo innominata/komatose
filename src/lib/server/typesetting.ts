@@ -13,7 +13,8 @@ import {
   type CharStyle,
 } from "../workflow";
 import { glyphToPage, isTextWarpStyle, layoutWarpBox, textWarpMap, warpFontPath } from "../textWarp";
-import { remapCharRuns } from "../charStyles";
+import { applySizeRamp, remapCharRuns, stackText } from "../charStyles";
+import { parseSizeRamp } from "../sizeRamp";
 import { activeEffects, effectFilters, effectsReach, normalizeEffects } from "../textEffects";
 import { pathFrame, regionTextPaths } from "../textPath";
 import { effectiveTextRotation } from "../textRotation";
@@ -21,6 +22,7 @@ import { sqlite } from "./db";
 import { readAsset, storeAsset, hash, WorkflowError } from "./workflowStore";
 import { unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
 import { isFontCategory, normalizeFontCategory } from "../fontCategories";
+import { patternTile } from "./patterns";
 export {
   MAX_SKEW,
   type Matrix2,
@@ -256,6 +258,8 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
     s[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : DEFAULT_STYLE[key]!;
   }
   if (s.warpOrientation !== "vertical") s.warpOrientation = "horizontal";
+  // Only set when on, so layouts keyed before stacking existed stay current.
+  if (s.stacked !== true) delete s.stacked;
   const effects = normalizeEffects(s.effects);
   if (effects) s.effects = effects;
   else delete s.effects;
@@ -351,6 +355,7 @@ export function layoutKey(
       poly: region.polygon,
       style: s,
       ...(region.charRuns?.length ? { charRuns: region.charRuns, charRunsBody: region.charRunsBody } : {}),
+      ...(region.sizeRamp ? { sizeRamp: region.sizeRamp } : {}),
       ...(regionTextPaths(region).length ? { textPaths: regionTextPaths(region) } : {}),
       dpi,
       width: page.width,
@@ -432,8 +437,13 @@ export async function fitText(
     throw new WorkflowError("DPI must be between 10 and 2400");
   if (line.body.length > 12000)
     throw new WorkflowError("Region text is too long to fit");
-  const body = line.body.replace(/\r\n?/g, "\n");
-  const runs = remapCharRuns(region.charRuns, region.charRunsBody?.replace(/\r\n?/g, "\n"), body);
+  let body = line.body.replace(/\r\n?/g, "\n");
+  let runs = remapCharRuns(region.charRuns, region.charRunsBody?.replace(/\r\n?/g, "\n"), body);
+  // A size ramp becomes per-glyph sizes, which the PSD text layer keeps as character runs.
+  const sizeRamp = parseSizeRamp(region.sizeRamp);
+  if (sizeRamp) runs = applySizeRamp(runs, body, sizeRamp);
+  // Stacked text is laid out one character per line; the PSD layer gets the same breaks.
+  if (style.stacked) ({ body, runs } = stackText(body, runs));
   const base = await loadFont(style.fontId);
   const { font, metadata } = base;
 
@@ -484,6 +494,13 @@ export async function fitText(
   const missingGlyphs = [...missing];
 
   let poly = regionPolygon(line, region, page);
+  // With a size ramp the polygon's slanted edge is drawn by the glyph sizes themselves, so
+  // the text fits the polygon's bounding box: the biggest glyphs reach the tall side.
+  if (sizeRamp) {
+    const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y);
+    const [l, r, t, b] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    poly = [{ x: l, y: t }, { x: r, y: t }, { x: r, y: b }, { x: l, y: b }];
+  }
   const cx =
     (Math.min(...poly.map((p) => p.x)) + Math.max(...poly.map((p) => p.x))) / 2;
   const cy =
@@ -857,12 +874,14 @@ export async function fitText(
     const bounds = { x: Math.min(...xs) - glyphPad / 2, y: Math.min(...ys) - glyphPad / 2, width: Math.max(...xs) - Math.min(...xs) + glyphPad, height: Math.max(...ys) - Math.min(...ys) + glyphPad };
     const reach = effectsReach(effects) * px + glyphPad;
     const rect = { x: bounds.x - reach, y: bounds.y - reach, width: bounds.width + reach * 2, height: bounds.height + reach * 2 };
-    const fx = effectFilters(effects, px, rect, bounds);
+    const tile = effects.patternOverlay ? await patternTile(effects.patternOverlay.patternId) : undefined;
+    const fx = effectFilters(effects, px, rect, bounds, "#tx-f", tile);
     drawn =
       `<defs>${fx.defs}<g id="tx-o">${wrap(outlinePart)}</g><g id="tx-f">${wrap(fillPart)}</g></defs>` +
       (fx.exterior ? `<!--fx--><g filter="url(#fx-ext)"><use href="#tx-o"/><use href="#tx-f"/></g><!--/fx-->` : "") +
       `<!--outline--><use href="#tx-o"/><!--/outline-->` +
-      `<g${fx.interior ? ` filter="url(#fx-int)"` : ""}><use href="#tx-f"/>${fx.overlay ? `<!--fx-->${fx.overlay}<!--/fx-->` : ""}</g>`;
+      // Isolated, so an overlay's blend mode mixes with the glyphs only, never the page below.
+      `<g${fx.interior ? ` filter="url(#fx-int)"` : fx.overlay ? ` style="isolation:isolate"` : ""}><use href="#tx-f"/>${fx.overlay ? `<!--fx-->${fx.overlay}<!--/fx-->` : ""}</g>`;
   } else drawn = `<!--outline-->${wrap(outlinePart)}<!--/outline-->${wrap(fillPart)}`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${page.width}" height="${page.height}" viewBox="0 0 ${page.width} ${page.height}">${drawn}</svg>`;
 
