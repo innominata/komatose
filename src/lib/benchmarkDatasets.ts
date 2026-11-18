@@ -26,10 +26,10 @@ export const BENCHMARK_DATASETS: BenchmarkDataset[] = [
     glossary: GOLD_GLOSSARY, pages: GOLD_PAGES,
   },
   {
-    id: 'manhwa-ko', version: 1, label: 'Korean · Manhwa', series: 'ManhwaFixture',
+    id: 'manhwa-ko', version: 2, label: 'Korean · Manhwa', series: 'ManhwaFixture',
     lang: 'korean', direction: 'ltr', referenceLabel: 'reference',
     fixtureDir: 'fixtures/manhwa-pages',
-    seriesNotes: 'Synthetic Korean school-life comic scenes. Each page is a self-contained scene; do not assume a continuous plot between pages.',
+    seriesNotes: 'Synthetic Korean school-life, martial-arts action, dungeon combat and supernatural horror comic scenes. Each page is a self-contained scene; do not assume a continuous plot between pages.',
     glossary: '', pages: koreanPages as GoldPage[],
   },
 ];

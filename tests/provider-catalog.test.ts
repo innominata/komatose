@@ -13,6 +13,7 @@ import {
 	providersForOperation,
 	selectProvidersForOperation,
 	providerRunGate,
+	proofreadingGate,
 	proofreadingOperation,
 } from '../src/lib/providerCatalog';
 import { enginesForRegionAiField, REGION_AI_FIELD_OPERATIONS } from '../src/lib/regionAi';
@@ -185,6 +186,21 @@ test('proofreading uses the image workflow for browser services without requirin
 	}
 	assert.equal(providerRunGate('translator-only', proofreadingOperation('translator-only', custom), custom).ok, false);
 	assert.equal(providerRunGate('unknown', proofreadingOperation('unknown')).ok, false);
+});
+
+test('a regular vision model critiques the raw and typeset page instead of proofreading the whole chapter', () => {
+	const custom = [
+		{ id: 'vision-chat', operations: ['translate', 'proofreadEnglish', 'vision', 'advisory'] },
+		{ id: 'text-chat', operations: ['translate', 'proofreadEnglish'] },
+		{ id: 'vision-no-proofread', operations: ['vision', 'translate'] },
+	];
+	assert.equal(proofreadingOperation('vision-chat', custom), 'pageImageProofread');
+	assert.deepEqual(proofreadingGate('vision-chat', custom), { ok: true, reason: '' });
+	assert.equal(proofreadingOperation('text-chat', custom), 'proofreadEnglish');
+	assert.equal(proofreadingGate('text-chat', custom).ok, true);
+	assert.equal(proofreadingOperation('vision-no-proofread', custom), 'proofreadEnglish');
+	assert.equal(proofreadingGate('vision-no-proofread', custom).ok, false);
+	assert.equal(proofreadingGate('proofreader-a', live).ok, true);
 });
 
 test('live registry operations let custom rows be selected and gated', () => {

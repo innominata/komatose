@@ -193,19 +193,19 @@ const blankJpeg = () => (blank ??= sharp({ create: { width: 1414, height: 2000, 
 test('OCR run: every detector setup is scored per page, and crop models read gold and detector crops', async () => {
 	const { startOcrBenchmark, waitBenchmark, listDetectorSetups } = await import('../src/lib/server/modelBenchmark');
 	const setups = listDetectorSetups().map((setup) => setup.id);
-	for (const id of ['rtdetr', 'ctd', 'paddle', 'heuristic', 'coo', 'koharu', 'rtdetr+coo+koharu']) assert.ok(setups.includes(id), id);
+	for (const id of ['rtdetr', 'ctd', 'paddle', 'heuristic', 'coo', 'sam-ts-l', 'rtdetr+coo+sam-ts-l']) assert.ok(setups.includes(id), id);
 	const pages = [page('006'), page('007')];
 	const row = SEED_ROWS.find((item) => item.id === 'paddleocr-vl-1.6')!;
 	const calls: string[] = [];
 	const readTexts: string[] = [];
 	startOcrBenchmark({
-		detectors: ['rtdetr', 'rtdetr+coo', 'koharu'],
+		detectors: ['rtdetr', 'rtdetr+coo', 'sam-ts-l'],
 		models: [row.id],
 		sources: ['gold', 'rtdetr'],
 		rows: [row],
 		pages,
 		image: async () => blankJpeg(),
-		// RT-DETR finds every dialogue box; COO finds the SFX; Koharu finds nothing.
+		// RT-DETR finds every dialogue box; COO finds the SFX; SAM-TS-L finds nothing.
 		detectPart: async (part, p) => {
 			calls.push(`${part}:${p.id}`);
 			const lines = p.lines.filter((line) => part === 'coo' ? line.kind === 'sfx' : part === 'rtdetr' ? line.kind === 'speech' : false);
@@ -223,15 +223,15 @@ test('OCR run: every detector setup is scored per page, and crop models read gol
 	const { ocr } = await waitBenchmark();
 	assert.equal(ocr?.state, 'done');
 	// RT-DETR is always cross-checked by Comic Text Detector, so its setups run both.
-	assert.deepEqual(calls.sort(), ['coo:006', 'coo:007', 'ctd:006', 'ctd:007', 'koharu:006', 'koharu:007', 'rtdetr:006', 'rtdetr:007']);
+	assert.deepEqual(calls.sort(), ['coo:006', 'coo:007', 'ctd:006', 'ctd:007', 'rtdetr:006', 'rtdetr:007', 'sam-ts-l:006', 'sam-ts-l:007']);
 	const rt = ocr!.detectors.find((item) => item.id === 'rtdetr')!;
 	const rtCoo = ocr!.detectors.find((item) => item.id === 'rtdetr+coo')!;
-	const koharu = ocr!.detectors.find((item) => item.id === 'koharu')!;
+	const samTsL = ocr!.detectors.find((item) => item.id === 'sam-ts-l')!;
 	assert.equal(rt.pages.length, 2);
 	assert.equal(rt.totals.dialogueFound, rt.totals.dialogueTargets);
 	assert.equal(rt.totals.sfxFound, 0);
 	assert.equal(rtCoo.totals.recall, 1);
-	assert.equal(koharu.totals.found, 0);
+	assert.equal(samTsL.totals.found, 0);
 
 	const gold = ocr!.models.find((item) => item.source === 'gold')!;
 	const viaRt = ocr!.models.find((item) => item.source === 'rtdetr')!;

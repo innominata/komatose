@@ -107,7 +107,7 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		group: 'environment',
 		label: 'Workflow environment (.venv-workflow)',
 		summary:
-			'Runs cleaning: masking (Koharu, COO), bubble geometry, inpainting models and the workflow worker.',
+			'Runs cleaning: masking (SAM-TS-L, COO), bubble geometry, inpainting models and the workflow worker.',
 		diskBytes: 15 * GB,
 		memoryBytes: 0,
 		unlocks: 'cleaning, masking',
@@ -149,9 +149,9 @@ export const INSTALL_TARGETS: InstallTarget[] = [
 		unlocks: 'text detection, text masks',
 	},
 	{
-		id: 'koharu',
+		id: 'sam-ts-l',
 		group: 'detect',
-		label: 'Koharu SAM-TS-L',
+		label: 'SAM-TS-L',
 		summary:
 			'Starts beside the box detectors to catch text they missed and to produce the full-page mask used before transcription.',
 		diskBytes: 1_365 * MB,

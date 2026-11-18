@@ -66,7 +66,7 @@ for line in sys.stdin:
   const oldPython = process.env.SCAN_WORKFLOW_PYTHON, oldGpu = process.env.SCAN_GPU_MODE;
   process.env.SCAN_WORKFLOW_PYTHON = worker;
   process.env.SCAN_GPU_MODE = 'cpu';
-  await fixturePasses('koharu', ['textMask']);
+  await fixturePasses('sam-ts-l', ['textMask']);
   if (opts.flatClean) await fixturePasses('lama-manga', ['inpaint']);
   return {
     calls: async () => (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)),

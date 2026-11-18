@@ -10,7 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'ocr'))
-MODEL_IDS = ('lama-manga', 'aot', 'sam', 'koharu', 'rtdetr',
+MODEL_IDS = ('lama-manga', 'aot', 'sam', 'sam-ts-l', 'rtdetr',
              'ctd', 'coo', 'hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en',
              'imsbee-ko-en-translator')
 GENERATIVE = {'hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en', 'imsbee-ko-en-translator'}
@@ -143,9 +143,9 @@ def stages(model_id, device='cpu'):
         yield Stage('forward', COO().eval(), (x,), ('image',), contract='BGR mean-subtracted /255, proportional short-side736/max1536/stride32; OpenCV/pyclipper contours outside graph.')
         return
 
-    if model_id == 'koharu':
-        import koharu_mask
-        model, publisher, _ = koharu_mask._load(device)
+    if model_id == 'sam-ts-l':
+        import sam_ts_l_mask
+        model, publisher, _ = sam_ts_l_mask._load(device)
         x, _ = publisher.prepare(Image.fromarray(page()[:, :, ::-1]))
         x = x.to(device)
         yield Stage('forward', wrap(model, lambda m, x: m([{'image': x, 'original_size': (1024, 1024)}], multimask_output=False)[4]),

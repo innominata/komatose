@@ -163,7 +163,7 @@ try {
   const detectorSelect = page.getByRole("combobox", { name: "Text detector", exact: true });
   await expect(detectorSelect).toBeVisible();
   await expect(detectorSelect.locator("option").first()).toHaveText(/^Default · /);
-  await expect(detectorSelect.locator('option[value="ctd+koharu"]')).toHaveCount(1);
+  await expect(detectorSelect.locator('option[value="ctd+sam-ts-l"]')).toHaveCount(1);
   await expect(page.getByRole("spinbutton", { name: "Detection confidence", exact: true })).toBeVisible();
   await expect(page.getByText("Transcribe runs the selected vision models", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();

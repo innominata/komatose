@@ -1,4 +1,4 @@
-"""Koharu SAM-TS-L full-page text removal proposals (publisher preprocessing)."""
+"""SAM-TS-L full-page text removal proposals (publisher preprocessing)."""
 import hashlib
 import importlib.util
 import os
@@ -15,18 +15,37 @@ REPO = 'mayocream/koharu-text-sam-ts-l'
 REVISION = '5dd97423e0fbf2404264979136d47e8101144046'
 WEIGHT_SHA256 = 'bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45'
 HI_SAM_REVISION = '69009434d4dba5541f228d8f5acb0754c333d417'
-VERSION = f'koharu-sam-ts-l-{REVISION[:7]}-v2'
+VERSION = f'sam-ts-l-{REVISION[:7]}-v2'
 IMAGE_SIZE = 1024
 
 _BENCH = ROOT / 'data/bench-lettering/model-comparison'
 _MODELS = {}
 
 
-def weights_path():
-    override = os.environ.get('SCAN_KOHARU_WEIGHTS')
+# Installs from before the rename keep their weights here.
+_LEGACY_DIR = ROOT / 'data/models/koharu-text-sam-ts-l'
+
+
+def _env(name):
+    """A SAM-TS-L env var, falling back to its pre-rename SCAN_KOHARU_* spelling."""
+    return os.environ.get(f'SCAN_SAM_TS_L_{name}') or os.environ.get(f'SCAN_KOHARU_{name}')
+
+
+def model_dir():
+    override = _env('DIR')
     if override:
         return Path(override)
-    prod = ROOT / 'data/models/koharu-text-sam-ts-l/model.safetensors'
+    current = ROOT / 'data/models/sam-ts-l'
+    if not (current / 'model.safetensors').is_file() and (_LEGACY_DIR / 'model.safetensors').is_file():
+        return _LEGACY_DIR
+    return current
+
+
+def weights_path():
+    override = _env('WEIGHTS')
+    if override:
+        return Path(override)
+    prod = model_dir() / 'model.safetensors'
     if prod.is_file():
         return prod
     bench = _BENCH / 'koharu-text-sam-ts-l/model.safetensors'
@@ -34,7 +53,7 @@ def weights_path():
 
 
 def hi_sam_root():
-    override = os.environ.get('SCAN_KOHARU_HISAM_ROOT')
+    override = _env('HISAM_ROOT')
     if override:
         return Path(override)
     prod = ROOT / f'data/models/hi-sam-{HI_SAM_REVISION}'
@@ -59,12 +78,12 @@ def installed():
 
 
 def _publisher_module():
-    inference = ROOT / 'data/models/koharu-text-sam-ts-l/inference.py'
+    inference = model_dir() / 'inference.py'
     if not inference.is_file():
         inference = _BENCH / 'koharu-text-sam-ts-l/inference.py'
     if not inference.is_file():
-        raise RuntimeError('Koharu inference helper missing; run scripts/install-koharu.py')
-    spec = importlib.util.spec_from_file_location('koharu_publisher_inference', inference)
+        raise RuntimeError('SAM-TS-L inference helper missing; run scripts/install-sam-ts-l.py')
+    spec = importlib.util.spec_from_file_location('sam_ts_l_publisher_inference', inference)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -75,11 +94,11 @@ def _load(device):
     from PIL import Image
     from safetensors.torch import load_file
 
-    key = ('koharu', str(device))
+    key = ('sam-ts-l', str(device))
     if key in _MODELS:
         return _MODELS[key]
     if not installed():
-        raise RuntimeError('Koharu model missing or checksum mismatch; run scripts/install-koharu.py')
+        raise RuntimeError('SAM-TS-L model missing or checksum mismatch; run scripts/install-sam-ts-l.py')
     publisher = _publisher_module()
     publisher.install_checkpoint_compatibility()
     root = hi_sam_root()
@@ -93,7 +112,7 @@ def _load(device):
     model = model.eval()
     if str(device).startswith('cuda'):
         if not torch.cuda.is_available():
-            raise RuntimeError('GPU requested for Koharu but PyTorch cannot execute on a GPU')
+            raise RuntimeError('GPU requested for SAM-TS-L but PyTorch cannot execute on a GPU')
         model = model.to(device)
     _MODELS[key] = (model, publisher, Image)
     return _MODELS[key]

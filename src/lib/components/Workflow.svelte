@@ -6,13 +6,16 @@
   import { glossaryCharacters, resolveCharacter, characterLabel } from '$lib/characters';
   import { glossaryNames } from '$lib/letteringBreaks';
   import type { GlossaryTerm } from '$lib/types';
+  import { EFFECT_DEFAULTS } from '$lib/textEffects';
+  import { setPatterns } from '$lib/patternLibrary.svelte';
+  import type { CensorData, CensorRect } from '$lib/censor';
   import { nextUnfinishedPage, prepareActionConfirmation, preparePageLabel, type PageUndoSummary } from "$lib/prepareActions";
   import { onMount, tick, untrack } from "svelte";
   import "../../styles/editor.scss";
   import { effectiveTranslateModel, isSourceSuggestion, regionAiSettings, reviseCouncil, suggestionMatchesLine, type RegionAiSettings as RegionAiSettingsData } from "$lib/regionAi";
   import { DEFAULT_CHAT_MODEL_ID } from "$lib/modelDefaults";
   import { formatDuration, transcribeSetPageMs } from "$lib/modelEstimate";
-  import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
+  import { proofreadingGate, proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
   import { isProofreaderId } from '$lib/proofreaders';
   import { copyPngToClipboard } from '$lib/clipboardImage';
   import { currentRawProofread, lastProofreadPageId, pageProofreadCall } from '$lib/pageProofread';
@@ -169,6 +172,8 @@
     comments: any[];
     pages: Record<string, WorkflowDoc<PageData>>;
     regions: Record<string, WorkflowDoc<RegionData>>;
+    /** Black boxes burned into proofreader images and censored exports, by page. */
+    censors?: Record<string, WorkflowDoc<CensorData>>;
     fonts: FontAsset[];
     preferences: Preferences;
     chapter: WorkflowDoc<Partial<Preferences>>;
@@ -185,7 +190,12 @@
     deletion?: { id: string; label: string; count: number; at: number } | null;
     deletedRegionPages?: string[];
   };
-  let studioState = $state<State | null>(null);
+  // Raw: the chapter is large, and deep proxies over it made every refresh slow.
+  // Update it by replacing objects (patchState), never by mutating them.
+  let studioState = $state.raw<State | null>(null);
+  function patchState(patch: Partial<State>) {
+    if (studioState) studioState = { ...studioState, ...patch };
+  }
   const blankRegionCount = $derived(studioState?.lines.filter(line => isBlankRegion(line) &&
     !studioState?.suggestions.some(s => s.line_id === line.id && s.state === 'pending' && isSourceSuggestion(s.kind) && !suggestionMatchesLine(s, line))).length ?? 0);
   let actionsMenuEl = $state<HTMLDivElement>();
@@ -429,15 +439,35 @@
   let exportFormat = $state("png");
   let draftExport = $state(false);
   let includeExportMetadata = $state(false);
+  let censorExport = $state(false);
   let pendingExportDownload = $state<string | null>(null);
   const latestExport = $derived(
     studioState?.jobs.find((job) =>
       job.kind === "export" &&
       job.payload?.format === exportFormat &&
       !!job.payload?.draft === draftExport &&
-      job.payload?.includeMetadata === includeExportMetadata,
+      job.payload?.includeMetadata === includeExportMetadata &&
+      !!job.payload?.censored === censorExport,
     ),
   );
+  const censoredPageCount = $derived(Object.values(studioState?.censors ?? {}).filter((doc) => doc.data.rects?.length).length);
+  /** Censor boxes save on their own record, so they never join Clean's page undo. */
+  async function saveCensors(imageId: string, rects: CensorRect[], message: string) {
+    if (!studioState || !canEdit) return;
+    const revision = studioState.censors?.[imageId]?.revision ?? 0;
+    try {
+      const result = await request(`${apiBase}/workflow`, { action: "censor", imageId, rects, expectedRevision: revision });
+      patchState({ censors: { ...studioState.censors, [imageId]: result.doc } });
+      notify(message);
+    } catch (e) {
+      error = String(e instanceof Error ? e.message : e);
+      await refresh();
+    }
+  }
+  function deleteCensor(id: string) {
+    if (!page) return;
+    void saveCensors(page.id, pageCensorRects.filter((r) => r.id !== id), "Censor box removed.");
+  }
   let quality = $state(95);
   let aliases = $state("");
   let translationPrefs = $state("");
@@ -502,7 +532,7 @@
   const translateGate = $derived(providerRunGate(aiModels.translate.engine, "translate", engineOptions));
   const enquireGate = $derived(providerRunGate(aiModels.enquire.engine, "advisory", engineOptions));
   const proofreadOperation = $derived(proofreadingOperation(aiModels.proofread.engine, engineOptions));
-  const proofreadGate = $derived(providerRunGate(aiModels.proofread.engine, proofreadOperation, engineOptions));
+  const proofreadGate = $derived(proofreadingGate(aiModels.proofread.engine, engineOptions));
   const rawProofreadGate = $derived.by(() => {
     if (isProofreaderId(aiModels.proofread.engine)) return proofreadGate;
     const english = providerRunGate(aiModels.proofread.engine, 'proofreadEnglish', engineOptions);
@@ -1148,9 +1178,9 @@
       page.captionRevision ?? 0,
     );
     if (studioState)
-      studioState.images = studioState.images.map((p) =>
+      patchState({ images: studioState.images.map((p) =>
         p.id === page!.id ? { ...p, caption: text } : p,
-      );
+      ) });
   }
   function prepPoint(e: PointerEvent): Point {
     const b = prepElement!.getBoundingClientRect();
@@ -1272,6 +1302,7 @@
   );
   const regionLabelScale = $derived(page && canvasWidth > 0 ? page.width / canvasWidth : 1);
   const pageDoc = $derived(page ? studioState?.pages[page.id] : undefined);
+  const pageCensorRects = $derived<CensorRect[]>(page ? studioState?.censors?.[page.id]?.data.rects ?? [] : []);
   const canRestore = $derived(
     !!pageDoc?.data.previousArtwork &&
       pageDoc.data.previousArtwork !== pageArtwork(pageDoc.data),
@@ -1510,7 +1541,7 @@
       if(id.startsWith('page-assets:')) {
         const imageId=id.slice(12);
         const result=await request(`${apiBase}/workflow`,{action:'placed-assets',imageId,placements:d.patch.placements,expectedRevision:d.revision});
-        if(studioState)studioState.pages={...studioState.pages,[imageId]:result.doc};
+        if(studioState)patchState({pages:{...studioState.pages,[imageId]:result.doc}});
         return {revision:result.doc.revision};
       }
       const commentId = id.startsWith("comment:") ? id.slice(8) : null;
@@ -1539,26 +1570,26 @@
         throw Object.assign(new Error(data.error), { current: data.current });
       if (commentId) {
         if (studioState)
-          studioState.comments = studioState.comments.map((c) =>
+          patchState({ comments: studioState.comments.map((c) =>
             c.id === commentId
               ? { ...data.comment, ...saves.drafts.get(id)?.patch }
               : c,
-          );
+          ) });
         return { revision: data.comment.revision };
       }
       if (captionId) {
         if (studioState)
-          studioState.images = studioState.images.map((p) =>
+          patchState({ images: studioState.images.map((p) =>
             p.id === captionId
               ? { ...data.image, ...saves.drafts.get(id)?.patch }
               : p,
-          );
+          ) });
         return { revision: data.image.captionRevision };
       }
       if (studioState)
-        studioState.lines = studioState.lines.map((l) =>
+        patchState({ lines: studioState.lines.map((l) =>
           l.id === id ? { ...data.line, ...saves.drafts.get(id)?.patch } : l,
-        );
+        ) });
       if (data.doc) {
         applyRegionDoc(data.doc);
         if (selected?.id === id) {
@@ -1634,7 +1665,7 @@
     );
   }
   function adoptPageDoc(imageId: string, doc: WorkflowDoc<PageData>) {
-    if (studioState) studioState.pages[imageId] = doc;
+    if (studioState) patchState({ pages: { ...studioState.pages, [imageId]: doc } });
     if (strokes.length) {
       maskBaseRevision = doc.revision;
       persistMaskDraft(imageId, doc.revision);
@@ -1672,12 +1703,13 @@
     }
     rememberPoll(data);
     noteMaskCompletion(data.jobs ?? []);
-    studioState.jobs = data.jobs ?? [];
+    patchState({ jobs: data.jobs ?? [] });
   }
   async function refresh() {
     const gen = ++refreshGen;
-    const data = await request(`${apiBase}/workflow`);
+    const data = await request(`${apiBase}/workflow?omitSvg=1`);
     if (gen !== refreshGen) return;
+    keepLayoutSvgs();
     rememberPoll(data);
     noteMaskCompletion(data.jobs ?? []);
     data.lines = data.lines.map((l: LineRow) => ({
@@ -1700,6 +1732,60 @@
     tryPendingCompare();
     if (step === 'Prepare') void refreshPageUndo().catch(() => {});
   }
+  /**
+   * Fitted lettering SVG by region id. The chapter loads without it (`omitSvg`):
+   * it was most of the payload. It is fetched for regions whose revision is new,
+   * current page first, and kept across refreshes.
+   */
+  let layoutSvgs = $state.raw<Record<string, { revision: number; svg: string }>>({});
+  const layoutSvgsLoading = new Set<string>();
+  /** Keep SVGs that save responses delivered, so the next refresh need not fetch them. */
+  function keepLayoutSvgs() {
+    const kept: typeof layoutSvgs = {};
+    for (const [id, doc] of Object.entries(studioState?.regions ?? {})) {
+      const svg = doc.data.layout?.svg;
+      if (svg && (layoutSvgs[id]?.revision ?? -1) < doc.revision) kept[id] = { revision: doc.revision, svg };
+    }
+    if (Object.keys(kept).length) layoutSvgs = { ...layoutSvgs, ...kept };
+  }
+  async function loadLayoutSvgs(wanted: { id: string; revision: number }[]) {
+    const todo = wanted.filter((w) => !layoutSvgsLoading.has(`${w.id}@${w.revision}`));
+    for (const w of todo) layoutSvgsLoading.add(`${w.id}@${w.revision}`);
+    try {
+      for (let i = 0; i < todo.length; i += 60) {
+        const chunk = todo.slice(i, i + 60);
+        const data = await request(`${apiBase}/workflow?layoutSvgs=${chunk.map((w) => w.id).join(",")}`);
+        const next = { ...layoutSvgs };
+        // A region missing from the reply was deleted: record it so it is not asked for again.
+        for (const w of chunk) next[w.id] = data.svgs?.[w.id] ?? { revision: w.revision, svg: "" };
+        layoutSvgs = next;
+      }
+    } catch {
+      /* The next chapter change asks again. */
+    } finally {
+      for (const w of todo) layoutSvgsLoading.delete(`${w.id}@${w.revision}`);
+    }
+  }
+  $effect(() => {
+    const regions = studioState?.regions;
+    if (!regions) return;
+    const have = layoutSvgs;
+    const first = new Set(pageLines.map((l) => l.id));
+    const wanted = Object.entries(regions)
+      .filter(([id, doc]) => doc.data.layout && !doc.data.layout.svg && (have[id]?.revision ?? -1) < doc.revision)
+      .map(([id, doc]) => ({ id, revision: doc.revision }))
+      .sort((a, b) => Number(first.has(b.id)) - Number(first.has(a.id)));
+    if (wanted.length) untrack(() => void loadLayoutSvgs(wanted));
+  });
+  /** A region's fitted layout with its SVG; an older SVG shows until the new one arrives. */
+  function regionLayoutWithSvg(id: string) {
+    const doc = studioState?.regions[id];
+    const layout = doc?.data.layout;
+    if (!layout || doc.data.renderEnabled === false) return undefined;
+    if (layout.svg) return layout;
+    const svg = layoutSvgs[id]?.svg;
+    return svg ? { ...layout, svg } : undefined;
+  }
   function applyRegionDoc(doc: WorkflowDoc<RegionData>) {
     if (!studioState) return;
     const regions = mergeRegionDoc(studioState.regions, doc);
@@ -1708,15 +1794,14 @@
     const lineId = doc.id.startsWith("region:") ? doc.id.slice(7) : "";
     const overflow = !!doc.data.layout?.overflow;
     const missing = doc.data.layout?.missingGlyphs ?? [];
-    studioState.regions = regions;
-    studioState.issues = (studioState.issues ?? []).flatMap((issue) => {
+    patchState({ regions, issues: (studioState.issues ?? []).flatMap((issue) => {
       if (issue.lineId !== lineId) return [issue];
       if (issue.code === "stale" || issue.code === "layout") return [];
       if (issue.code === "geometry") return doc.data.geometryApproved ? [] : [issue];
       if (issue.code === "overflow") return overflow ? [issue] : [];
       if (issue.code === "glyphs") return missing.length ? [issue] : [];
       return [issue];
-    });
+    }) });
   }
   async function act(body: Record<string, unknown>) {
     error = "";
@@ -1821,15 +1906,15 @@
     // `refit` is a request to the server, not a field of the line.
     const { refit: _refit, ...fields } = patch;
     if (studioState)
-      studioState.lines = studioState.lines.map((l) =>
+      patchState({ lines: studioState.lines.map((l) =>
         l.id === line.id ? { ...l, ...fields } : l,
-      );
+      ) });
     if (studioState && patch.status === "approved")
-      studioState.suggestions = studioState.suggestions.map((s) =>
+      patchState({ suggestions: studioState.suggestions.map((s) =>
         s.line_id === line.id && s.state === "pending"
           ? { ...s, state: "rejected" }
           : s,
-      );
+      ) });
   }
   /**
    * Text dropped on a region (from a proofreader reply, or anywhere) replaces its source or its
@@ -2197,6 +2282,7 @@
         "erase",
         "bubble-fill",
         "rect-fill",
+        "sample-pattern",
         "clone-stamp",
         "blur",
         "restore",
@@ -2205,10 +2291,12 @@
         "polygon",
         "rectangle",
         "oval",
+        "censor",
       ].includes(tool)
     )
       return;
     e.preventDefault();
+    if (tool === "censor" && (!canEdit || (step !== "Translate" && step !== "Review"))) return;
     if (tool === "bubble-fill" || tool === "mask-grow") {
       if (!canClean) return;
       void clickCleanTool(coords(e));
@@ -2265,7 +2353,7 @@
       void clickTextMaskWand(coords(e), (tool === "erase") !== e.altKey);
       return;
     }
-    if (["region", "read-area", "detect-area", "place-line", "polygon", "rectangle", "oval"].includes(tool)) regionVisibility = "shown";
+    if (["region", "read-area", "detect-area", "place-line", "polygon", "rectangle", "oval", "censor"].includes(tool)) regionVisibility = "shown";
     if ((tool === "rectangle" || tool === "oval") && (!selected || regionDoc?.data.locked)) {
       notify(regionDoc?.data.locked
         ? "Unlock this layout before changing its shape."
@@ -2660,6 +2748,24 @@
     }
     if (tool === "rectangle" || tool === "oval") {
       await saveDrawnShape(tool, d.start, d.end);
+      return;
+    }
+    if (tool === "censor") {
+      const x = Math.min(d.start.x, d.end.x), y = Math.min(d.start.y, d.end.y),
+        w = Math.abs(d.start.x - d.end.x), h = Math.abs(d.start.y - d.end.y);
+      if (w * page.width < 3 || h * page.height < 3) return;
+      await saveCensors(page.id, [...pageCensorRects, { id: crypto.randomUUID(), x, y, w, h }],
+        "Censor box added. Proofreaders see it as solid black; exports include it only when Censor is ticked.");
+      return;
+    }
+    if (tool === "sample-pattern") {
+      const x = Math.min(d.start.x, d.end.x), y = Math.min(d.start.y, d.end.y),
+        w = Math.abs(d.start.x - d.end.x), h = Math.abs(d.start.y - d.end.y);
+      if (w * page.width < 6 || h * page.height < 6) {
+        notify("Drag over a patch of screentone a few repeats wide.");
+        return;
+      }
+      await samplePatternFrom(page, [x, y, w, h]);
       return;
     }
     if (tool === "rect-fill") {
@@ -3323,6 +3429,42 @@
   }
   /** A region style save asked for while another request ran: it runs when that one ends. */
   let styleQueued = false;
+  /**
+   * Adds the screentone under `box` to the pattern library: the tile that repeats seamlessly,
+   * or (after asking) the whole crop when none does. A selected region takes it as its
+   * Pattern Overlay at 100%, the size the tone has on the page.
+   */
+  async function samplePatternFrom(target: ImageRow, box: [number, number, number, number]) {
+    if (!canClean) return;
+    let result;
+    try {
+      result = await request(`${apiBase}/pattern-sample`, { imageId: target.id, box });
+      if (!result.tileable && !result.pattern) {
+        const keep = window.confirm(
+          `No seamless tile was found in this ${result.width} × ${result.height} px area: ${result.reason}.\n\n` +
+            "Use the whole selection as the pattern? Its edges may show where it repeats.",
+        );
+        if (!keep) return;
+        result = await request(`${apiBase}/pattern-sample`, { imageId: target.id, box, whole: true });
+      }
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setPatterns(result.patterns);
+    const pattern = result.pattern as import("$lib/workflow").PatternAsset;
+    const label = `${pattern.name}${result.duplicate ? " (already in the library)" : ""}`;
+    tool = "select";
+    if (selected && regionDoc && !regionDoc.data.locked && step === "Typeset") {
+      const current = regionStyle.effects?.patternOverlay;
+      regionStyle.effects = {
+        ...regionStyle.effects,
+        patternOverlay: { ...EFFECT_DEFAULTS.patternOverlay, ...current, enabled: true, patternId: pattern.id, scale: 100 },
+      };
+      await applyStyle();
+      notify(`Sampled ${label} and set it as this region's pattern overlay.`);
+    } else notify(`Sampled ${label} into the pattern library.`);
+  }
   async function applyStyle(scope = "region") {
     if (scope === "region" && busy && selected && canClean && !regionDoc?.data.locked) {
       styleQueued = true;
@@ -3906,9 +4048,9 @@
   function applyPageOrder(ordered: LineRow[]) {
     if (!studioState) return;
     const rank = new Map(ordered.map((line, i) => [line.id, i + 1]));
-    studioState.lines = studioState.lines.map((line) =>
+    patchState({ lines: studioState.lines.map((line) =>
       rank.has(line.id) ? { ...line, sortOrder: rank.get(line.id)! } : line,
-    );
+    ) });
   }
   async function reorderRegions(afterId: string | null, movedId: string) {
     if (!canEdit || busy || !page) return false;
@@ -4937,6 +5079,8 @@
                 bind:exportFormat
                 bind:quality
                 bind:includeExportMetadata
+                bind:censorExport
+                {censoredPageCount}
                 bind:draftExport
                 bind:previewCopied
                 {previewUrl}
@@ -4954,7 +5098,7 @@
                 onkeeplayouts={keepCurrentLayouts}
                 onmarkall={markChapterSteps}
                 onapproveeverything={approveChapterEverything}
-                onexport={() => act({ action: "export", format: exportFormat, draft: draftExport, quality, includeMetadata: includeExportMetadata })}
+                onexport={() => act({ action: "export", format: exportFormat, draft: draftExport, quality, includeMetadata: includeExportMetadata, censored: censorExport })}
                 onpreviewshare={previewShare}
                 onissue={(issue) => {
                   if (issue.imageId) choosePage(issue.imageId);
@@ -5049,6 +5193,9 @@
               {/if}
             {:else}
             <WorkflowCanvas
+              censorRects={step === "Translate" || step === "Review" ? pageCensorRects : []}
+              censorEditable={tool === "censor" && canEdit && !busy}
+              oncensordelete={deleteCensor}
               maskWand={textMaskWand}
               graphicAsset={h=>pageDoc?.data.placedAssets?.some(g=>g.hash===h)?asset(h):`/api/series/${series.id}/clean-assets?hash=${h}`}
               placedAssets={pageAssets}
@@ -5104,7 +5251,7 @@
               bind:canvasScrollEl
               {selectedPolygon}
               scrollAction={canvasScroll}
-              regionLayout={(id: string) => studioState?.regions[id]?.data.renderEnabled===false?undefined:livePaint(id, studioState?.regions[id]?.data.layout)}
+              regionLayout={(id: string) => livePaint(id, regionLayoutWithSvg(id))}
               regionTextMask={(id: string) => studioState?.regions[id]?.data.textMask}
               {overlayStyle}
               {adjustedBounds}
@@ -5403,9 +5550,9 @@
               )}
             oncommentinput={(comment, body) => {
               saves.queue(`comment:${comment.id}`, { body }, comment.revision ?? 0);
-              studioState!.comments = studioState!.comments.map((c) =>
+              patchState({ comments: studioState!.comments.map((c) =>
                 c.id === comment.id ? { ...c, body } : c,
-              );
+              ) });
             }}
             ondeletecomment={async (id) => {
               try {
@@ -5508,6 +5655,7 @@
             onconfirmrender={() => selected && regionDoc && act({action:"region",id:selected.id,expectedRevision:regionDoc.revision,data:{renderReviewConfirmed:true}})}
             onlock={() => selected && regionDoc && act({ action: "region", id: selected.id, expectedRevision: regionDoc.revision, data: { locked: !regionDoc.data.locked } })}
             onrectangle={() => void rectanglePolygon()}
+            onsamplepattern={() => choosePalette("sample-pattern")}
             onfitbubble={fitSelectedBubble}
             canSegmentBubble={!!backend?.models?.some((m: { id: string; tasks: string[] }) => m.tasks.includes("segmentBubble"))}
             onrefinebubble={() => selected && page && act({

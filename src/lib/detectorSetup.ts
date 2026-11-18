@@ -1,14 +1,15 @@
 import { DETECTORS, type Detector } from './types';
+import { canonicalModelId } from './samTsL';
 
 /**
  * What chapter transcription runs to find lettering: one box detector, plus
- * optional add-ons. COO finds sound effects outside bubbles; Koharu grows or
- * adds boxes for lettering the box detector missed. The id (`ctd+koharu`) is
+ * optional add-ons. COO finds sound effects outside bubbles; SAM-TS-L grows or
+ * adds boxes for lettering the box detector missed. The id (`ctd+sam-ts-l`) is
  * the same one the benchmark scores.
  */
-export type DetectorSetupConfig = { base: Detector; coo: boolean; koharu: boolean };
+export type DetectorSetupConfig = { base: Detector; coo: boolean; samTsL: boolean };
 
-export type DetectorAddOn = 'coo' | 'koharu';
+export type DetectorAddOn = 'coo' | 'sam-ts-l';
 
 export const DEFAULT_DETECT_CONF = 0.2;
 
@@ -21,8 +22,11 @@ export const DETECTOR_BASE_LABELS: Record<Detector, string> = {
 
 export const DETECTOR_ADDON_LABELS: Record<DetectorAddOn, string> = {
 	coo: 'COO',
-	koharu: 'Koharu',
+	'sam-ts-l': 'SAM-TS-L',
 };
+
+/** The setup field that switches each add-on. */
+export const DETECTOR_ADDON_KEYS = { coo: 'coo', 'sam-ts-l': 'samTsL' } as const satisfies Record<DetectorAddOn, keyof DetectorSetupConfig>;
 
 /** The geometric fallback finds bubble outlines only; add-ons have nothing to extend. */
 export function acceptsAddOns(base: Detector): boolean {
@@ -31,23 +35,24 @@ export function acceptsAddOns(base: Detector): boolean {
 
 export function detectorSetupId(setup: DetectorSetupConfig): string {
 	if (!acceptsAddOns(setup.base)) return setup.base;
-	return [setup.base, ...(setup.coo ? ['coo'] : []), ...(setup.koharu ? ['koharu'] : [])].join('+');
+	return [setup.base, ...(setup.coo ? ['coo'] : []), ...(setup.samTsL ? ['sam-ts-l'] : [])].join('+');
 }
 
 export function parseDetectorSetup(value: unknown): DetectorSetupConfig | undefined {
-	const parts = String(value ?? '').trim().toLowerCase().split('+').filter(Boolean);
+	// Setups saved before the rename spell the SAM-TS-L add-on `koharu`.
+	const parts = String(value ?? '').trim().toLowerCase().split('+').filter(Boolean).map((part, i) => (i ? canonicalModelId(part) : part));
 	const [base, ...rest] = parts;
 	if (!base || !/^[a-z0-9][a-z0-9._-]*$/.test(base)) return undefined;
-	if (new Set(rest).size !== rest.length || rest.some((part) => part !== 'coo' && part !== 'koharu')) return undefined;
+	if (new Set(rest).size !== rest.length || rest.some((part) => part !== 'coo' && part !== 'sam-ts-l')) return undefined;
 	if (rest.length && !acceptsAddOns(base as Detector)) return undefined;
-	return { base: base as Detector, coo: rest.includes('coo'), koharu: rest.includes('koharu') };
+	return { base: base as Detector, coo: rest.includes('coo'), samTsL: rest.includes('sam-ts-l') };
 }
 
 export function detectorSetupLabel(setup: DetectorSetupConfig): string {
 	return [
 		DETECTOR_BASE_LABELS[setup.base] || setup.base,
 		...(setup.coo ? [DETECTOR_ADDON_LABELS.coo] : []),
-		...(setup.koharu ? [DETECTOR_ADDON_LABELS.koharu] : []),
+		...(setup.samTsL ? [DETECTOR_ADDON_LABELS['sam-ts-l']] : []),
 	].join(' + ');
 }
 
@@ -56,12 +61,12 @@ export function allDetectorSetups(): DetectorSetupConfig[] {
 	return DETECTORS.flatMap((base) =>
 		acceptsAddOns(base)
 			? [
-					{ base, coo: true, koharu: true },
-					{ base, coo: false, koharu: true },
-					{ base, coo: true, koharu: false },
-					{ base, coo: false, koharu: false },
+					{ base, coo: true, samTsL: true },
+					{ base, coo: false, samTsL: true },
+					{ base, coo: true, samTsL: false },
+					{ base, coo: false, samTsL: false },
 				]
-			: [{ base, coo: false, koharu: false }],
+			: [{ base, coo: false, samTsL: false }],
 	);
 }
 

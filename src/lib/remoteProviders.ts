@@ -236,6 +236,15 @@ export const REMOTE_PROVIDERS: RemoteProvider[] = [
 		notes: 'Same compatible-mode API as the mainland endpoint, for keys issued on the international console.',
 	},
 	{
+		id: 'qwen-cloud',
+		name: 'Qwen Cloud Token Plan',
+		group: 'china',
+		baseUrl: 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1',
+		apiKeyEnv: 'QWEN_CLOUD_API_KEY',
+		models: ['qwen3.8-max', 'qwen-vl-max'],
+		notes: 'Qwen Cloud Token Plan endpoint in DashScope compatible-mode; use the key issued with the token plan, not a pay-as-you-go DashScope key.',
+	},
+	{
 		id: 'minimax',
 		name: 'MiniMax',
 		group: 'china',

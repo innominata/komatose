@@ -106,10 +106,51 @@ try {
   expect(layer?.effects?.patternOverlay?.pattern?.id).toBe(uuid);
   expect(layer?.effects?.patternOverlay?.blendMode).toBe('multiply');
 
+  // Sample from page: an even patch (the flat sky) tiles at once and becomes the region's pattern.
+  const canvas = page.getByRole('application', { name: 'Page regions and cleaning mask' });
+  const area = await canvas.boundingBox();
+  if (!area) throw new Error('page canvas is not visible');
+  async function drag(x0, y0, x1, y1) {
+    await page.mouse.move(area.x + area.width * x0, area.y + area.height * y0);
+    await page.mouse.down();
+    await page.mouse.move(area.x + area.width * x1, area.y + area.height * y1, { steps: 6 });
+    await page.mouse.up();
+  }
+  const libraryNow = async () => (await (await context.request.get(`${base}/settings/patterns`)).json()).patterns;
+  await page.locator('[data-find="sample-pattern"]').click();
+  await expect(page.getByRole('region', { name: 'Tool options' })).toContainText('Sample pattern');
+  await drag(0.40, 0.11, 0.50, 0.18);
+  await expect.poll(async () => (await libraryNow()).length).toBe(2);
+  const sampled = (await libraryNow()).at(-1);
+  expect(sampled.name).toMatch(/^Page 1 tone 16×16$/);
+  await expect.poll(async () => (await state()).regions[id].data.style?.effects?.patternOverlay?.patternId).toBe(sampled.id);
+  expect((await state()).regions[id].data.style.effects.patternOverlay.scale).toBe(100);
+  await expect(page.getByRole('option', { name: sampled.name })).toHaveAttribute('aria-selected', 'true');
+
+  // Artwork with no repeat warns, and keeps the whole crop only once accepted.
+  await page.locator('[data-find="tool-sample-pattern"]').click();
+  let warning = '';
+  page.once('dialog', (d) => { warning = d.message(); void d.dismiss(); });
+  await drag(0.575, 0.255, 0.75, 0.40);
+  await expect.poll(() => warning).toContain('No seamless tile');
+  expect((await libraryNow()).length).toBe(2);
+  await page.locator('[data-find="tool-sample-pattern"]').click();
+  page.once('dialog', (d) => void d.accept());
+  await drag(0.575, 0.255, 0.75, 0.40);
+  await expect.poll(async () => (await libraryNow()).length).toBe(3);
+  const whole = (await libraryNow()).at(-1);
+  expect(whole.name).toMatch(/^Page 1 crop \d+×\d+$/);
+  expect(whole.width).toBeGreaterThan(100);
+  await expect.poll(async () => (await state()).regions[id].data.style?.effects?.patternOverlay?.patternId).toBe(whole.id);
+  await page.screenshot({ path: `${shots}/pattern-sample.png` });
+
   // Removing a pattern in use asks first, then clears it from the style.
-  const refused = await context.request.delete(`${base}/settings/patterns/${patternId}`);
+  const refused = await context.request.delete(`${base}/settings/patterns/${whole.id}`);
   expect(refused.status()).toBe(409);
-  expect((await context.request.delete(`${base}/settings/patterns/${patternId}?force=1`)).ok()).toBeTruthy();
+  expect((await context.request.delete(`${base}/settings/patterns/${whole.id}?force=1`)).ok()).toBeTruthy();
+  // Ones no style uses go at once.
+  for (const unused of [patternId, sampled.id])
+    expect((await context.request.delete(`${base}/settings/patterns/${unused}`)).ok()).toBeTruthy();
   expect((await state()).regions[id].data.style?.effects?.patternOverlay?.patternId).toBe('');
   expect(errors).toEqual([]);
   console.log('pattern overlay browser checks passed');

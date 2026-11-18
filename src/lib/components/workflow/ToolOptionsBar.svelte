@@ -68,6 +68,8 @@
     raw: { icon: "bi-image", label: "Paint raw", hint: "Paint the uncleaned prepared pixels back onto the working page." },
     polygon: { icon: "bi-pentagon", label: "Draw polygon", hint: "Click to add points. Shift-click a point to remove it. Enter saves." },
     "style-brush": { icon: "bi-brush-fill", label: "Style brush", hint: "Click other regions to apply the copied style. Esc stops." },
+    censor: { icon: "bi-eye-slash-fill", label: "Censor box", hint: "Drag a box over content proofreader models refuse. It is painted solid black on the raw and typeset images they receive, and in exports with Censor ticked. Click × on a box to remove it." },
+    "sample-pattern": { icon: "bi-eyedropper", label: "Sample pattern", hint: "Drag over an even patch of screentone, a few repeats wide. The repeating tile is cut out and added to the pattern library; a selected region uses it as its Pattern Overlay." },
   };
   const WAND_INFO: Record<string, { icon: string; label: string; hint: string }> = {
     brush: { icon: "bi-magic", label: "Mask wand", hint: "Click a colour to mask the connected area of similar colour around it. Alt-click to unmask." },
@@ -84,6 +86,8 @@
       tool === "split" ||
       tool === "add-break" ||
       tool === "rect-fill" ||
+      tool === "sample-pattern" ||
+      tool === "censor" ||
       tool === "reorder" ||
       tool === "style-brush" ||
       tool === 'assign-character' ||

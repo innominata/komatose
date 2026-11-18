@@ -1,7 +1,7 @@
 import type { Layer, Psd } from "ag-psd";
 import sharp, { type OverlayOptions } from "sharp";
 import type { Episode, ImageRow, LineRow, Series } from "../types";
-import { pageArtwork, type PageData, type Point, type RegionData, type TextPath, type TextStyle } from "../workflow";
+import { MAX_LEADING, MIN_LEADING, pageArtwork, type PageData, type Point, type RegionData, type TextPath, type TextStyle } from "../workflow";
 import type { EValue } from "./engineData";
 import { createImportedRegions, deleteImportedRegions, layerPath, layerToRegion, psdTxt2, type NewRegion } from "./psdRegions";
 import { effectiveDpi, preferences } from "./workflowService";
@@ -264,7 +264,12 @@ function regionChange(
   const rows = layout.rows;
   const exportedLeading = rows.length > 1 ? (rows[1].baseline - rows[0].baseline) * units : layout.size * was.leading;
   if (!path && style.leading && !style.autoLeading && Math.abs(style.leading * scale - exportedLeading) > 0.05) {
-    change.style.leading = Math.round(((style.leading * scale) / size) * 100) / 100;
+    // Photoshop leading is a baseline gap in points. Below the leading-1 gap it maps
+    // to a multiplier under 1, which scales that gap (see lineSpacing).
+    const gap = style.leading * scale;
+    const at1 = layout.lineHeightAt1 ? layout.lineHeightAt1 * units * (size / layout.size) : undefined;
+    const leading = at1 && gap < at1 ? gap / at1 : gap / size;
+    change.style.leading = Math.round(Math.min(MAX_LEADING, Math.max(MIN_LEADING, leading)) * 100) / 100;
     describe.push(`leading ${change.style.leading}`);
   }
   const align = text.paragraphStyle?.justification;

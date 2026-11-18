@@ -134,15 +134,15 @@ class WholePageMask(unittest.TestCase):
         self.assertEqual(meta['engine'], 'ctd')
         self.assertEqual(diagnostics[0]['pixels'], np.count_nonzero(mask))
 
-    def test_koharu_mask_needs_no_regions_and_preserves_empty_pages(self):
+    def test_sam_ts_l_mask_needs_no_regions_and_preserves_empty_pages(self):
         image = np.full((80, 100, 3), 255, np.uint8)
         raw = np.zeros((80, 100), np.uint8)
         module = types.SimpleNamespace(installed=lambda: True, predict=lambda image, device: raw,
             VERSION='fixture', REPO='fixture', REVISION='fixture', runtime_backend=lambda device: 'CPU')
-        with patch.dict(sys.modules, {'koharu_mask': module}):
-            mask, diagnostics, meta = lettering.propose_page(image, 0, engine='koharu')
+        with patch.dict(sys.modules, {'sam_ts_l_mask': module}):
+            mask, diagnostics, meta = lettering.propose_page(image, 0, engine='sam-ts-l')
         self.assertFalse(mask.any())
         self.assertEqual(diagnostics[0]['reasons'], [])
-        self.assertEqual(meta['engine'], 'koharu')
+        self.assertEqual(meta['engine'], 'sam-ts-l')
 
 if __name__=='__main__': unittest.main()

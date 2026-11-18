@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "id": "koharu",
-  "name": "Koharu",
+  "id": "sam-ts-l",
+  "name": "SAM-TS-L",
   "revision": "1",
   "access": "local_http",
   "adapter": {
     "id": "workflow-image"
   },
   "config": {
-    "backend": "koharu"
+    "backend": "sam-ts-l"
   },
   "service": {
     "id": "cleaning-worker",
@@ -17,7 +17,7 @@
   "setup": {
     "executable": "{root}/.venv-workflow/bin/python",
     "args": [
-      "{root}/scripts/install-koharu.py"
+      "{root}/scripts/install-sam-ts-l.py"
     ],
     "executableEnv": "SCAN_WORKFLOW_PYTHON"
   },

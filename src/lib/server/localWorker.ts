@@ -6,6 +6,7 @@ import { hipVisibleDevices, hipWorkerEnv, komatoseGpuEnabled } from "./gpuMode";
 import { devicePref, hardwareSnapshot, resolveDevice, torchDeviceEnv } from "./computeDevices";
 import { isAutoChoice, shownDevice, type ResolvedDevice } from "../computeDevices";
 import { ROOT } from "./paths";
+import { canonicalModelId } from "../samTsL";
 
 export type BackendInfo = {
   devices: {
@@ -19,7 +20,7 @@ export type BackendInfo = {
   sam: boolean;
   lama: boolean;
   lamaDevice?: string | null;
-  koharu: boolean;
+  samTsL: boolean;
   cpu: boolean;
 };
 const queues = new Map<string, Promise<unknown>>();
@@ -51,7 +52,7 @@ const global = globalThis as typeof globalThis & { __scanWorkflowWorker?: Persis
 /** Device-preference key for the cleaning, masking and inpainting worker. */
 export const WORKFLOW_DEVICE_KEY = "cleaning-worker";
 
-/** Where Koharu, SAM, LaMa Manga and AOT run; Komatose GPU mode keeps its pinned card as Auto. */
+/** Where SAM-TS-L, SAM, LaMa Manga and AOT run; Komatose GPU mode keeps its pinned card as Auto. */
 export function workflowResolved(): ResolvedDevice {
   return resolveDevice("torch", devicePref(WORKFLOW_DEVICE_KEY), 2048, {
     env: "env-workflow",
@@ -279,7 +280,7 @@ async function rawProbe(): Promise<BackendInfo> {
       cpu: false,
       sam: false,
       lama: false,
-      koharu: false,
+      samTsL: false,
       errors: [String(e)],
     };
   }
@@ -347,7 +348,8 @@ export async function rawLocalOperation(
   payload: Record<string, unknown>,
   signal?: AbortSignal,
 ) {
-  const mightUseKoharu =
+  if (typeof payload.maskEngine === "string") payload = { ...payload, maskEngine: canonicalModelId(payload.maskEngine) };
+  const mightUseSamTsL =
     payload.cmd === "detect-text" ||
     (payload.cmd === "mask" &&
       !!payload.detect &&
@@ -363,14 +365,14 @@ export async function rawLocalOperation(
     payload.method === "aot" ||
     (payload.method === "auto" && (komatoseGpuEnabled() || workflowResolved().kind === "gpu"));
   const info =
-    requestedDevice !== "cpu" && (mightUseKoharu || cleanGpu || nativeDetect)
+    requestedDevice !== "cpu" && (mightUseSamTsL || cleanGpu || nativeDetect)
       ? await probeBackend()
       : null;
   const maskDetect =
-    mightUseKoharu &&
+    mightUseSamTsL &&
     (payload.cmd === "detect-text" ||
-      payload.maskEngine === "koharu" ||
-      ((payload.maskEngine === "auto" || !payload.maskEngine) && !!info?.koharu));
+      payload.maskEngine === "sam-ts-l" ||
+      ((payload.maskEngine === "auto" || !payload.maskEngine) && !!info?.samTsL));
   const gpuEligible = maskDetect || cleanGpu;
   const devices =
     eligibleCleaningDevices(info, payload.method)
@@ -395,6 +397,8 @@ export async function rawLocalOperation(
 
 /** Model-backed operations are gated and dispatched just like language tasks. */
 export async function localOperation(payload: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, any>> {
+ // A mask engine saved before the rename names SAM-TS-L `koharu`.
+ if (typeof payload.maskEngine === 'string') payload = { ...payload, maskEngine: canonicalModelId(payload.maskEngine) };
  const { imageWorkflowModel } = await import('./modelImageWorkflow');
  const { executeModelTask } = await import('./modelTaskRunner');
  const { readFile, writeFile } = await import('node:fs/promises');
@@ -402,7 +406,7 @@ export async function localOperation(payload: Record<string, unknown>, signal?: 
  let task: import('../modelTasks').ModelTaskId | undefined;
  let id = String(payload.method || '');
  if (payload.cmd === 'detect-sfx') { task = 'detect'; id = 'coo'; }
- if (payload.cmd === 'detect-text') { task = 'detect'; id = 'koharu'; }
+ if (payload.cmd === 'detect-text') { task = 'detect'; id = 'sam-ts-l'; }
  if (payload.cmd === 'mask' && payload.detect) {
   task = 'textMask'; id = payload.maskEngine && payload.maskEngine !== 'auto' ? String(payload.maskEngine) : requireDefault('textMask');
  }

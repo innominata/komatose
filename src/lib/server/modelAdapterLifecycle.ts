@@ -19,7 +19,8 @@ export function nativeInstallationStatus(id: string): { installed: boolean; deta
   } catch { return { installed: false, detail: 'Install this model package to verify its weights' }; }
 }
 
-export async function builtinPackageReadiness(pkg: DiscoveredPackage): Promise<{ available: boolean; reason?: string }> {
+/** `probe: false` reports a remote model from its configuration instead of contacting its service. */
+export async function builtinPackageReadiness(pkg: DiscoveredPackage, opts: { probe?: boolean } = {}): Promise<{ available: boolean; reason?: string }> {
   const row = findRegistryRow(pkg.manifest.id);
   if (!row) return { available: false, reason: 'Model configuration missing' };
   const adapter = pkg.manifest.adapter.id;
@@ -56,7 +57,11 @@ export async function builtinPackageReadiness(pkg: DiscoveredPackage): Promise<{
     const status = await proofreaderStatus(row.id);
     return { available: status.ready, reason: status.reason };
   }
-  const { probeModelConnection } = await import('./modelConnection');
+  const { probeModelConnection, modelConnectionConfigured } = await import('./modelConnection');
+  if (opts.probe === false) {
+    const { available, reason } = modelConnectionConfigured(row);
+    return { available, reason };
+  }
   return probeModelConnection(row);
 }
 

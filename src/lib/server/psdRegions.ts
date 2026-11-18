@@ -2,7 +2,7 @@ import type { Layer, Psd } from "ag-psd";
 import sharp, { type OverlayOptions } from "sharp";
 import type { Episode, ImageRow, Series } from "../types";
 import { activeRegionKinds, normalizeRegionKinds } from "../regionCatalog";
-import type { CharRun, CharStyle, PageData, Point, Preferences, RegionData, TextPath, TextStyle } from "../workflow";
+import { MAX_LEADING, MIN_LEADING, type CharRun, type CharStyle, type PageData, type Point, type Preferences, type RegionData, type TextPath, type TextStyle } from "../workflow";
 import { normalizeCharRuns } from "../charStyles";
 import { effectsFromPsd } from "../textEffects";
 import { sqlite } from "./db";
@@ -127,7 +127,9 @@ export function layerToRegion(
     out.autoContrast = false;
   }
   out.emphasis = style.fauxBold ? "bold" : style.fauxItalic ? "italic" : "normal";
-  if (style.leading && !style.autoLeading && fontSize) out.leading = Math.min(3, Math.max(1, Math.round((style.leading / fontSize) * 100) / 100));
+  // No fitted layout yet, so the font's glyph height is unknown: leading under the
+  // font size reads as that ratio, which can fit a little looser than the PSD.
+  if (style.leading && !style.autoLeading && fontSize) out.leading = Math.min(MAX_LEADING, Math.max(MIN_LEADING, Math.round((style.leading / fontSize) * 100) / 100));
   if (style.tracking) out.tracking = style.tracking;
   const align = text.paragraphStyle?.justification;
   if (align === "left" || align === "center" || align === "right") out.align = align;

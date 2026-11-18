@@ -17,6 +17,6 @@ test("find-an-action matches each word, including old names", () => {
   const marked = searchStudioActions("clear history");
   assert.ok(marked.some((action) => action.label.includes("Mark page complete")));
   assert.equal(searchStudioActions("zzzz-no-such-action").length, 0);
-  const detector = searchStudioActions("koharu detector");
+  const detector = searchStudioActions("sam-ts-l detector");
   assert.ok(detector.some((action) => action.go.settings === "detection"));
 });

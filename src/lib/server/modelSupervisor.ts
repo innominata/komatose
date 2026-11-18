@@ -8,6 +8,9 @@ import type { AdapterRequest, PackageCommand } from '../modelPackage';
 import { ModelTaskError, TASK_CONTRACT_VERSION, type ModelTaskId } from '../modelTasks';
 import { devicePref } from './computeDevices';
 import { modelPackage, modelPackageError, type DiscoveredPackage } from './modelPackages';
+import { aiParallelRequests } from './aiParallel';
+import { translationModel } from '../translationModels';
+import { translationSlots } from './translationRuntime';
 
 type ServiceState = { state: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'; active: number; error?: string };
 const services = new Map<string, ServiceState>();
@@ -49,6 +52,8 @@ type Waiter = { weight: number; grant: () => void; reject: (error: unknown) => v
 type Lane = { capacity: number; used: number; waiting: Waiter[] };
 const lanes = new Map<string, Lane>();
 function drain(lane: Lane) {
+  // A whole-lane request waits for whatever the lane holds now, even if the setting shrank it.
+  for (const waiter of lane.waiting) waiter.weight = Math.min(waiter.weight, lane.capacity);
   while (lane.waiting.length && lane.used + lane.waiting[0].weight <= lane.capacity) {
     const waiter = lane.waiting.shift()!;
     waiter.signal?.removeEventListener('abort', waiter.abort);
@@ -56,18 +61,39 @@ function drain(lane: Lane) {
     waiter.grant();
   }
 }
+/**
+ * Requests a package's service takes at once. A manifest's own `service.concurrency` wins.
+ * Chat endpoints (local llama.cpp, llama-swap, remote APIs) and built-in translators take the
+ * Parallel AI requests setting, since their servers batch requests; everything else (CLI tools,
+ * browser proofreaders, OCR workers, image models) stays one at a time.
+ */
+function laneCapacity(pkg: DiscoveredPackage) {
+  const fixed = pkg.manifest.service?.concurrency;
+  if (fixed) return fixed;
+  const adapter = pkg.manifest.adapter.id;
+  if (adapter === 'openai') return aiParallelRequests();
+  if (adapter === 'native-translator') {
+    const model = translationModel(pkg.manifest.model || pkg.manifest.id);
+    return model ? translationSlots(model) : 1;
+  }
+  return 1;
+}
+
 async function serviceSlot<T>(pkg: DiscoveredPackage, all: boolean, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
   const id = serviceIdentity(pkg);
   let lane = lanes.get(id);
   if (!lane) {
-    lane = { capacity: pkg.manifest.service?.concurrency || 1, used: 0, waiting: [] };
+    lane = { capacity: 1, used: 0, waiting: [] };
     lanes.set(id, lane);
   }
+  // Read each time, so a changed setting applies to the next request without a restart.
+  lane.capacity = laneCapacity(pkg);
   const current = lane;
   const weight = all ? current.capacity : 1;
+  let held!: Waiter;
   await new Promise<void>((grant, reject) => {
-    const waiter: Waiter = { weight, grant, reject, signal, abort: () => {
+    const waiter: Waiter = held = { weight, grant, reject, signal, abort: () => {
       const index = current.waiting.indexOf(waiter);
       if (index >= 0) current.waiting.splice(index, 1);
       reject(signal?.reason);
@@ -78,7 +104,7 @@ async function serviceSlot<T>(pkg: DiscoveredPackage, all: boolean, run: () => P
     drain(current);
   });
   try { signal?.throwIfAborted(); return await run(); }
-  finally { current.used -= weight; drain(current); }
+  finally { current.used -= held.weight; drain(current); }
 }
 async function serviceLock<T>(pkg: DiscoveredPackage, all: boolean, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const resource = pkg.manifest.service?.resource || (pkg.manifest.service?.device ? `device:${pkg.manifest.service.device}` : undefined);

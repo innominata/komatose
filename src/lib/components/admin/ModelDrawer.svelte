@@ -52,7 +52,7 @@
 		const editor = IMAGE_EDIT_MODELS.find((model) => model.id === entry.id);
 		if (editor)
 			return { runtime: 'llama', env: 'env-review', key: imageEditWeightHost(editor.id), label: 'Device' };
-		if (['rtdetr', 'ctd', 'koharu', 'coo', 'aot', 'lama-manga'].includes(entry.id))
+		if (['rtdetr', 'ctd', 'sam-ts-l', 'coo', 'aot', 'lama-manga'].includes(entry.id))
 			return { runtime: 'torch', env: 'env-workflow', key: 'cleaning-worker', label: 'Cleaning worker GPU' };
 		return null;
 	});

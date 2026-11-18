@@ -26,7 +26,14 @@ export const GET: RequestHandler = async ({ locals }) => {
 			granted === null ? list : list.filter((item) => !isProofreaderId(item.id) || granted.has(item.id));
 		// Readiness syncs proofreader rows from the service before the picker reads them.
 		const allHosts = await engineReadiness();
-		const allRows = await registryPickerRows(user.role);
+		// Listing models must not contact each remote service: that took seconds
+		// per request. Proofreader readiness reuses the one service call above.
+		const proofreaders = new Map(
+			allHosts
+				.filter((host) => 'access' in host && host.access === 'proofreader')
+				.map((host) => [host.id, { available: host.available, reason: host.reason }] as const),
+		);
+		const allRows = await registryPickerRows(user.role, undefined, { probe: false, proofreaders });
 		const hosts = allowed(allHosts);
 		const rows = allowed(allRows);
 		const registry = listRegistryRows();

@@ -9,6 +9,7 @@
 
 <script lang="ts">
   import PlacedAssetsCanvas from "./PlacedAssetsCanvas.svelte";
+  import type { CensorRect } from "$lib/censor";
   import {ASSET_DRAG_TYPE,type CleanAsset,type PlacedAsset} from "$lib/cleanAssets";
   import type { ImageRow, LineRow } from "$lib/types";
   import { missingRegionCopy, missingRegionCopyLabel } from "$lib/exceptions";
@@ -102,6 +103,9 @@
     adjustedBounds,
     graphicAsset,
     placedAssets = [],
+    censorRects = [],
+    censorEditable = false,
+    oncensordelete,
     selectedAssetId = "",
     editAssets = false,
     onassetselect = () => {},
@@ -192,6 +196,11 @@
     adjustedBounds: (d: StudioDrawing) => { x: number; y: number; w: number; h: number };
     graphicAsset?: (hash:string)=>string;
     placedAssets?: PlacedAsset[];
+    /** Censor boxes to show (Translate/Review), in page fractions. */
+    censorRects?: CensorRect[];
+    /** The Censor tool is active: each box gets a remove button. */
+    censorEditable?: boolean;
+    oncensordelete?: (id: string) => void;
     selectedAssetId?: string;
     editAssets?: boolean;
     onassetselect?: (id:string)=>void;
@@ -850,6 +859,67 @@
   /** Previews within about a screen and a half of the view; the rest are blank placeholders. */
   let nearIds = $state<Set<string>>(new Set());
   const holding = $derived(!!drawing || polygonDraft.length > 0 || !!cropDraft || !!pathDrag || pathDraft.length > 0);
+  /** The page element being edited, for placing the raw crop preview beside it. */
+  let mainPageEl = $state<HTMLElement>();
+  /** Where the Typeset raw crop preview sits, in the canvas container's coordinates. */
+  let rawPeek = $state<{ left: number; top: number; width: number; height: number; docked: boolean } | null>(null);
+  let rawPeekCollapsed = $state(false);
+  const rawPeekCrop = $derived.by(() => {
+    if (step !== "Typeset" || compare || !selected || !page || !rawPageImage) return null;
+    const pad = 0.04;
+    const w = selected.w ?? 0.2, h = selected.h ?? 0.1;
+    const px = Math.min(w, h) * pad + 0.004;
+    const x0 = Math.max(0, (selected.x ?? 0) - px), y0 = Math.max(0, (selected.y ?? 0) - px * (page.width / page.height));
+    const x1 = Math.min(1, (selected.x ?? 0) + w + px), y1 = Math.min(1, (selected.y ?? 0) + h + px * (page.width / page.height));
+    if (x1 <= x0 || y1 <= y0) return null;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, pw: (x1 - x0) * page.width, ph: (y1 - y0) * page.height };
+  });
+  function placeRawPeek() {
+    const crop = rawPeekCrop, scroller = canvasScrollEl, el = mainPageEl;
+    if (!crop || !scroller || !el) { rawPeek = null; return; }
+    const parent = scroller.offsetParent instanceof HTMLElement ? scroller.offsetParent : scroller.parentElement;
+    if (!parent) { rawPeek = null; return; }
+    const s = scroller.getBoundingClientRect(), r = el.getBoundingClientRect(), o = parent.getBoundingClientRect();
+    const viewRight = s.left + scroller.clientLeft + scroller.clientWidth;
+    // The tool rail floats over the canvas's left edge.
+    const rail = (scroller.closest(".canvas-and-panel") ?? parent).querySelector(".tool-rail");
+    const viewLeft = Math.max(s.left + scroller.clientLeft, rail ? rail.getBoundingClientRect().right : 0);
+    const viewTop = s.top + scroller.clientTop, viewBottom = viewTop + scroller.clientHeight;
+    const margin = 14, minWidth = 150, maxWidth = 420;
+    const leftGap = Math.max(0, r.left - viewLeft) - margin * 2;
+    const rightGap = Math.max(0, viewRight - r.right) - margin * 2;
+    const docked = Math.max(leftGap, rightGap) < minWidth;
+    const room = docked ? 240 : Math.min(maxWidth, Math.max(leftGap, rightGap));
+    const maxHeight = Math.max(80, Math.min(viewBottom - viewTop - margin * 2 - 30, docked ? 260 : 560));
+    const scale = Math.min(room / crop.pw, maxHeight / crop.ph, 4);
+    const width = Math.max(40, crop.pw * scale), height = Math.max(24, crop.ph * scale);
+    let left: number;
+    // Docked over the page: in the top corner away from the region, clear of the tool rail.
+    const regionMid = r.left + (crop.x + crop.w / 2) * r.width;
+    if (docked) left = regionMid > (viewLeft + viewRight) / 2 ? viewLeft + margin : viewRight - margin - width;
+    else if (rightGap >= leftGap) left = r.right + margin + (rightGap - width) / 2;
+    else left = viewLeft + margin + (leftGap - width) / 2;
+    // Level with the region on screen, kept inside the view.
+    const regionTop = r.top + crop.y * r.height + (crop.h * r.height - height) / 2;
+    const top = docked ? viewTop + margin : Math.min(Math.max(regionTop, viewTop + margin + 22), viewBottom - margin - height);
+    rawPeek = { left: left - o.left, top: top - o.top, width, height, docked };
+  }
+  let rawPeekFrame = 0;
+  function queueRawPeek() {
+    if (rawPeekFrame) return;
+    rawPeekFrame = requestAnimationFrame(() => { rawPeekFrame = 0; placeRawPeek(); });
+  }
+  $effect(() => {
+    void rawPeekCrop; void zoom; void mainPageEl;
+    const scroller = canvasScrollEl;
+    if (!rawPeekCrop || !scroller) { rawPeek = null; return; }
+    queueRawPeek();
+    const observer = new ResizeObserver(queueRawPeek);
+    observer.observe(scroller);
+    if (mainPageEl) observer.observe(mainPageEl);
+    scroller.addEventListener("scroll", queueRawPeek, { passive: true });
+    return () => { observer.disconnect(); scroller.removeEventListener("scroll", queueRawPeek); };
+  });
   let overscrollFor = "";
   const viewMode = $derived(continuous ? "strip" : gutter ? "page" : "");
   function activePageEl() {
@@ -1011,6 +1081,7 @@
     {/if}
     {#each stripBefore as sp (sp.page.id)}{@render stripPreview(sp)}{/each}
     <div
+      bind:this={mainPageEl}
       class="canvas-page"
       class:overscroll={gutter}
       data-page-id={continuous ? page.id : undefined}
@@ -1442,7 +1513,7 @@
                 page.height}
               r={tool === "polygon" && i === 0 ? 7 : 5}
               fill="#57b9ff"
-              pointer-events={["style-brush", "bubble-fill", "rect-fill", "mask-grow", "clone-stamp", "blur", "restore", "raw"].includes(tool) ? "none" : undefined}
+              pointer-events={["style-brush", "bubble-fill", "rect-fill", "sample-pattern", "mask-grow", "clone-stamp", "blur", "restore", "raw"].includes(tool) ? "none" : undefined}
               role="button"
               tabindex="0"
               aria-label={tool === "polygon" && i === 0
@@ -1587,7 +1658,19 @@
             <circle r={Math.max(6, page.width / 90)} />
             <text y={Math.max(6, page.width / 90) * 0.4} font-size={Math.max(8, page.width / 80)} text-anchor="middle">{i + 1}</text>
           </g>{/each}{/if}
-        {#if drawing && ["region", "read-area", "detect-area", "place-line", "rectangle", "rect-fill"].includes(tool)}<rect
+        {#each censorRects as c (c.id)}{@const cx = c.x * page.width}{@const cy = c.y * page.height}{@const cw = c.w * page.width}{@const ch = c.h * page.height}{@const btn = Math.max(10, 11 * regionLabelScale)}<g class="censor-box">
+          <rect x={cx} y={cy} width={cw} height={ch} fill="#000" fill-opacity="0.82" stroke="#e24c4c" stroke-width="1.5"
+            stroke-dasharray="6 4" vector-effect="non-scaling-stroke" pointer-events="none" />
+          {#if censorEditable && oncensordelete}<g class="censor-remove" role="button" tabindex="0" aria-label="Remove censor box"
+              transform={`translate(${Math.min(cx + cw, page.width - btn)} ${Math.max(cy, btn)})`}
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={(e) => { e.stopPropagation(); oncensordelete(c.id); }}
+              onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); oncensordelete(c.id); } }}>
+            <circle r={btn} fill="#e24c4c" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+            <path d={`M${-btn * 0.4},${-btn * 0.4} L${btn * 0.4},${btn * 0.4} M${btn * 0.4},${-btn * 0.4} L${-btn * 0.4},${btn * 0.4}`} stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke" />
+          </g>{/if}
+        </g>{/each}
+        {#if drawing && ["region", "read-area", "detect-area", "place-line", "rectangle", "rect-fill", "sample-pattern", "censor"].includes(tool)}<rect
             x={Math.min(drawing.start.x, drawing.end.x) *
               page.width}
             y={Math.min(drawing.start.y, drawing.end.y) *
@@ -1641,6 +1724,28 @@
       Add images in Prepare to begin.
     </p>{/if}
 </div>
+
+{#if rawPeek && rawPeekCrop}
+  {#if rawPeek.docked && rawPeekCollapsed}
+    <button type="button" class="raw-peek-tab" style={`left:${rawPeek.left + rawPeek.width - 64}px;top:${rawPeek.top}px`}
+      title="Show the raw crop of the selected region" onclick={() => (rawPeekCollapsed = false)}>
+      <i class="bi bi-image" aria-hidden="true"></i> Raw
+    </button>
+  {:else}
+    <figure class="raw-peek" class:docked={rawPeek.docked} data-find="typeset-raw-peek"
+      style={`left:${rawPeek.left}px;top:${rawPeek.top}px;width:${rawPeek.width}px`}>
+      <figcaption>
+        <span>Raw</span>
+        {#if rawPeek.docked}<button type="button" aria-label="Hide raw crop" title="Hide the raw crop"
+          onclick={() => (rawPeekCollapsed = true)}><i class="bi bi-dash-lg" aria-hidden="true"></i></button>{/if}
+      </figcaption>
+      <div class="raw-peek-crop" style={`height:${rawPeek.height}px`}>
+        <img src={rawPageImage} alt="Raw crop of the selected region" draggable="false" data-color-sample
+          style={`width:${100 / rawPeekCrop.w}%;left:${(-rawPeekCrop.x / rawPeekCrop.w) * 100}%;top:${(-rawPeekCrop.y / rawPeekCrop.h) * 100}%;height:${100 / rawPeekCrop.h}%`} />
+      </div>
+    </figure>
+  {/if}
+{/if}
 
 <style>
   .pending-fill circle { fill: #ffffffd9; stroke: var(--hud-teal-ink, #3fc2a4); stroke-width: 3; stroke-dasharray: 5 4; }
@@ -1825,4 +1930,56 @@
     padding: 35px;
     color: var(--hud-muted);
   }
+  .raw-peek {
+    position: absolute;
+    z-index: 4;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--hud-line, #2a3344);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--hud-bg-2, #1b2230);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+  }
+  .raw-peek figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    font: 600 11px/1.2 Inter, system-ui, sans-serif;
+    color: var(--hud-muted, #8a94a6);
+  }
+  .raw-peek figcaption button {
+    pointer-events: auto;
+    border: 0;
+    padding: 0 2px;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+  .raw-peek-crop {
+    position: relative;
+    overflow: hidden;
+    background: white;
+  }
+  .raw-peek-crop img {
+    position: absolute;
+    max-width: none;
+    user-select: none;
+  }
+  .raw-peek-tab {
+    position: absolute;
+    z-index: 4;
+    width: 64px;
+    padding: 5px 8px;
+    border: 1px solid var(--hud-line, #2a3344);
+    border-radius: 8px;
+    background: var(--hud-bg-2, #1b2230);
+    color: var(--hud-text, #e6e9ef);
+    font: 600 11px Inter, system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .censor-remove { cursor: pointer; }
+  .censor-remove:focus-visible circle { stroke: #ffd28a; stroke-width: 3; }
 </style>

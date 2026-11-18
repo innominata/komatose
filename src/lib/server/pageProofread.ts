@@ -17,6 +17,7 @@ import { advisoryModel, validateModel } from './regionAi';
 import { proofreaderStatus } from './proofreadService';
 import { proofreadWithService } from './proofreadService';
 import { capturePageImages } from './pageImages';
+import { applyCensors, pageCensors } from './censor';
 import { createJob, updateJob, runWithJob, listJobs, pageResult } from './jobs';
 import { directorAsset, directorContext, directorEvent } from './directorAudit';
 import { readAsset, storeAsset, WorkflowError, getDoc } from './workflowStore';
@@ -124,9 +125,11 @@ Uncertain: [n or where] — what is unclear, in one sentence.`;
   return `${pageLabel}. Image 1: RAW source. Image 2: WORKING TYPESET English. Critique this captured version.\n\nCanonical series names and terms:\n${pack.seriesGlossary}\n\nSaved page script with human-assigned speakers (speaker is not necessarily the person addressed):\n${pageScript}`;
 }
 
-async function jpegBuffers(hashes: string[]) {
+/** Censor boxes are burned in again here, so a snapshot captured before they were drawn is covered too. */
+async function jpegBuffers(hashes: string[], imageId?: string) {
+  const censors = imageId ? pageCensors(imageId) : [];
   return Promise.all(hashes.map(async hash =>
-    sharp(await readAsset(hash)).jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer()));
+    sharp(await applyCensors(await readAsset(hash), censors)).jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toBuffer()));
 }
 
 async function storeJpegs(buffers: Buffer[]) {
@@ -185,7 +188,7 @@ export function runPageProofread(opts: { series: Series; episode: Episode; image
           script:capture.page.regions.filter(r=>r.line.sourceState!=='ignored'&&r.data.renderEnabled!==false).map(r=>({id:r.line.id,source:r.line.source||'',english:r.line.body})),
           pageLabel: `Page ${capture.page.image.pageNumber ?? capture.page.image.sortOrder + 1}` };
       }
-      const images = await jpegBuffers(mode === 'raw' ? [snapshot.raw] : [snapshot.raw, snapshot.typeset!]);
+      const images = await jpegBuffers(mode === 'raw' ? [snapshot.raw] : [snapshot.raw, snapshot.typeset!], opts.imageId);
       const director = directorContext();
       signal.throwIfAborted();
       const site = serviceProofreader(model.engine);
@@ -376,12 +379,12 @@ export function startPageProofreadFollowUp(opts: {
       const site = serviceProofreader(model.engine);
       const pastedJpeg = await jpegBuffers(followUpHashes);
       const serviceImages=opts.includeParentContext && parentSnapshot
-        ? [...await jpegBuffers([parentSnapshot.raw]),...pastedJpeg] : pastedJpeg;
+        ? [...await jpegBuffers([parentSnapshot.raw], imageId),...pastedJpeg] : pastedJpeg;
       const servicePrompt=opts.includeParentContext
         ? `This question follows your Proofread Raw of the same page. Image 1 is that whole raw page; subsequent images are the requested regions.\n\nYour prior raw reading:\n${String(parent.progress.critique||'')}\n\n${prompt}` : prompt;
       const director=directorContext();
       if(director) {
-        const sent=await Promise.all((site?serviceImages:[...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw,...(parentSnapshot.typeset?[parentSnapshot.typeset]:[])]) : []),...pastedJpeg]).map(storeAsset));
+        const sent=await Promise.all((site?serviceImages:[...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw,...(parentSnapshot.typeset?[parentSnapshot.typeset]:[])], imageId) : []),...pastedJpeg]).map(storeAsset));
         for(const hash of sent) directorAsset(director.runId,hash);
         directorEvent(director.runId,director.episodeId,imageId,'proofreader:images',{mode:'raw-follow-up',parentJobId:opts.parentJobId,sent});
       }
@@ -408,7 +411,7 @@ export function startPageProofreadFollowUp(opts: {
               `Editor follow-up:\n${prompt || '(see attached images)'}`,
             ].filter(Boolean).join('\n\n'),
             [
-              ...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw, ...(parentSnapshot.typeset ? [parentSnapshot.typeset] : [])]) : []),
+              ...(parentSnapshot ? await jpegBuffers([parentSnapshot.raw, ...(parentSnapshot.typeset ? [parentSnapshot.typeset] : [])], imageId) : []),
               ...pastedJpeg,
             ],
             signal,

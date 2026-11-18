@@ -1,21 +1,24 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { episodes, images, series } from '$lib/server/db/schema';
-import { renderGuestPage } from '$lib/server/finishedExport';
+import { renderGuestPage, renderGuestRaw } from '$lib/server/finishedExport';
 import { fail, messageOf, statusOf } from '$lib/server/http';
 import { toEpisode, toImage, toSeries } from '$lib/server/queries';
 import { parseSeriesCreditImageId } from '$lib/credits';
 import { readAsset } from '$lib/server/workflowStore';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ params }) => {
+export const GET: RequestHandler = async ({ params, url }) => {
 	try {
 		const token = params.token;
 		if (!token || token.length < 20) return fail(404, 'Not found');
 		const ep = await db.select().from(episodes).where(eq(episodes.previewToken, token)).get();
 		if (!ep) return fail(404, 'Not found');
+		const raw = url.searchParams.get('raw') === '1';
 		const credit = parseSeriesCreditImageId(params.id);
 		if (credit) {
+			// Series credits have no raw counterpart.
+			if (raw) return fail(404, 'Not found');
 			// Series default credits shown in place of credits pages the chapter has not added.
 			if (credit.episodeId !== ep.id) return fail(404, 'Not found');
 			const s = await db.select().from(series).where(eq(series.id, ep.seriesId)).get();
@@ -31,7 +34,8 @@ export const GET: RequestHandler = async ({ params }) => {
 		if (!img) return fail(404, 'Not found');
 		const s = await db.select().from(series).where(eq(series.id, ep.seriesId)).get();
 		if (!s) return fail(404, 'Not found');
-		return png(await renderGuestPage(toSeries(s), toEpisode(ep), toImage(img)));
+		const render = raw ? renderGuestRaw : renderGuestPage;
+		return png(await render(toSeries(s), toEpisode(ep), toImage(img)));
 	} catch (e) {
 		return fail(statusOf(e), messageOf(e));
 	}

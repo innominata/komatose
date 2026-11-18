@@ -72,6 +72,11 @@ export type TextStyle = {
   effects?: import("./textEffects").TextEffects;
   /** Vertical text: each character on its own line, stacked under the one before. */
   stacked?: boolean;
+  /**
+   * Stacked text only: thousandths of an em added to the distance from one letter to the
+   * next down the column (negative pulls them together). Absent means 0.
+   */
+  stackSpacing?: number;
 };
 /**
  * Character overrides on part of a region's text, like Photoshop's Character panel. Unset
@@ -158,6 +163,13 @@ export const TEXT_WARP_STYLE_LABELS: Record<TextWarpStyle, string> = {
   twist: "Twist",
 };
 export const MIN_STYLE_SIZE = 1;
+/**
+ * Leading multiplier range. From 1 up, line height is the font's own glyph
+ * height or size × leading, whichever is taller. Below 1, it is that natural
+ * (leading 1) line height scaled down, so lines can overlap: 0.8 = 80%.
+ */
+export const MIN_LEADING = 0.7;
+export const MAX_LEADING = 3;
 export const DEFAULT_STYLE: TextStyle = {
   fontId: "",
   size: 10,
@@ -194,7 +206,7 @@ export type Preferences = {
   chapterSummary: string;
   /** Chapters saved before detector setups; read only to keep their old detector. */
   detector?: Detector;
-  /** A detector setup id such as `ctd+koharu`. Unset follows Admin → Models → Jobs & defaults. */
+  /** A detector setup id such as `ctd+sam-ts-l`. Unset follows Admin → Models → Jobs & defaults. */
   detectorSetup?: string;
   /** RT-DETR/CTD/Paddle score cutoff. Higher = fewer false boxes (flames, empty art). Unset follows the admin default. */
   detectConf?: number;
@@ -257,6 +269,7 @@ export const STYLE_KEYS = [
   "emphasis",
   "effects",
   "stacked",
+  "stackSpacing",
 ] as const satisfies readonly (keyof TextStyle)[];
 
 export function pickStyle(input: unknown): Partial<TextStyle> {
@@ -315,7 +328,7 @@ export function styleDiff(
 /** A region owns its style once every field is stored on it, not filled in from the series default. */
 export function styleIsOwned(style: Partial<TextStyle> | undefined): boolean {
   // Layer styles and stacking are optional: absent means none / off.
-  return !!style && STYLE_KEYS.every((key) => key === "effects" || key === "stacked" || style[key] !== undefined);
+  return !!style && STYLE_KEYS.every((key) => key === "effects" || key === "stacked" || key === "stackSpacing" || style[key] !== undefined);
 }
 
 /**
@@ -362,6 +375,21 @@ export type FittedLayout = {
   charStyles?: (CharStyle & { postscriptName: string })[];
   /** Laid out along `RegionData.textPaths`, one row per path, which PSD Warp Text cannot represent. */
   onPath?: boolean;
+  /** Page-pixel line height that leading 1 gives at `size`; converts a PSD's leading back. */
+  lineHeightAt1?: number;
+};
+/** What found a detected region: the detectors that agreed and how sure each was. */
+export type DetectionProvenance = {
+  crop?: number[];
+  truncated?: boolean;
+  backend?: string;
+  sources?: string[];
+  /** The fused score the region was kept on. */
+  score?: number;
+  /** Each detector's own score for this lettering. */
+  scores?: Record<string, number>;
+  /** The detector's class: text_bubble, text_free or text. */
+  cls?: string;
 };
 export type RegionData = {
   geometryFrameId?: string;
@@ -380,7 +408,7 @@ export type RegionData = {
   };
   speaker?: import('./characters').CharacterAssignment;
   sourceDecision?: import('./decider').TranscriptionDecision;
-  detectionProvenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
+  detectionProvenance?: DetectionProvenance;
   bubbleBounds?: { x: number; y: number; w: number; h: number };
   detectionKind?: "bubble" | "free" | "unknown";
   /** Visual evidence is valid only for this raw image and geometry. */

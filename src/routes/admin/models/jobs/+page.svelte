@@ -15,6 +15,7 @@
 	import type { ProviderOperation } from '$lib/providerCatalog';
 	import {
 		DETECTOR_ADDON_LABELS,
+		DETECTOR_ADDON_KEYS,
 		DETECTOR_BASE_LABELS,
 		acceptsAddOns,
 		detectorSetupId,
@@ -168,7 +169,7 @@
 	const readyFor = (op: ProviderOperation) => readyRowsForOp(data, op);
 
 	const DETECTORS = $derived(['heuristic', ...readyFor('detect').map(row => row.id)]);
-	const ADDONS: DetectorAddOn[] = ['coo', 'koharu'];
+	const ADDONS: DetectorAddOn[] = ['coo', 'sam-ts-l'];
 	const detector = $derived.by(() => {
 		const saved = data.detector;
 		const setup = parseDetectorSetup(saved?.setup);
@@ -177,7 +178,7 @@
 	async function saveDetector(change: Partial<DetectorSetupConfig>, conf?: number | null) {
 		if (!detector) return;
 		const next = { ...detector.setup, ...change };
-		if (!acceptsAddOns(next.base)) Object.assign(next, { coo: false, koharu: false });
+		if (!acceptsAddOns(next.base)) Object.assign(next, { coo: false, samTsL: false });
 		try {
 			await apiPost('/api/admin/model-hub', {
 				action: 'set-detector',
@@ -338,9 +339,9 @@
 					<span class="switch" title={!acceptsAddOns(detector.setup.base) ? 'The heuristic detector runs alone' : installed ? '' : 'Install it from Admin → Models → Install'}>
 						<input
 							type="checkbox"
-							checked={detector.setup[addOn]}
-							disabled={!acceptsAddOns(detector.setup.base) || (!installed && !detector.setup[addOn])}
-							onchange={(e) => void saveDetector({ [addOn]: e.currentTarget.checked })}
+							checked={detector.setup[DETECTOR_ADDON_KEYS[addOn]]}
+							disabled={!acceptsAddOns(detector.setup.base) || (!installed && !detector.setup[DETECTOR_ADDON_KEYS[addOn]])}
+							onchange={(e) => void saveDetector({ [DETECTOR_ADDON_KEYS[addOn]]: e.currentTarget.checked })}
 						/><span class="track"></span>
 					</span>
 				</label>
@@ -358,7 +359,7 @@
 			</label>
 			<p class="muted small" style="grid-column:1/-1">
 				New chapters run <b>{detectorSetupLabel(detector.setup)}</b>{detector.saved ? '' : ' (not saved yet — this is the legacy fallback)'}.
-				COO adds sound effects and free text; Koharu adds lettering the box detector missed.
+				COO adds sound effects and free text; SAM-TS-L adds lettering the box detector missed.
 				Chapters can pick their own setup in Chapter settings.
 			</p>
 		{/if}

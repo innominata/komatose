@@ -1,5 +1,5 @@
 import type { CapabilitySample } from '../modelCapabilities';
-import { packageRows } from './modelPackages';
+import { discoverModelPackages, packageRows } from './modelPackages';
 import { validateManagedLaunch, type ManagedLaunch, type RequestPreset } from '../managedModels';
 import { assertModelIdentityEditable } from './modelUsage';
 import { reservedReviewService } from './gpuMode';
@@ -25,6 +25,7 @@ import { sanitizePortableUrl } from '../modelPack';
 import { recoverPackApply, writeAtomicJson } from './modelPackJournal';
 import { toHomeLaunch } from './homePath';
 import { noteProofreaderOptions } from '../proofreaders';
+import { isSamTsL, LEGACY_SAM_TS_L_NAME, SAM_TS_L_ID, SAM_TS_L_NAME } from '../samTsL';
 
 /** Resolved at call time so tests can isolate SCAN_DATA_DIR after import. */
 export function modelsOverlayPath(): string {
@@ -60,8 +61,8 @@ export function readModelOverlay(): ModelOverlay {
 /**
  * Overlay rows this build must not serve: retired seeds are dropped so they
  * can never come back, and recipes are rewritten to portable `~/…` paths so
- * this machine's home directory never lingers in `models.json`. The file is
- * rewritten once when either applies.
+ * this machine's home directory never lingers in `models.json`, and the
+ * SAM-TS-L row takes its current id. The file is rewritten once when any applies.
  */
 function normalizeOverlayRows(rows: NonNullable<ModelOverlay['rows']>): NonNullable<ModelOverlay['rows']> {
 	let changed = false;
@@ -77,6 +78,17 @@ function normalizeOverlayRows(rows: NonNullable<ModelOverlay['rows']>): NonNulla
 			return keep;
 		})
 		.map((row) => {
+			// The SAM-TS-L row was saved as `koharu` before the rename.
+			if (row && isSamTsL(row.id) && row.id !== SAM_TS_L_ID) {
+				changed = true;
+				row = {
+					...row,
+					id: SAM_TS_L_ID,
+					...(isSamTsL(row.packageId) ? { packageId: SAM_TS_L_ID } : {}),
+					...(isSamTsL(row.slug) ? { slug: SAM_TS_L_ID } : {}),
+					...(row.name === LEGACY_SAM_TS_L_NAME ? { name: SAM_TS_L_NAME } : {}),
+				};
+			}
 			const launch = row?.managedLaunch;
 			if (!launch || typeof launch !== 'object' || typeof launch.executable !== 'string') return row;
 			const portable = toHomeLaunch(launch);
@@ -102,8 +114,20 @@ function readModelOverlayRaw(): ModelOverlay | null {
 	}
 }
 
+// Publishing fingerprints every package (stat-walking artifact directories and
+// hashing adapter code), about 15 ms. Callers look rows up many times per
+// request, so reuse the result briefly. Fingerprints catch up with file changes
+// within PUBLISHED_TTL_MS; saving rows or refreshing packages clears it at once.
+const PUBLISHED_TTL_MS = 2000;
+let published: { source: ModelRow[]; packages: unknown; at: number; rows: ModelRow[] } | null = null;
+
 function publishRows(rows: ModelRow[]): ModelRow[] {
+	const packages = discoverModelPackages();
+	if (published && published.source === rows && published.packages === packages && Date.now() - published.at < PUBLISHED_TTL_MS)
+		// Callers may edit what they get back; never hand out the shared copy.
+		return structuredClone(published.rows);
 	const packaged = packageRows(rows);
+	published = { source: rows, packages, at: Date.now(), rows: structuredClone(packaged) };
 	noteProofreaderOptions(
 		packaged
 			.filter((row) => row.access === 'proofreader')
@@ -124,6 +148,7 @@ export function listRegistryRows(force = false): ModelRow[] {
 
 export function invalidateRegistryCache() {
 	cache = null;
+	published = null;
 }
 
 export function writeModelOverlay(overlay: ModelOverlay) {

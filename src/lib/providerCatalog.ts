@@ -166,16 +166,37 @@ export function singleAvailableEngineFor(
 
 export type ProviderRunGate = { ok: boolean; reason: string };
 
-/** Browser/image-only proofreaders review page images; text models edit English. */
+/** A regular model that can both see images and proofread English critiques the raw and typeset page. */
+function visionProofreader(live: LiveProviderEngine | undefined): boolean {
+	return Boolean(live && engineSupportsOperation(live, 'vision') && engineSupportsOperation(live, 'proofreadEnglish'));
+}
+
+/**
+ * Browser/image-only proofreaders and vision-capable models review the page images (raw and
+ * typeset, with a critique back); text-only models suggest edits to the chapter's English.
+ */
 export function proofreadingOperation(
 	engineId: string | undefined | null,
 	engines: readonly LiveProviderEngine[] = [],
 ): 'proofreadEnglish' | 'pageImageProofread' {
 	const live = engines.find(engine => engine.id === engineId);
 	if (isProofreaderProvider(engineId || '') || live?.access === 'proofreader' || live?.pageImageOnly ||
-		(live?.operations?.includes('pageImageProofread') && !live.operations.includes('proofreadEnglish')))
+		(live?.operations?.includes('pageImageProofread') && !live.operations.includes('proofreadEnglish')) ||
+		visionProofreader(live))
 		return 'pageImageProofread';
 	return 'proofreadEnglish';
+}
+
+/** Whether Proofread English can run with this engine, for whichever operation it uses. */
+export function proofreadingGate(
+	engineId: string | undefined | null,
+	engines: readonly LiveProviderEngine[] = [],
+): ProviderRunGate {
+	const live = engines.find(engine => engine.id === engineId);
+	const operation = proofreadingOperation(engineId, engines);
+	if (operation === 'pageImageProofread' && visionProofreader(live))
+		return { ok: true, reason: '' };
+	return providerRunGate(engineId, operation, engines);
 }
 
 export function providerRunGate(

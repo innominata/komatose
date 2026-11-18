@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify Koharu masking against frozen benchmark outputs (offline; no DB writes)."""
+"""Verify SAM-TS-L masking against frozen benchmark outputs (offline; no DB writes)."""
 import hashlib
 import json
 import pathlib
@@ -39,9 +39,9 @@ def main():
     device = 'cuda:0' if torch.cuda.is_available() and '--cpu' not in sys.argv else 'cpu'
     snapshot = json.loads((BENCH / 'inputs/snapshot.json').read_text())
     sfx = json.loads((ROOT / 'tests/fixtures/lettering/sfx.json').read_text())
-    report = {'device': device, 'engine': 'koharu', 'pages': [], 'workflowPages': []}
+    report = {'device': device, 'engine': 'sam-ts-l', 'pages': [], 'workflowPages': []}
     load_start = time.perf_counter()
-    lettering.propose_koharu(np.zeros((64, 64, 3), np.uint8), [[{'x': 0, 'y': 0}, {'x': 1, 'y': 0}, {'x': 1, 'y': 1}]], 0, device)
+    lettering.propose_sam_ts_l(np.zeros((64, 64, 3), np.uint8), [[{'x': 0, 'y': 0}, {'x': 1, 'y': 0}, {'x': 1, 'y': 1}]], 0, device)
     if device.startswith('cuda'):
         torch.cuda.synchronize()
     report['warmLoadSeconds'] = time.perf_counter() - load_start
@@ -53,11 +53,11 @@ def main():
         if device.startswith('cuda'):
             torch.cuda.synchronize()
         start = time.perf_counter()
-        mask, diagnostics, meta = lettering.propose(image, regions, 3, engine='koharu', device=device)
+        mask, diagnostics, meta = lettering.propose(image, regions, 3, engine='sam-ts-l', device=device)
         if device.startswith('cuda'):
             torch.cuda.synchronize()
         seconds = time.perf_counter() - start
-        reference = cv2.imread(str(BENCH / 'koharu' / f'{n}-mask.png'), 0)
+        reference = cv2.imread(str(BENCH / 'sam-ts-l' / f'{n}-mask.png'), 0)
         diff = int(np.count_nonzero(mask != reference)) if reference is not None else -1
         union = np.count_nonzero((mask > 0) | (reference > 0))
         inter = np.count_nonzero((mask > 0) & (reference > 0))
@@ -67,8 +67,8 @@ def main():
                   'scoredAgainstAnnotations': scored, 'meta': meta,
                   'peakAllocatedGiB': torch.cuda.max_memory_allocated(device) / 1024 ** 3 if device.startswith('cuda') else 0}
         report['pages'].append(record)
-        out = pathlib.Path('/tmp') / f'komatose-koharu-verify-{n}.png'
-        req = {'detect': True, 'regions': regions, 'expansion': 3, 'maskEngine': 'koharu', 'device': device}
+        out = pathlib.Path('/tmp') / f'komatose-sam-ts-l-verify-{n}.png'
+        req = {'detect': True, 'regions': regions, 'expansion': 3, 'maskEngine': 'sam-ts-l', 'device': device}
         workflow_mask = workflow.removal_mask(image, req)
         workflow_meta = req.get('_maskMeta', {})
         report['workflowPages'].append({'page': n, 'matchesLettering': bool(np.array_equal(workflow_mask, mask)),
@@ -84,13 +84,13 @@ def main():
         x0, y0, x1, y1 = target['box']
         h, w = image.shape[:2]
         left, top, right, bottom = int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h)
-        mask, _, _ = lettering.propose(image, regions_for(snapshot, snapshot['images'][page - 1]), 3, engine='koharu', device=device)
+        mask, _, _ = lettering.propose(image, regions_for(snapshot, snapshot['images'][page - 1]), 3, engine='sam-ts-l', device=device)
         crop = mask[top:bottom, left:right]
-        ref = cv2.imread(str(BENCH / 'koharu' / f'{page}-mask.png'), 0)[top:bottom, left:right]
+        ref = cv2.imread(str(BENCH / 'sam-ts-l' / f'{page}-mask.png'), 0)[top:bottom, left:right]
         union = np.count_nonzero((crop > 0) | (ref > 0))
         inter = np.count_nonzero((crop > 0) & (ref > 0))
         report['sfx'][target['id']] = {'maskIoU': inter / union if union else 1.0}
-    out_path = BENCH / 'koharu-integration-verify.json'
+    out_path = BENCH / 'sam-ts-l-integration-verify.json'
     out_path.write_text(json.dumps(report, indent=2))
     print('Median warm seconds', report['medianWarmSeconds'], 'written', out_path, flush=True)
 

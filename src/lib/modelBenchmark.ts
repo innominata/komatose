@@ -432,7 +432,7 @@ export function officialBaseline(pages: GoldPage[] = GOLD_PAGES): TranslationTot
 }
 
 /** Detector backends; a setup combines one or more of them the way chapter transcription does. */
-export type DetectorPart = 'rtdetr' | 'ctd' | 'paddle' | 'heuristic' | 'coo' | 'koharu';
+export type DetectorPart = 'rtdetr' | 'ctd' | 'paddle' | 'heuristic' | 'coo' | 'sam-ts-l';
 
 export type DetectorSetup = { id: string; label: string; parts: DetectorPart[] };
 
@@ -445,21 +445,21 @@ function setup(id: string, label: string, parts: DetectorPart[]): DetectorSetup 
 }
 
 export const DETECTOR_SETUPS: DetectorSetup[] = [
-	setup('rtdetr+coo+koharu', 'RT-DETR + COO + Koharu', ['rtdetr', 'coo', 'koharu']),
+	setup('rtdetr+coo+sam-ts-l', 'RT-DETR + COO + SAM-TS-L', ['rtdetr', 'coo', 'sam-ts-l']),
 	setup('rtdetr+coo', 'RT-DETR + COO', ['rtdetr', 'coo']),
-	setup('rtdetr+koharu', 'RT-DETR + Koharu', ['rtdetr', 'koharu']),
+	setup('rtdetr+sam-ts-l', 'RT-DETR + SAM-TS-L', ['rtdetr', 'sam-ts-l']),
 	setup('rtdetr', 'RT-DETR', ['rtdetr']),
-	setup('ctd+coo+koharu', 'Comic Text Detector + COO + Koharu', ['ctd', 'coo', 'koharu']),
+	setup('ctd+coo+sam-ts-l', 'Comic Text Detector + COO + SAM-TS-L', ['ctd', 'coo', 'sam-ts-l']),
 	setup('ctd+coo', 'Comic Text Detector + COO', ['ctd', 'coo']),
-	setup('ctd+koharu', 'Comic Text Detector + Koharu', ['ctd', 'koharu']),
+	setup('ctd+sam-ts-l', 'Comic Text Detector + SAM-TS-L', ['ctd', 'sam-ts-l']),
 	setup('ctd', 'Comic Text Detector', ['ctd']),
-	setup('paddle+coo+koharu', 'PaddleOCR lines + COO + Koharu', ['paddle', 'coo', 'koharu']),
+	setup('paddle+coo+sam-ts-l', 'PaddleOCR lines + COO + SAM-TS-L', ['paddle', 'coo', 'sam-ts-l']),
 	setup('paddle+coo', 'PaddleOCR lines + COO', ['paddle', 'coo']),
-	setup('paddle+koharu', 'PaddleOCR lines + Koharu', ['paddle', 'koharu']),
+	setup('paddle+sam-ts-l', 'PaddleOCR lines + SAM-TS-L', ['paddle', 'sam-ts-l']),
 	setup('paddle', 'PaddleOCR lines', ['paddle']),
 	setup('heuristic', 'Geometric bubbles', ['heuristic']),
 	setup('coo', 'COO DBNet++ alone (SFX only)', ['coo']),
-	setup('koharu', 'Koharu SAM-TS-L alone', ['koharu']),
+	setup('sam-ts-l', 'SAM-TS-L alone', ['sam-ts-l']),
 ];
 
 export const GOLD_SOURCE = 'gold';

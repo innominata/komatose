@@ -277,6 +277,49 @@ test('cancelled queued requests return promptly and never reach the endpoint', a
   } finally { release(); globalThis.fetch = oldFetch; delete process.env.SCAN_TRANSLATION_KOEN_URL; }
 });
 
+test('Parallel AI requests share a llama-server translator; PyTorch workers stay one at a time', async () => {
+  process.env.SCAN_TRANSLATION_HY_URL = 'https://hy.fixture/v1';
+  process.env.SCAN_TRANSLATION_KOEN_URL = 'https://koen.fixture/v1';
+  const oldFetch = globalThis.fetch;
+  let inFlight = 0;
+  let peak = 0;
+  globalThis.fetch = async () => {
+    peak = Math.max(peak, ++inFlight);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    inFlight--;
+    return Response.json(reply('Wait!'));
+  };
+  const run = async (model: typeof hy, lang: 'japanese' | 'korean', count: number) => {
+    peak = 0;
+    await Promise.all(Array.from({ length: count }, (_, i) =>
+      completeTranslation(model, specialistRequest(model, `待って${i}`, { ...opts, lang }))));
+    return peak;
+  };
+  try {
+    process.env.SCAN_AI_PARALLEL = '3';
+    assert.equal(await run(hy, 'japanese', 7), 3);
+    assert.equal(await run(koen, 'korean', 4), 1, 'PyTorch translators serve one request at a time');
+    process.env.SCAN_AI_PARALLEL = '1';
+    assert.equal(await run(hy, 'japanese', 4), 1);
+    // A page's regions go out together and come back in order.
+    process.env.SCAN_AI_PARALLEL = '4';
+    let order = 0;
+    const out = await translateWithSpecialist(hy, ['一', '二', '三', '四', '五'].map((source, i) => box(source, `r${i}`)), opts,
+      async (_model, request) => {
+        const text = String(request.messages.at(-1)?.content);
+        await new Promise(resolve => setTimeout(resolve, 40 - 8 * order++));
+        return reply(`EN ${['一', '二', '三', '四', '五'].find(s => text.includes(s))}`);
+      });
+    assert.deepEqual(out.map(item => item.id), ['r0', 'r1', 'r2', 'r3', 'r4']);
+    assert.deepEqual(out.map(item => item.translation), ['EN 一', 'EN 二', 'EN 三', 'EN 四', 'EN 五']);
+  } finally {
+    globalThis.fetch = oldFetch;
+    delete process.env.SCAN_AI_PARALLEL;
+    delete process.env.SCAN_TRANSLATION_HY_URL;
+    delete process.env.SCAN_TRANSLATION_KOEN_URL;
+  }
+});
+
 test('managed runtime reports executable startup errors without hanging', async () => {
   const executable = join(root, 'missing-interpreter');
   const weights = join(root, 'fixture.gguf');

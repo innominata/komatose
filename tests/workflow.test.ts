@@ -4329,7 +4329,7 @@ for line in sys.stdin:
   };
   try {
     startAiTranscribe({ series, episode: (await getEpisode("auto-e"))!, user: { id: "u", username: "test", role: "admin" },
-      detectorSetup: { base: "rtdetr", coo: false, koharu: false }, detectConf: 0.4, lang: "japanese", imageIds: ["auto-p"] });
+      detectorSetup: { base: "rtdetr", coo: false, samTsL: false }, detectConf: 0.4, lang: "japanese", imageIds: ["auto-p"] });
     const deadline = Date.now() + 10000;
     while (jobSnapshot("auto-e")?.running && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(jobSnapshot("auto-e")?.running, false);
@@ -4370,7 +4370,7 @@ for line in sys.stdin:
       { id: "auto-later-l", episodeId: "auto-e", imageId: "auto-later", source: "x", sourceState: "read", body: "", lineType: '""', sortOrder: 0, updatedAt: 1 },
     ]);
     startAiTranscribe({ series, episode: (await getEpisode("auto-e"))!, user: { id: "u", username: "test", role: "admin" },
-      detectorSetup: { base: "rtdetr", coo: false, koharu: false }, lang: "japanese" });
+      detectorSetup: { base: "rtdetr", coo: false, samTsL: false }, lang: "japanese" });
     const skipDeadline = Date.now() + 10000;
     while (jobSnapshot("auto-e")?.running && Date.now() < skipDeadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(jobSnapshot("auto-e")?.running, false);

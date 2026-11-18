@@ -3,6 +3,8 @@ import { projectPageAssets, compositePageAssets } from "./cleanAssets";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { sqlite } from "./db";
+import { censorDocId } from "../censor";
+import { projectCensors } from "./censor";
 import type { ImageRow, LineRow } from "../types";
 import type { PageData, RegionData } from "../workflow";
 import type { CleanFinish } from "../postprocess";
@@ -1277,11 +1279,23 @@ export async function executeReframe(
         await readAsset(page.original!),
       );
     }
+    // Censor boxes follow their pixels; undo puts the sources' own boxes back.
+    const censorSources = capture.sources.map((s) => ({
+      id: s.image.id, width: s.image.width, height: s.image.height,
+      doc: storedDoc(censorDocId(s.image.id)),
+    }));
+    const censorDocs: SavedDoc[] = censorSources.some((s) => s.doc.data.rects?.length)
+      ? outputs.map((out) => ({
+          id: censorDocId(out.id), revision: 0, undo: [], redo: [],
+          data: { rects: projectCensors(out, censorSources.map((s) => ({ ...s, rects: s.doc.data.rects ?? [] }))) },
+        }))
+      : [];
     const oldDocs = [
       ...capture.sources.flatMap((s) => [
         s.doc,
         ...s.regions.map((r) => r.doc),
       ]),
+      ...(censorDocs.length ? censorSources.map((s) => s.doc) : []),
       ...externalDocs,
     ];
     const ordered = [
@@ -1335,6 +1349,7 @@ export async function executeReframe(
       for (const image of created) insertImage(image);
       for (const line of moved) setLine(ctx.episode.id, line);
       for (const doc of docs) writeDoc(ctx.episode.id, doc);
+      for (const doc of censorDocs) writeDoc(ctx.episode.id, doc);
       for (const image of previous)
         if (!created.some((i) => i.id === image.id))
           sqlite.prepare("DELETE FROM images WHERE id=?").run(image.id);

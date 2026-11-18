@@ -28,8 +28,9 @@ type Stored = {
 export function getDoc<T>(id: string, fallback: T): WorkflowDoc<T> {
   const row = sqlite
     // History may contain megabytes of glyph outlines. Reading the current
-    // document needs only flags, not deserializing every historical layout.
-    .prepare("SELECT revision,data,undo != '[]' AS canUndo,redo != '[]' AS canRedo FROM workflow_docs WHERE id=?")
+    // document needs only flags: octet_length reads the stored size without
+    // loading the value, where comparing to '[]' read the whole history.
+    .prepare("SELECT revision,data,octet_length(undo) > 2 AS canUndo,octet_length(redo) > 2 AS canRedo FROM workflow_docs WHERE id=?")
     .get(id) as { revision: number; data: string; canUndo: number; canRedo: number } | undefined;
   return row
     ? {

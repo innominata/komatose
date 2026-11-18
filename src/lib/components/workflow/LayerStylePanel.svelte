@@ -10,8 +10,8 @@
     type TextEffects,
   } from "$lib/textEffects";
   import { throttle } from "$lib/throttle";
-  import type { PatternAsset } from "$lib/workflow";
   import { onMount } from "svelte";
+  import { loadPatterns, patternLibrary, setPatterns } from "$lib/patternLibrary.svelte";
 
   /**
    * Photoshop's Layer Style dialog for a text region: tick an effect to turn it on with
@@ -22,10 +22,13 @@
     effects,
     disabled = false,
     onchange,
+    onsample,
   }: {
     effects: TextEffects | undefined;
     disabled?: boolean;
     onchange: (effects: TextEffects | undefined) => void;
+    /** Starts the Sample pattern tool on the page; the sample becomes this overlay's pattern. */
+    onsample?: () => void;
   } = $props();
 
   type Field =
@@ -98,21 +101,11 @@
   const anyOn = $derived(EFFECT_ORDER.some(on));
 
   // ── Pattern overlay: the shared pattern library ─────────────────────
-  let patterns = $state<PatternAsset[] | null>(null);
-  let patternError = $state("");
+  const patterns = $derived(patternLibrary.list);
+  let uploadError = $state("");
+  const patternError = $derived(uploadError || patternLibrary.error);
   let patternBusy = $state(false);
   let patternInput = $state<HTMLInputElement>();
-  async function loadPatterns() {
-    try {
-      const res = await fetch("/settings/patterns");
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || "Could not load patterns");
-      patterns = body.patterns;
-      patternError = "";
-    } catch (e) {
-      patternError = e instanceof Error ? e.message : String(e);
-    }
-  }
   onMount(() => {
     if (effects?.patternOverlay) loadPatterns();
   });
@@ -124,14 +117,15 @@
   /** Turning the overlay on with no pattern chosen picks the first one, so something shows. */
   async function toggleWith(kind: EffectKind, enabled: boolean) {
     if (kind !== "patternOverlay" || !enabled || chosenPattern) return toggle(kind, enabled);
-    if (patterns === null) await loadPatterns();
+    if (patternLibrary.list === null) await loadPatterns();
     if (!effects?.patternOverlay) open = kind;
-    update(kind, { enabled, ...(patterns?.length ? { patternId: patterns[0].id } : {}) });
+    const list = patternLibrary.list;
+    update(kind, { enabled, ...(list?.length ? { patternId: list[0].id } : {}) });
   }
   async function addPatterns(files: File[]) {
     if (!files.length) return;
     patternBusy = true;
-    patternError = "";
+    uploadError = "";
     let last = "";
     try {
       for (const file of files) {
@@ -140,12 +134,12 @@
         const res = await fetch("/settings/patterns", { method: "POST", body: form });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(`${file.name}: ${body.error || res.statusText}`);
-        patterns = body.patterns;
+        setPatterns(body.patterns);
         last = body.added?.[0] ?? last;
       }
       if (last) update("patternOverlay", { patternId: last });
     } catch (e) {
-      patternError = e instanceof Error ? e.message : String(e);
+      uploadError = e instanceof Error ? e.message : String(e);
     } finally {
       patternBusy = false;
       if (patternInput) patternInput.value = "";
@@ -214,6 +208,7 @@
                   <input class="visually-hidden" bind:this={patternInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple
                     onchange={(e) => addPatterns([...(e.currentTarget.files ?? [])])} />
                   <button type="button" disabled={patternBusy} onclick={() => patternInput?.click()}><i class="bi bi-plus-lg" aria-hidden="true"></i> {patternBusy ? "Adding…" : "Add pattern…"}</button>
+                  {#if onsample}<button type="button" data-find="sample-pattern" title="Drag over a screentone on the page to use it as this pattern" onclick={() => onsample?.()}><i class="bi bi-eyedropper" aria-hidden="true"></i> Sample from page</button>{/if}
                   <a href="/settings#patterns" target="_blank" rel="noopener">Manage library</a>
                 </div>
                 <small class="ls-muted">Scale is a percentage of the tile's pixels; tiling is anchored to the page, so neighbouring bubbles share one tone. Multiply keeps the text colour under dark dots.</small>

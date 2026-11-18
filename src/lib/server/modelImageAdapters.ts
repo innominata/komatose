@@ -14,7 +14,7 @@ export async function invokeImageAdapter(pkg: DiscoveredPackage, row: ModelRow, 
   const supported = adapter === 'cli' ? task === 'cleaning' : adapter === 'native-detector' ? task === 'detect' || backend === 'ctd' && task === 'textMask'
     : adapter === 'image-editor' ? task === 'cleaning'
     : backend === 'sam' ? task === 'segmentBubble'
-    : backend === 'koharu' ? task === 'detect' || task === 'textMask'
+    : backend === 'sam-ts-l' ? task === 'detect' || task === 'textMask'
     : backend === 'coo' ? task === 'detect' : task === 'inpaint';
   if (!supported) throw new ModelTaskError('unsupported', `${adapter} (${backend}) does not implement ${task}`);
   const dir = await mkdtemp(join(tmpdir(), 'komatose-image-task-'));
@@ -46,15 +46,15 @@ export async function invokeImageAdapter(pkg: DiscoveredPackage, row: ModelRow, 
         method: backend === 'lama-manga' ? 'lama' : backend, maskEngine: backend, detect: task === 'textMask', box: input.box || [0, 0, 1, 1] }, abort);
       metadata = result;
       if (task === 'detect') {
-        const { parseKoharuRegions, parseSfxRegions } = await import('./detect');
-        const regions = backend === 'coo' ? parseSfxRegions(result.regions) : parseKoharuRegions(result.regions);
+        const { parseSamTsLRegions, parseSfxRegions } = await import('./detect');
+        const regions = backend === 'coo' ? parseSfxRegions(result.regions) : parseSamTsLRegions(result.regions);
         const mapped = regions.map(r => ({ x: r.box[0] / meta.width!, y: r.box[1] / meta.height!,
           w: (r.box[2] - r.box[0]) / meta.width!, h: (r.box[3] - r.box[1]) / meta.height!, cls: r.cls, score: r.score,
           // Chapter transcription rejects a COO region without its contour, so it must survive the adapter.
           ...(r.polygon ? { polygon: r.polygon, backend: r.backend, crop: r.crop, truncated: r.truncated } : {}) }));
         // detect-text writes a lettering mask to `out`. Transcription reads it via
         // localOperation's payload.out, so the mask must survive this temp dir.
-        if (backend === 'koharu') {
+        if (backend === 'sam-ts-l') {
           return { ...metadata, regions: mapped, mask: `data:image/png;base64,${(await readFile(out)).toString('base64')}` };
         }
         return { regions: mapped };

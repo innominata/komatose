@@ -59,7 +59,7 @@ try {
   const korean = await (await context.request.get(`${api}?dataset=manhwa-ko`)).json();
   assert.equal(korean.dataset.lang, "korean");
   assert.equal(korean.available, true);
-  assert.equal(korean.pages.length, 8);
+  assert.equal(korean.pages.length, 12);
   assert.equal(korean.baseline.official, 1);
   assert.equal((await context.request.get(`${api}?dataset=manhwa-ko&page=001`)).status(), 200);
   assert.equal((await context.request.get(`${api}?dataset=manhwa-ko&page=001&lang=en`)).status(), 404);
@@ -67,7 +67,7 @@ try {
   assert.equal((await context.request.post(api, { data: { dataset: "unknown", kind: "ocr", detectors: ["heuristic"] } })).status(), 400);
   assert.ok(!korean.translationModels.some(row => row.id === "opus-mt-ja-en"));
   const setups = listed.detectors.map((item) => item.id);
-  for (const id of ["rtdetr", "ctd", "paddle", "heuristic", "coo", "koharu", "rtdetr+coo+koharu"])
+  for (const id of ["rtdetr", "ctd", "paddle", "heuristic", "coo", "sam-ts-l", "rtdetr+coo+sam-ts-l"])
     assert.ok(setups.includes(id), `detector setup ${id}`);
   assert.ok(setups.includes(listed.chapterSetup));
   assert.equal(listed.baseline.official, 1);
@@ -88,7 +88,7 @@ try {
   assert.deepEqual(await (await context.request.post(api, { data: { action: "cancel" } })).json(), { ok: true, cancelled: false });
 
   const hubApi = `${base}/api/admin/model-hub`;
-  assert.equal((await context.request.post(hubApi, { data: { action: "set-detector", setup: "heuristic+koharu" } })).status(), 400);
+  assert.equal((await context.request.post(hubApi, { data: { action: "set-detector", setup: "heuristic+sam-ts-l" } })).status(), 400);
   const savedDetector = await (await context.request.post(hubApi, { data: { action: "set-detector", setup: "heuristic", conf: 0.35 } })).json();
   assert.deepEqual([savedDetector.detector.setup, savedDetector.detector.conf, savedDetector.detector.saved], ["heuristic", 0.35, true]);
   assert.equal((await context.request.get(`${api}`).then((res) => res.json())).chapterSetup, "heuristic");
@@ -104,7 +104,7 @@ try {
   await expect(panel.getByText("Give My Regards to Black Jack", { exact: false })).toBeVisible();
   await expect(panel.getByText("Text detectors")).toBeVisible();
   await expect(panel.getByText("Comic Text Detector", { exact: true }).first()).toBeVisible();
-  await expect(panel.getByText("Koharu SAM-TS-L alone").first()).toBeVisible();
+  await expect(panel.getByText("SAM-TS-L alone").first()).toBeVisible();
   await expect(panel.getByRole("checkbox", { name: /Gold boxes/ })).toBeChecked();
   // A fresh install has no saved run, so no result tables yet.
   await expect(panel.getByRole("table", { name: "Detection results" })).toHaveCount(0);
@@ -181,14 +181,14 @@ try {
   // Korean pages and results are independent of the legacy Japanese files.
   const koLines = korean.dataset.pages[0].lines;
   const koOcr = { ...ocrPage, page: "001", lines: [], output: koLines.map(line => line.source).join("\n") };
-  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v1-ocr.json"), JSON.stringify({
-    kind: "ocr", dataset: "manhwa-ko", datasetVersion: 1, id: "ko-ocr", at: 1, state: "done",
+  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v2-ocr.json"), JSON.stringify({
+    kind: "ocr", dataset: "manhwa-ko", datasetVersion: 2, id: "ko-ocr", at: 1, state: "done",
     progress: { done: 1, total: 1, step: "Finished" }, pages: ["001"],
     models: [{ id: "ko-reader", name: "Korean Reader", source: "gold", sourceLabel: "Gold boxes", state: "done", pages: [koOcr], totals: { dialogue: 1, other: 1, noise: 0, exact: 4, lines: 4 } }],
     detectors: [{ id: "heuristic", label: "Geometric bubbles", state: "done", pages: [{ ...blank, page: "001", boxes: koLines.flatMap(line => line.boxes) }], totals: score }],
   }));
-  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v1-translation.json"), JSON.stringify({
-    kind: "translation", dataset: "manhwa-ko", datasetVersion: 1, id: "ko-tr", at: 1, state: "done",
+  writeFileSync(join(dataDir, "run", "model-benchmark-manhwa-ko-v2-translation.json"), JSON.stringify({
+    kind: "translation", dataset: "manhwa-ko", datasetVersion: 2, id: "ko-tr", at: 1, state: "done",
     progress: { done: 1, total: 1, step: "Finished" }, pages: ["001"],
     models: [{ id: "ko-translator", name: "Korean Translator", state: "done", pages: [{ page: "001", ms: 100, lines: [] }], totals: { official: 0.8, literal: 0.7, meaning: 1, lines: 5, missing: 0 } }],
   }));

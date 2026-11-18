@@ -4,6 +4,8 @@ import english from "hyphenation.en-us";
 import type { LineRow, ImageRow } from "../types";
 import {
   DEFAULT_STYLE,
+  MAX_LEADING,
+  MIN_LEADING,
   MIN_STYLE_SIZE,
   type TextStyle,
   type Point,
@@ -241,7 +243,7 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
   for (const [key, min, max] of [
     ["size", MIN_STYLE_SIZE, 300],
     ["minSize", MIN_STYLE_SIZE, 300],
-    ["leading", 1, 3],
+    ["leading", MIN_LEADING, MAX_LEADING],
     ["padding", 0, 100],
     ["outlineWidth", 0, 20],
     ["fillOpacity", 0, 100],
@@ -260,6 +262,10 @@ export function validateStyle(input: Partial<TextStyle> | undefined): TextStyle 
   if (s.warpOrientation !== "vertical") s.warpOrientation = "horizontal";
   // Only set when on, so layouts keyed before stacking existed stay current.
   if (s.stacked !== true) delete s.stacked;
+  // Stack spacing: only kept when it does something, for the same reason.
+  const stackSpacing = Math.round(Number(s.stackSpacing));
+  if (s.stacked && Number.isFinite(stackSpacing) && stackSpacing !== 0) s.stackSpacing = Math.min(2000, Math.max(-900, stackSpacing));
+  else delete s.stackSpacing;
   const effects = normalizeEffects(s.effects);
   if (effects) s.effects = effects;
   else delete s.effects;
@@ -687,7 +693,12 @@ export async function fitText(
   } else
   for (const size of sizes) {
     const glyphHeight = (ascentPerPt + descentPerPt) * size;
-    const lineHeight = Math.max(glyphHeight, size * px * style.leading);
+    const spacing = lineSpacing(glyphHeight, size * px, style.leading);
+    // Stacked letters can be pulled closer than a full line (or spread further), never past
+    // a tenth of an em apart.
+    const lineHeight = style.stacked && style.stackSpacing
+      ? Math.max(size * px * 0.1, spacing + (style.stackSpacing / 1000) * size * px)
+      : spacing;
     const maxLines = Math.min(
       tokens.length,
       150,
@@ -909,5 +920,15 @@ export async function fitText(
     },
     ...(multi ? { charStyles: styles.map((st) => ({ ...st.char, postscriptName: st.metadata.postscriptName })) } : {}),
     ...(onPath ? { onPath: true } : {}),
+    lineHeightAt1: lineSpacing((ascentPerPt + descentPerPt) * chosen, chosen * px, 1),
   };
+}
+
+/**
+ * Baseline-to-baseline distance in page pixels. From leading 1 up: the glyph
+ * height or em × leading, whichever is taller (unchanged from before tight
+ * leading). Below 1: the leading-1 height scaled down, so lines may overlap.
+ */
+export function lineSpacing(glyphHeight: number, em: number, leading: number) {
+  return leading >= 1 ? Math.max(glyphHeight, em * leading) : Math.max(glyphHeight, em) * leading;
 }

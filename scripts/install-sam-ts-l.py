@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Koharu SAM-TS-L text weights + Hi-SAM source (text mask detector).
+"""Install SAM-TS-L text weights + Hi-SAM source (text mask detector).
 
 Weights come from Hugging Face (pinned revision, SHA256 verified). The Hi-SAM
 source comes from a bench checkout if one exists on this machine, otherwise
@@ -8,7 +8,7 @@ the working reference install runs.
 
 Run with the workflow Python so the import smoke test has torch/cv2:
 
-    .venv-workflow/bin/python scripts/install-koharu.py
+    .venv-workflow/bin/python scripts/install-sam-ts-l.py
 """
 import hashlib
 import os
@@ -32,14 +32,32 @@ CODELOAD_SAM_HQ = f'https://codeload.github.com/ymy-k/Hi-SAM/zip/{HI_SAM_REVISIO
 REPO_FILES = ['model.safetensors', 'inference.py', 'config.json']
 
 
+# Installs from before the rename used this directory; it is moved to models_dir().
+LEGACY_MODELS_DIR = ROOT / 'data/models/koharu-text-sam-ts-l'
+
+
+def _env(name):
+    """A SAM-TS-L env var, falling back to its pre-rename SCAN_KOHARU_* spelling."""
+    return os.environ.get(f'SCAN_SAM_TS_L_{name}') or os.environ.get(f'SCAN_KOHARU_{name}')
+
+
 def models_dir():
-    override = os.environ.get('SCAN_KOHARU_DIR')
-    return Path(override) if override else ROOT / 'data/models/koharu-text-sam-ts-l'
+    override = _env('DIR')
+    return Path(override) if override else ROOT / 'data/models/sam-ts-l'
 
 
 def hi_sam_dir():
-    override = os.environ.get('SCAN_KOHARU_HISAM_ROOT')
+    override = _env('HISAM_ROOT')
     return Path(override) if override else ROOT / f'data/models/hi-sam-{HI_SAM_REVISION}'
+
+
+def adopt_legacy_dir(destination):
+    """Move a pre-rename install into place instead of downloading it again."""
+    if destination.exists() or not (LEGACY_MODELS_DIR / 'model.safetensors').is_file():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    print(f'Moving {LEGACY_MODELS_DIR} to {destination}', flush=True)
+    shutil.move(str(LEGACY_MODELS_DIR), str(destination))
 
 
 def _bench():
@@ -138,7 +156,7 @@ def _verify_hisam(destination):
 
 
 def install_from_zip(zip_path, destination):
-    with tempfile.TemporaryDirectory(prefix='koharu-hisam-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='sam-ts-l-hisam-') as tmp:
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(tmp)
         root = _find_hisam_root(Path(tmp))
@@ -165,7 +183,7 @@ def install_hi_sam(destination):
         install_from_zip(bench_zip, destination)
         return
     # Fresh machine: pull from GitHub — codeload zip needs no git checkout.
-    with tempfile.TemporaryDirectory(prefix='koharu-hisam-dl') as tmp:
+    with tempfile.TemporaryDirectory(prefix='sam-ts-l-hisam-dl') as tmp:
         zip_path = Path(tmp) / 'hi-sam.zip'
         fetch(CODELOAD_SAM_HQ, zip_path)
         install_from_zip(zip_path, destination)
@@ -183,7 +201,7 @@ def verify():
     build = hi_sam_dir() / 'hi_sam/modeling/build.py'
     if not build.is_file():
         raise SystemExit(f'Missing {build}')
-    print('All Koharu files verified.', flush=True)
+    print('All SAM-TS-L files verified.', flush=True)
 
 
 def smoke(device='cpu'):
@@ -193,11 +211,11 @@ def smoke(device='cpu'):
         import cv2  # noqa: F401
         import numpy as np
         import torch
-        import koharu_mask
+        import sam_ts_l_mask
     except ImportError as exc:
         print(f'Skipping inference smoke test ({exc}).', flush=True)
         print('Run again with the workflow Python once it exists: '
-              '.venv-workflow/bin/python scripts/install-koharu.py', flush=True)
+              '.venv-workflow/bin/python scripts/install-sam-ts-l.py', flush=True)
         return
     if device.startswith('cuda') and not torch.cuda.is_available():
         print('GPU smoke skipped: CUDA unavailable', file=sys.stderr)
@@ -205,14 +223,15 @@ def smoke(device='cpu'):
 
     image = np.zeros((128, 160, 3), np.uint8)
     cv2.putText(image, 'A', (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 3)
-    out = koharu_mask.predict(image, device)
+    out = sam_ts_l_mask.predict(image, device)
     assert out.shape == image.shape[:2]
-    print(f'Koharu smoke OK on {device} ({out.sum()} mask bytes)', flush=True)
+    print(f'SAM-TS-L smoke OK on {device} ({out.sum()} mask bytes)', flush=True)
 
 
 if __name__ == '__main__':
-    model_dir = Path(os.environ.get('SCAN_KOHARU_DIR') or ROOT / 'data/models/koharu-text-sam-ts-l')
-    hi_sam = Path(os.environ.get('SCAN_KOHARU_HISAM_ROOT') or ROOT / f'data/models/hi-sam-{HI_SAM_REVISION}')
+    model_dir = models_dir()
+    hi_sam = hi_sam_dir()
+    adopt_legacy_dir(model_dir)
     install_weights(model_dir)
     install_hi_sam(hi_sam)
     verify()

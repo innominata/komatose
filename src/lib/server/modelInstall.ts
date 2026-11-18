@@ -15,7 +15,7 @@ import { translationModel, type TranslationModel } from '../translationModels';
 import { CHAT_AND_CLI_OPERATIONS, type ModelRow } from '../modelRegistry';
 import { ROLES } from '../types';
 import { QWEN3_VL_ID, QWEN_38_27B_ID, QWEN_38_27B_LABEL } from '../qwenModels';
-import { koharuInstalled } from './detect';
+import { samTsLInstalled, samTsLWeightsPath } from './detect';
 import { envVar } from './envFile';
 import { IMAGE_EDIT_LIGHTNING_LORA, IMAGE_EDIT_MODELS, imageEditInstallArgs, type ImageEditModelId } from '../imageEdit';
 import { imageEditLorasDir, imageEditModelDir, sdServerBin } from './gpuMode';
@@ -165,9 +165,9 @@ export function installCommand(target: InstallTarget): { command: string; bin: s
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
 			args = script('install-detect-models.py', ['--model', target.id]);
 			break;
-		case 'koharu':
+		case 'sam-ts-l':
 			bin = pythonFor(['env-workflow', 'env-ocr', 'env-review']);
-			args = script('install-koharu.py');
+			args = script('install-sam-ts-l.py');
 			break;
 		case 'coo':
 			bin = pythonFor(['env-workflow']);
@@ -377,8 +377,8 @@ export function targetInstalled(target: InstallTarget): { installed: boolean; de
 			return hfCached('mayocream/lama-manga', 'lama-manga.safetensors')
 				? { installed: true }
 				: { installed: false, detail: 'Not in the Hugging Face cache' };
-		case 'koharu':
-			return koharuInstalled()
+		case 'sam-ts-l':
+			return samTsLInstalled()
 				? { installed: true }
 				: { installed: false, detail: 'Weights or Hi-SAM source missing' };
 		case 'coo':
@@ -1012,13 +1012,13 @@ function uninstallPathsFor(targetId: string): { paths: UninstallPath[]; alsoRemo
 		}
 		return { paths, alsoRemoves, warnings };
 	}
-	if (targetId === 'koharu') {
-		const weights = envVar('SCAN_KOHARU_WEIGHTS') || join(ROOT, 'data/models/koharu-text-sam-ts-l/model.safetensors');
-		paths.push(describePath(kindOf(weights) === 'dir' ? weights : dirname(weights), 'Koharu weights'));
+	if (targetId === 'sam-ts-l') {
+		const weights = envVar('SCAN_SAM_TS_L_WEIGHTS') || envVar('SCAN_KOHARU_WEIGHTS') || samTsLWeightsPath();
+		paths.push(describePath(kindOf(weights) === 'dir' ? weights : dirname(weights), 'SAM-TS-L weights'));
 		try {
 			for (const name of readdirSync(join(ROOT, 'data/models'))) {
 				if (name.startsWith('hi-sam-'))
-					paths.push(describePath(join(ROOT, 'data/models', name), 'Hi-SAM source used by Koharu'));
+					paths.push(describePath(join(ROOT, 'data/models', name), 'Hi-SAM source used by SAM-TS-L'));
 			}
 		} catch {
 			/* no data/models directory */

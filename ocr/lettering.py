@@ -1,4 +1,4 @@
-"""Region-constrained lettering removal proposals (CTD or Koharu SAM-TS-L)."""
+"""Region-constrained lettering removal proposals (CTD or SAM-TS-L)."""
 import os
 
 import cv2
@@ -13,16 +13,17 @@ def resolve_engine(requested='auto'):
     mode = (requested or os.environ.get('SCAN_MASK_ENGINE', 'auto')).strip().lower()
     if mode in ('ctd', 'comic-text-detector'):
         return 'ctd'
-    if mode in ('koharu', 'koharu-sam-ts-l', 'sam-ts-l'):
-        import koharu_mask
-        if not koharu_mask.installed():
-            raise RuntimeError('Koharu model missing or checksum mismatch; run scripts/install-koharu.py')
-        return 'koharu'
+    # `koharu` is the name earlier versions saved for SAM-TS-L.
+    if mode in ('sam-ts-l', 'koharu', 'koharu-sam-ts-l'):
+        import sam_ts_l_mask
+        if not sam_ts_l_mask.installed():
+            raise RuntimeError('SAM-TS-L model missing or checksum mismatch; run scripts/install-sam-ts-l.py')
+        return 'sam-ts-l'
     if mode not in ('auto', '', 'default'):
         raise ValueError(f'Unknown mask engine {requested!r}')
     try:
-        import koharu_mask
-        return 'koharu' if koharu_mask.installed() else 'ctd'
+        import sam_ts_l_mask
+        return 'sam-ts-l' if sam_ts_l_mask.installed() else 'ctd'
     except Exception:
         return 'ctd'
 
@@ -91,7 +92,7 @@ def _merge_text_boxes(boxes, gap_frac=0.6, align=0.4):
 
 
 def regions_from_mask(mask):
-    """Text blocks from a full-page Koharu mask, before any region clip."""
+    """Text blocks from a full-page SAM-TS-L mask, before any region clip."""
     binary = (mask > 127).astype(np.uint8)
     count, _labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
     parts = []
@@ -118,7 +119,7 @@ def regions_from_mask(mask):
         ridge = (dt > 0) & (dt >= cv2.dilate(dt, np.ones((3, 3), np.uint8)))
         regions.append({
             'cls': 'text',
-            'backend': 'koharu',
+            'backend': 'sam-ts-l',
             'score': 0.8,
             'box': [float(x0), float(y0), float(x1), float(y1)],
             # Lettering is strokes on paper; a solid shape fills its box with thick strokes.
@@ -129,18 +130,18 @@ def regions_from_mask(mask):
 
 
 def detect_text(image, device='cpu', expansion=3):
-    """Full-page Koharu text blocks plus the expanded mask used for OCR crops."""
-    import koharu_mask
-    if not koharu_mask.installed():
-        raise RuntimeError('Koharu model missing or checksum mismatch; run scripts/install-koharu.py')
-    raw = koharu_mask.predict(image, device)
+    """Full-page SAM-TS-L text blocks plus the expanded mask used for OCR crops."""
+    import sam_ts_l_mask
+    if not sam_ts_l_mask.installed():
+        raise RuntimeError('SAM-TS-L model missing or checksum mismatch; run scripts/install-sam-ts-l.py')
+    raw = sam_ts_l_mask.predict(image, device)
     meta = {
-        'engine': 'koharu',
-        'model': 'Koharu SAM-TS-L',
-        'version': koharu_mask.VERSION,
-        'backend': koharu_mask.runtime_backend(device),
-        'repo': koharu_mask.REPO,
-        'revision': koharu_mask.REVISION,
+        'engine': 'sam-ts-l',
+        'model': 'SAM-TS-L',
+        'version': sam_ts_l_mask.VERSION,
+        'backend': sam_ts_l_mask.runtime_backend(device),
+        'repo': sam_ts_l_mask.REPO,
+        'revision': sam_ts_l_mask.REVISION,
     }
     return regions_from_mask(raw), _apply_expansion(raw, expansion), meta
 
@@ -166,11 +167,11 @@ def _placement(placements, index):
     return value if value in ('inside', 'outside') else None
 
 
-def propose_koharu(image, regions, expansion=5, device='cpu', placements=None, force=False):
-    import koharu_mask
+def propose_sam_ts_l(image, regions, expansion=5, device='cpu', placements=None, force=False):
+    import sam_ts_l_mask
     import mask_fit
     height, width = image.shape[:2]
-    raw = koharu_mask.predict(image, device)
+    raw = sam_ts_l_mask.predict(image, device)
     # Page statistics are needed in every place: outlined marks are recovered for all regions.
     gray, page = mask_fit.page_statistics(image)
     result = np.zeros((height, width), np.uint8)
@@ -189,12 +190,12 @@ def propose_koharu(image, regions, expansion=5, device='cpu', placements=None, f
         result |= clipped
         diagnostics.append({**_region_diagnostics(index, allowed, clipped), **({'placement': placement} if placement else {})})
     meta = {
-        'engine': 'koharu',
-        'version': koharu_mask.VERSION + (f'+{mask_fit.VERSION}' if page else ''),
-        'backend': koharu_mask.runtime_backend(device),
-        'repo': koharu_mask.REPO,
-        'revision': koharu_mask.REVISION,
-        'cached': koharu_mask.LAST_CACHED,
+        'engine': 'sam-ts-l',
+        'version': sam_ts_l_mask.VERSION + (f'+{mask_fit.VERSION}' if page else ''),
+        'backend': sam_ts_l_mask.runtime_backend(device),
+        'repo': sam_ts_l_mask.REPO,
+        'revision': sam_ts_l_mask.REVISION,
+        'cached': sam_ts_l_mask.LAST_CACHED,
     }
     return result, diagnostics, meta
 
@@ -284,8 +285,8 @@ def refine(probability, image, boxes):
 def propose(image, regions, expansion=5, engine='auto', device='cpu', placements=None, force=False):
     """`force`: the caller asked for this expansion on purpose; see mask_fit.fit_region."""
     resolved = resolve_engine(engine)
-    if resolved == 'koharu':
-        return propose_koharu(image, regions, expansion, device, placements, force)
+    if resolved == 'sam-ts-l':
+        return propose_sam_ts_l(image, regions, expansion, device, placements, force)
     import detect
     import mask_fit
     height, width = image.shape[:2]
@@ -352,12 +353,12 @@ def propose(image, regions, expansion=5, engine='auto', device='cpu', placements
 def propose_page(image, expansion=5, engine='auto', device='cpu'):
     """Whole-page lettering mask, with no saved regions or bubble fitting."""
     resolved = resolve_engine(engine)
-    if resolved == 'koharu':
-        import koharu_mask
-        raw = koharu_mask.predict(image, device)
-        meta = {'engine': 'koharu', 'version': koharu_mask.VERSION,
-                'backend': koharu_mask.runtime_backend(device),
-                'repo': koharu_mask.REPO, 'revision': koharu_mask.REVISION}
+    if resolved == 'sam-ts-l':
+        import sam_ts_l_mask
+        raw = sam_ts_l_mask.predict(image, device)
+        meta = {'engine': 'sam-ts-l', 'version': sam_ts_l_mask.VERSION,
+                'backend': sam_ts_l_mask.runtime_backend(device),
+                'repo': sam_ts_l_mask.REPO, 'revision': sam_ts_l_mask.REVISION}
         uncertain = False
     else:
         import detect

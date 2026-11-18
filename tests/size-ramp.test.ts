@@ -72,10 +72,42 @@ test('fitted layout: ramped glyphs share a baseline, stacked rows hold one glyph
 	assert.deepEqual(stacked.rows.map((r) => r.text), ['B', 'O', 'O', 'M']);
 	assert.ok(stacked.rows.every((r, i) => i === 0 || r.baseline > stacked.rows[i - 1].baseline));
 	assert.equal('stacked' in validateStyle({ ...style, stacked: false }), false, 'off is not stored');
+	// Stack spacing pulls the letters closer together (or spreads them), down to a tenth of an em.
+	const pitch = (l: typeof stacked) => l.rows[1].baseline - l.rows[0].baseline;
+	const tight = await fitText(line, {}, page, { ...style, stacked: true, stackSpacing: -300 }, 72);
+	// Per point of size (the tighter column can fit a larger size); 72 dpi, so 1 pt = 1 px.
+	assert.ok(Math.abs(pitch(stacked) / stacked.size - pitch(tight) / tight.size - 0.3) < 0.001, `${pitch(stacked)}@${stacked.size} → ${pitch(tight)}@${tight.size}`);
+	assert.ok(tight.size >= stacked.size);
+	const crushed = await fitText(line, {}, page, { ...style, stacked: true, stackSpacing: -900 }, 72);
+	assert.ok(pitch(crushed) >= 0.1 * crushed.size - 1e-6);
+	assert.equal('stackSpacing' in validateStyle({ ...style, stackSpacing: -300 }), false, 'only kept on stacked text');
+	assert.equal('stackSpacing' in validateStyle({ ...style, stacked: true, stackSpacing: 0 }), false, '0 is not stored');
+	assert.equal(validateStyle({ ...style, stacked: true, stackSpacing: -5000 }).stackSpacing, -900);
+	assert.equal(layoutKey(line, {}, page, { ...style, stacked: true }, 72), layoutKey(line, {}, page, { ...style, stacked: true, stackSpacing: 0 }, 72));
 });
 
 test('a complete style without stacking is still the region\'s own style', () => {
 	// Otherwise every state read re-stamps every region's style (and bumps its revision).
 	assert.equal(styleIsOwned({ ...DEFAULT_STYLE }), true);
 	assert.equal(styleIsOwned({ ...DEFAULT_STYLE, stacked: true }), true);
+	assert.equal(styleIsOwned({ ...DEFAULT_STYLE, stacked: true, stackSpacing: -200 }), true);
+});
+
+test('leading under 1 tightens lines below the font height; 1 and up are unchanged', async () => {
+	const { lineSpacing } = await import('../src/lib/server/typesetting');
+	// Glyph height 1.3 em: from 1 up it is the floor, below 1 the floor itself shrinks.
+	assert.equal(lineSpacing(130, 100, 1.15), 130);
+	assert.equal(lineSpacing(130, 100, 1.5), 150);
+	assert.equal(lineSpacing(130, 100, 1), 130);
+	assert.equal(lineSpacing(130, 100, 0.8), 104);
+	assert.equal(validateStyle({ leading: 0.5 }).leading, 0.7, 'held at the minimum');
+	const page = { id: 'p', width: 800, height: 800 } as never;
+	const line = { id: 'l', body: 'ONE TWO THREE FOUR', x: 0.2, y: 0.1, w: 0.3, h: 0.8 } as never;
+	const style = { ...DEFAULT_STYLE, fontId: font.id, size: 40, minSize: 40 };
+	const gap = (l: { rows: { baseline: number }[] }) => l.rows[1].baseline - l.rows[0].baseline;
+	const normal = await fitText(line, {}, page, { ...style, leading: 1 }, 72);
+	const tight = await fitText(line, {}, page, { ...style, leading: 0.8 }, 72);
+	assert.ok(normal.rows.length > 1 && tight.rows.length === normal.rows.length);
+	assert.ok(Math.abs(gap(tight) - gap(normal) * 0.8) < 0.01, `${gap(tight)} vs ${gap(normal)}`);
+	assert.ok(Math.abs(normal.lineHeightAt1! - gap(normal)) < 0.01, 'records the leading-1 gap for PSD import');
 });

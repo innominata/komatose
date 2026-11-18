@@ -37,49 +37,49 @@ test('a lone detector keeps its own boxes: nobody is there to check them', () =>
   assert.equal(rows.length, 1);
 });
 
-const block = (box: [number, number, number, number], fill = 0.2, stroke = 4): WorkerRegion => ({ ...r('koharu', 'text', 0.8, box), fill, stroke });
+const block = (box: [number, number, number, number], fill = 0.2, stroke = 4): WorkerRegion => ({ ...r('sam-ts-l', 'text', 0.8, box), fill, stroke });
 const balloon = (box: [number, number, number, number]) => r('rtdetr', 'bubble', 0.9, box);
 
-test('Koharu agrees with a box, and lettering no box claimed is its own region', () => {
-  const koharu = block([300, 300, 360, 400]);
-  const rows = text(fuseDetections([r('rtdetr', 'text_free', 0.25, [300, 302, 358, 398]), koharu], { ran: ['rtdetr', 'koharu'] }));
+test('SAM-TS-L agrees with a box, and lettering no box claimed is its own region', () => {
+  const samTsL = block([300, 300, 360, 400]);
+  const rows = text(fuseDetections([r('rtdetr', 'text_free', 0.25, [300, 302, 358, 398]), samTsL], { ran: ['rtdetr', 'sam-ts-l'] }));
   assert.equal(rows.length, 1);
-  assert.deepEqual(rows[0].sources, ['rtdetr', 'koharu']);
-  const alone = text(fuseDetections([koharu], { ran: ['rtdetr', 'ctd', 'koharu'] }));
+  assert.deepEqual(rows[0].sources, ['rtdetr', 'sam-ts-l']);
+  const alone = text(fuseDetections([samTsL], { ran: ['rtdetr', 'ctd', 'sam-ts-l'] }));
   assert.equal(alone.length, 1);
   assert.equal(alone[0].cls, 'text_free');
-  assert.deepEqual(alone[0].sources, ['koharu']);
+  assert.deepEqual(alone[0].sources, ['sam-ts-l']);
   assert.ok(alone[0].score < 0.7, 'mask-only lettering ranks below a confident box');
 });
 
 test('mask-only lettering inside a balloon is bubble text', () => {
-  const rows = text(fuseDetections([balloon([200, 200, 500, 500]), block([300, 300, 360, 400])], { ran: ['rtdetr', 'koharu'] }));
+  const rows = text(fuseDetections([balloon([200, 200, 500, 500]), block([300, 300, 360, 400])], { ran: ['rtdetr', 'sam-ts-l'] }));
   assert.equal(rows.length, 1);
   assert.equal(rows[0].cls, 'text_bubble');
 });
 
 test('a solid shape the mask marks is not lettering', () => {
-  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.85, 68)], { ran: ['rtdetr', 'koharu'] })).length, 0);
-  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.3, 60)], { ran: ['rtdetr', 'koharu'] })).length, 0);
+  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.85, 68)], { ran: ['rtdetr', 'sam-ts-l'] })).length, 0);
+  assert.equal(text(fuseDetections([block([0, 500, 300, 586], 0.3, 60)], { ran: ['rtdetr', 'sam-ts-l'] })).length, 0);
 });
 
 test('a box that cut the lettering short grows to hold it', () => {
   const rows = text(fuseDetections([
     r('rtdetr', 'text_free', 0.9, [100, 100, 200, 200]),
     block([110, 120, 200, 240]),
-  ], { ran: ['rtdetr', 'koharu'] }));
+  ], { ran: ['rtdetr', 'sam-ts-l'] }));
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].box, [100, 100, 200, 240]);
 });
 
 test('pieces of one effect within reach are one region, but not across balloons', () => {
-  const pieces = text(fuseDetections([block([100, 100, 160, 160]), block([180, 100, 240, 160])], { ran: ['rtdetr', 'koharu'] }));
+  const pieces = text(fuseDetections([block([100, 100, 160, 160]), block([180, 100, 240, 160])], { ran: ['rtdetr', 'sam-ts-l'] }));
   assert.equal(pieces.length, 1);
   assert.deepEqual(pieces[0].box, [100, 100, 240, 160]);
   const walled = text(fuseDetections([
     balloon([90, 90, 170, 170]), balloon([175, 90, 250, 170]),
     block([100, 100, 160, 160]), block([180, 100, 240, 160]),
-  ], { ran: ['rtdetr', 'koharu'] }));
+  ], { ran: ['rtdetr', 'sam-ts-l'] }));
   assert.equal(walled.length, 2);
 });
 
@@ -185,4 +185,14 @@ test('the smallest saved region follows the page resolution', () => {
   assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.6, [121, 198, 138, 282])], ctd: [] }, 4000, 6000).length, 0);
   assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.9, [121, 198, 138, 282])], ctd: [] }, 4000, 6000).length, 1);
   assert.equal(composeDetections({ rtdetr: [r('rtdetr', 'text_bubble', 0.9, [121, 198, 130, 282])], ctd: [] }, 4000, 6000).length, 0);
+});
+
+test('regions saved before the rename with backend `koharu` count as SAM-TS-L', async () => {
+  const { detectorSource } = await import('../src/lib/server/detectFusion');
+  const { canonicalModelId, isSamTsL } = await import('../src/lib/samTsL');
+  assert.equal(detectorSource({ backend: 'koharu' }), 'sam-ts-l');
+  assert.equal(detectorSource({ backend: 'sam-ts-l' }), 'sam-ts-l');
+  assert.equal(canonicalModelId('koharu'), 'sam-ts-l');
+  assert.equal(canonicalModelId('ctd'), 'ctd');
+  assert.ok(isSamTsL('Koharu-SAM-TS-L') && !isSamTsL('sam'));
 });

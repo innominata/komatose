@@ -3,6 +3,7 @@ import { normalizeTranslation } from '../translationText';
 import { sfxTranslateHit, withSfxGlossary } from '../sfx';
 import type { DetectedBox, TranslateScriptOpts } from './llm';
 import { completeTranslation, type TranslationRequest } from './translationRuntime';
+import { aiParallelRequests, mapLimit } from './aiParallel';
 import { appendJobLog, extractJobLogUsage, jobContext } from './jobs';
 
 export function specialistRequest(model: TranslationModel, source: string, opts: TranslateScriptOpts): TranslationRequest {
@@ -110,17 +111,17 @@ export async function translateWithSpecialist(
   complete: typeof completeTranslation = completeTranslation,
 ): Promise<DetectedBox[]> {
   const nextOpts = { ...opts, seriesGlossary: withSfxGlossary(opts.seriesGlossary, boxes.map((box) => box.source)) };
-  const translated: DetectedBox[] = [];
   const needModel = boxes.some((box) => box.source.trim() && !sfxTranslateHit(box.source));
   if (needModel) assertTranslationLanguage(model, opts.lang ?? 'japanese');
-  for (const box of boxes) {
+  // Each region is its own request with the same context, so they can run side by side;
+  // the translator admits as many at once as it has slots.
+  return mapLimit(boxes, aiParallelRequests(), async (box): Promise<DetectedBox> => {
     opts.abort?.throwIfAborted();
-    if (!box.source.trim()) { translated.push({ ...box }); continue; }
+    if (!box.source.trim()) return { ...box };
     const sfx = sfxTranslateHit(box.source);
     if (sfx) {
-      translated.push({ ...box, ...sfx });
       logSpecialist(model, box.source, sfx.translation, undefined, { durationMs: 0 });
-      continue;
+      return { ...box, ...sfx };
     }
     const request = specialistRequest(model, box.source, box.speaker ? {
       ...nextOpts, pageCaption: [nextOpts.pageCaption, `Speaker of this region (not necessarily the person addressed): ${box.speaker}`].filter(Boolean).join('\n\n'),
@@ -133,7 +134,7 @@ export async function translateWithSpecialist(
       raw = await complete(model, request, opts.abort);
       opts.abort?.throwIfAborted();
       body = parseSpecialistTranslation(raw);
-      translated.push({ ...box, translation: body, literal: '', reasoning: `Translated by ${model.label}.` });
+      return { ...box, translation: body, literal: '', reasoning: `Translated by ${model.label}.` };
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
       throw error;
@@ -146,6 +147,5 @@ export async function translateWithSpecialist(
         extractJobLogUsage(raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}, Date.now() - started),
       );
     }
-  }
-  return translated;
+  });
 }

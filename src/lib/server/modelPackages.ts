@@ -125,7 +125,7 @@ const ADAPTER_SOURCE_FILES: Record<string, string[]> = {
   'native-translator': ['src/lib/server/specialistTranslation.ts', 'src/lib/server/translationRuntime.ts', 'src/lib/translationModels.json',
     'ocr/ko_en_translate.py', 'ocr/opus_mt_translate.py', 'ocr/sugoi_translate.py', 'ocr/translategemma-ja-en.jinja'],
   'workflow-image': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/detect.ts',
-    'ocr/workflow.py', 'ocr/worker.py', 'ocr/koharu_mask.py', 'ocr/lettering.py', 'ocr/coo.py'],
+    'ocr/workflow.py', 'ocr/worker.py', 'ocr/sam_ts_l_mask.py', 'ocr/lettering.py', 'ocr/coo.py'],
   'native-detector': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/localWorker.ts', 'src/lib/server/ocr.ts', 'ocr/worker.py', 'ocr/detect.py', 'ocr/native_detect.py', 'ocr/lettering.py', 'ocr/workflow.py'],
   'image-editor': ['src/lib/server/modelImageAdapters.ts', 'src/lib/server/qwenImageClean.ts', 'src/lib/server/imageEdit.ts'],
   'browser-proofreader': ['src/lib/server/proofreadService.ts'],
@@ -250,7 +250,7 @@ export function packageRows(existing: ModelRow[]): ModelRow[] {
       : adapter === 'browser-proofreader' ? ['pageImageProofread'] as const
       : adapter === 'image-editor' ? ['cleaning'] as const
       : adapter === 'native-detector' ? (backend === 'ctd' ? ['detect', 'textMask'] as const : ['detect'] as const)
-      : adapter === 'workflow-image' ? (backend === 'sam' ? ['segmentBubble'] as const : backend === 'koharu' ? ['detect', 'textMask'] as const : backend === 'coo' ? ['detect'] as const : ['inpaint'] as const)
+      : adapter === 'workflow-image' ? (backend === 'sam' ? ['segmentBubble'] as const : backend === 'sam-ts-l' ? ['detect', 'textMask'] as const : backend === 'coo' ? ['detect'] as const : ['inpaint'] as const)
       : MODEL_TASK_IDS;
     const taskFingerprints = rowTaskFingerprints(row);
     const capabilityFingerprints = Object.fromEntries(CAPABILITIES.map(({ id }) => [id, fingerprint({

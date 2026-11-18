@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import type { PatternAsset } from "../workflow";
 import type { FxPattern } from "../textEffects";
+import { findTile } from "../patternTile";
 import { sqlite } from "./db";
 import { readAsset, storeAsset, hash, WorkflowError } from "./workflowStore";
 import { unlinkAssetFiles, unreferencedAssets } from "./exportRetention";
@@ -50,7 +51,7 @@ async function encode(bytes: Buffer) {
   }
 }
 
-export async function uploadPattern(filename: string, bytes: Buffer) {
+export async function uploadPattern(filename: string, bytes: Buffer, name?: string) {
   if (!/\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(filename) || bytes.length > MAX_UPLOAD)
     throw new WorkflowError("Choose a PNG, JPEG, GIF or WebP image up to 40 MB");
   let encoded;
@@ -63,11 +64,46 @@ export async function uploadPattern(filename: string, bytes: Buffer) {
   const digest = await storeAsset(encoded.data);
   const id = hash(`pattern:${digest}`).slice(0, 32);
   const duplicate = !!sqlite.prepare("SELECT 1 FROM global_pattern_assets WHERE id=?").get(id);
-  const metadata = { name: nameOf(filename), width: encoded.width, height: encoded.height, mime: encoded.mime };
+  const metadata = { name: name?.trim().slice(0, 120) || nameOf(filename), width: encoded.width, height: encoded.height, mime: encoded.mime };
   sqlite
     .prepare("INSERT OR IGNORE INTO global_pattern_assets VALUES(?,?,?,?,?)")
     .run(id, digest, filename, JSON.stringify(metadata), Date.now());
   return { pattern: getPattern(id)!, duplicate };
+}
+
+/**
+ * A pattern sampled from page artwork: the tile that repeats seamlessly inside the box, or,
+ * with `whole`, the whole box. Without `whole`, a box with no clean repeat saves nothing and
+ * says why, so the editor can ask before keeping the whole crop.
+ */
+export async function samplePattern(
+  artwork: Buffer,
+  box: { x: number; y: number; w: number; h: number },
+  options: { whole?: boolean; label: string },
+) {
+  const meta = await sharp(artwork).metadata();
+  if (!meta.width || !meta.height) throw new WorkflowError("Missing page image", 404);
+  const left = Math.max(0, Math.round(box.x * meta.width)), top = Math.max(0, Math.round(box.y * meta.height));
+  const width = Math.min(meta.width - left, Math.round(box.w * meta.width));
+  const height = Math.min(meta.height - top, Math.round(box.h * meta.height));
+  if (width < 4 || height < 4) throw new WorkflowError("Drag a larger area to sample");
+  if (width * height > 4096 * 4096) throw new WorkflowError("Sample a smaller area");
+  const crop = sharp(artwork).extract({ left, top, width, height });
+  let tile = { x: 0, y: 0, width, height };
+  let detected: ReturnType<typeof findTile> | null = null;
+  if (!options.whole) {
+    const gray = await crop.clone().greyscale().raw().toBuffer({ resolveWithObject: true });
+    detected = findTile({ data: gray.data, width: gray.info.width, height: gray.info.height });
+    if (!detected.ok) return { tileable: false as const, reason: detected.reason, width, height };
+    tile = detected;
+  }
+  const bytes = await sharp(artwork)
+    .extract({ left: left + tile.x, top: top + tile.y, width: tile.width, height: tile.height })
+    .png()
+    .toBuffer();
+  const kind = options.whole ? "crop" : "tone";
+  const result = await uploadPattern(`sampled-${tile.width}x${tile.height}.png`, bytes, `${options.label} ${kind} ${tile.width}×${tile.height}`);
+  return { tileable: !options.whole, ...result, width, height, tile };
 }
 
 export function renamePattern(id: string, name: string) {

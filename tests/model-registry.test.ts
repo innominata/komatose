@@ -1185,3 +1185,22 @@ test('TokenHub image + JSON requests disable hy4 thinking, and a reasoning-only 
 		globalThis.fetch = originalFetch;
 	}
 });
+
+test('a model row saved as `koharu` before the rename is read, and rewritten, as SAM-TS-L', async () => {
+	const { readFile } = await import('node:fs/promises');
+	const before = store.readModelOverlay();
+	try {
+		store.writeModelOverlay({
+			rows: [...(before.rows || []), { id: 'koharu', name: 'Koharu', slug: 'koharu', packageId: 'koharu', access: 'local_http', seeded: false } as ModelRow],
+			catalogs: before.catalogs,
+		});
+		const row = store.readModelOverlay().rows?.find((item) => item.id === 'sam-ts-l');
+		assert.equal(row?.name, 'SAM-TS-L');
+		assert.equal(row?.packageId, 'sam-ts-l');
+		assert.equal(row?.slug, 'sam-ts-l');
+		const saved = await readFile(store.modelsOverlayPath(), 'utf8');
+		assert.ok(!saved.includes('koharu'), saved.slice(Math.max(0, saved.indexOf('koharu') - 200), saved.indexOf('koharu') + 100));
+	} finally {
+		store.writeModelOverlay(before);
+	}
+});

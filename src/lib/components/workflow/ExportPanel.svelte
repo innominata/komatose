@@ -25,6 +25,8 @@
     exportFormat = $bindable("png"),
     quality = $bindable(95),
     includeExportMetadata = $bindable(false),
+    censorExport = $bindable(false),
+    censoredPageCount = 0,
     draftExport = $bindable(false),
     previewCopied = $bindable(false),
     previewUrl,
@@ -55,6 +57,9 @@
     exportFormat?: string;
     quality?: number;
     includeExportMetadata?: boolean;
+    /** Paint the Translate/Review censor boxes over every exported image. */
+    censorExport?: boolean;
+    censoredPageCount?: number;
     draftExport?: boolean;
     previewCopied?: boolean;
     previewUrl: string;
@@ -235,6 +240,12 @@
       >{/if}<label
       ><input type="checkbox" bind:checked={includeExportMetadata} /> Include
       metadata and scripts</label
+    ><label data-find="censor-export"
+      title={censoredPageCount
+        ? `Black out the censor boxes on ${censoredPageCount} page${censoredPageCount === 1 ? "" : "s"}. Export again with this off for the uncensored version; the newest ZIP of each is kept.`
+        : "No page has censor boxes. Draw them with the Censor tool in Translate or Review."}
+      ><input type="checkbox" bind:checked={censorExport} disabled={!censoredPageCount && !censorExport} /> Censor{censoredPageCount
+        ? ` (${censoredPageCount} page${censoredPageCount === 1 ? "" : "s"})` : ""}</label
     ><label data-find="draft"
       ><input type="checkbox" bind:checked={draftExport} /> Label as draft</label
     ><button

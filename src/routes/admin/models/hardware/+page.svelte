@@ -136,6 +136,15 @@
 			toast(String((e as Error).message), 'bad');
 		}
 	}
+	async function setAiParallel(requests: number, input: HTMLSelectElement) {
+		try {
+			await hubPost({ action: 'set-ai-parallel', requests });
+			toast(requests > 1 ? `Chapter jobs keep ${requests} AI requests in flight` : 'Chapter jobs send one AI request at a time');
+		} catch (e) {
+			input.value = String(data.aiParallel?.requests ?? 1);
+			toast(String((e as Error).message), 'bad');
+		}
+	}
 	async function setDeviceDisabled(device: (typeof devices)[number], disabled: boolean, input: HTMLInputElement) {
 		try {
 			await hubPost({ action: 'set-device-disabled', pdev: device.pdev, disabled });
@@ -442,6 +451,17 @@
 				{data.gpuMode?.komatose ? 'Komatose owns the GPUs' : 'Leave the host layout alone'}
 			</label>
 			{#if data.gpuMode?.source === 'env'}<div class="muted small">Pinned by <code>SCAN_GPU_MODE</code> in the environment.</div>{/if}
+		</div>
+		<div class="card" style="margin-top:.75rem">
+			<div class="spread"><h3 style="font-size:1rem;margin:0">Parallel AI requests</h3><span class="chip {(data.aiParallel?.requests ?? 1) > 1 ? 'ok' : 'muted'}">{data.aiParallel?.requests ?? 1}</span></div>
+			<p class="muted small">How many requests Transcribe and Translate keep in flight. Above 1, Transcribe detects the next page while the current one is read, and regions on a page are read and translated side by side. The local translation model restarts with that many slots sharing one KV cache, so it needs little extra memory; local OCR readers still take one crop at a time.</p>
+			<label class="field">
+				<span>Requests at once</span>
+				<select value={String(data.aiParallel?.requests ?? 1)} disabled={data.aiParallel?.pinned} onchange={(e) => void setAiParallel(Number(e.currentTarget.value), e.currentTarget)}>
+					{#each Array.from({ length: data.aiParallel?.max ?? 8 }, (_, i) => i + 1) as n (n)}<option value={String(n)}>{n === 1 ? '1 — one at a time' : String(n)}</option>{/each}
+				</select>
+			</label>
+			{#if data.aiParallel?.pinned}<div class="muted small">Pinned by <code>SCAN_AI_PARALLEL</code> in the environment.</div>{/if}
 		</div>
 		<div class="card" style="margin-top:.75rem">
 			<div class="spread"><h3 style="font-size:1rem;margin:0">Cleaning worker</h3>{#if workers.find((worker) => worker.id === 'cleaning-worker')?.running}<button class="btn ghost sm" disabled={!!busy} onclick={() => void stopGpu({ scope: 'one', kind: 'worker', id: 'cleaning-worker', pid: workers.find((worker) => worker.id === 'cleaning-worker')?.pid, label: 'Cleaning worker' })}>Stop</button>{/if}</div>

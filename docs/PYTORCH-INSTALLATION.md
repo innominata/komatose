@@ -53,7 +53,7 @@ Global uv/pip caches are shared and reported separately from installed environme
 Both RX 7900 XTX cards passed convolution, FFT, attention, NMS, and deformable-convolution checks with the split runtime. CPU 2.12.1 also passed these checks. The twelve retained PyTorch models were compared against the existing 2.12.0+ROCm7.1 environment on the licensed Black Jack fixture:
 
 - LaMa Manga, Big LaMa, and AOT used the production cleaner, rectangular and square inputs, exact preservation outside the approved mask, and masked error limits of mean 1/max 8 byte values.
-- SAM used the production geometry operation; Koharu used publisher preprocessing and production BF16 inference, with mask IoU ≥0.99.
+- SAM used the production geometry operation; SAM-TS-L used publisher preprocessing and production BF16 inference, with mask IoU ≥0.99.
 - RT-DETR and CTD used production detection and postprocessing. COO compared both its region output and raw probability map; this particular fixture produced no COO regions.
 - Hayai OCR, Manga OCR, Opus-MT, and Imsbee ran complete generation with production settings. Generated text matched exactly.
 

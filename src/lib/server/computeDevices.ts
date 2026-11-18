@@ -24,6 +24,7 @@ import { llamaServerBin, llamaServerEnv, sdServerBin } from './gpuMode';
 import { nvtopUsage, readRenderNodes, vulkanNamesByPdev } from './nvtopSnapshot';
 import { ROOT } from './paths';
 import { ramResidents } from './ramResidents';
+import { canonicalModelId } from '../samTsL';
 
 /**
  * What this machine can run models on, and which device each model should use.
@@ -409,7 +410,7 @@ function readPrefsFile(): DevicePrefsFile {
 	try {
 		const parsed = JSON.parse(readFileSync(prefsPath(), 'utf8')) as DevicePrefsFile;
 		return parsed && typeof parsed === 'object'
-			? { version: 1, devices: parsed.devices || {}, torchVariant: parsed.torchVariant, disabled: parsed.disabled }
+			? { version: 1, devices: Object.fromEntries(Object.entries(parsed.devices || {}).map(([id, device]) => [canonicalModelId(id), device])), torchVariant: parsed.torchVariant, disabled: parsed.disabled }
 			: { version: 1, devices: {} };
 	} catch {
 		return { version: 1, devices: {} };

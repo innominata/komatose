@@ -49,7 +49,7 @@ are rejected to keep that work intact. Undo restores the original pages and work
 PaddleOCR-VL-1.6. Matching readings fill the source; disagreements keep both
 readings as suggestions for review. **Translate** then drafts English with the
 selected translation model, using scene notes, the glossary, and earlier lines
-as context. The detector (here RT-DETR + Koharu at 0.20 confidence) and the
+as context. The detector (here RT-DETR + SAM-TS-L at 0.20 confidence) and the
 translation model are chips on the stage bar.
 
 ![Translate](docs/images/04-translate.png)
@@ -84,7 +84,7 @@ council in **Council settings…** or add another translator for the session.
 ### Clean
 
 Four numbered stages — Mask, Remove, Touch up, Approve. Detect lettering with
-Comic Text Detector or Koharu, brush or grow the mask, then remove it with
+Comic Text Detector or SAM-TS-L, brush or grow the mask, then remove it with
 LaMa Manga, Big-LaMa, AOT, Telea, flat fill, clone/patch, or an image editor
 (Qwen-Image-Edit 2511, Codex). Every pass is undoable and the raw page never
 changes.
@@ -145,8 +145,8 @@ buttons and the per-job default.
 
 **Benchmark** — scores models against a hand-checked gold standard on the
 bundled test pages. Choose **Japanese · Manga** or **Korean · Manhwa** in the
-dataset selector. The Korean set contains eight AI-generated pages from
-*ManhwaFixture*, with visually checked Korean, natural English and literal text
+dataset selector. The Korean set contains twelve AI-generated pages from
+*ManhwaFixture*, spanning school life, fighting, dungeon action and horror, with visually checked Korean, natural English and literal text
 references ([annotation notes](fixtures/manhwa-pages/README.md)). Dataset results
 are saved separately. The Translation view runs one request per page per model
 and reports chrF against the official and literal references, the share of key
@@ -227,11 +227,11 @@ and is gitignored. Back the two up together. `SCAN_DATA_DIR` and
 
 | Job | Default or choices |
 | --- | --- |
-| Detect text | RT-DETR (default), Comic Text Detector, PaddleOCR lines, heuristic bubbles; optional COO for SFX and Koharu for missed lettering |
+| Detect text | RT-DETR (default), Comic Text Detector, PaddleOCR lines, heuristic bubbles; optional COO for SFX and SAM-TS-L for missed lettering |
 | Transcribe | Hayai OCR v2 + PaddleOCR-VL-1.6 (CPU); Qwen3-VL and other vision models for AI Review |
 | Translate | Set per machine in **Jobs & defaults** (CAT-Translate 7B on the screenshot install); CAT-Translate 7B, Hy-MT2 (1.8B Manga v5, 7B), TranslateGemma, Shisa v2.1, Sugoi v4, Opus-MT Ja→En, Imsbee Ko→En, remote OpenAI-compatible APIs, Grok / Codex / Cursor |
 | Scene notes, AI review, proofread | Any image-capable chat model |
-| Text masks | Comic Text Detector, Koharu |
+| Text masks | Comic Text Detector, SAM-TS-L |
 | Clean artwork | LaMa Manga, Big-LaMa, AOT, Qwen-Image-Edit 2511, Codex reconstruction |
 
 Models are chosen per series under **Settings → AI models** and can be saved as
@@ -300,7 +300,7 @@ Paid model, GPU, and Python worker checks stay on their own scripts
 | [WORKFLOW.md](docs/WORKFLOW.md) | Every step, region AI, layout/PSD contract, local workers, API contracts, validation |
 | [FRESH_INSTALL.md](docs/FRESH_INSTALL.md) | Smallest working install and the Admin → Models pages |
 | [LOCAL_OCR_REVIEW.md](docs/LOCAL_OCR_REVIEW.md) | OCR models, council review, page clipboard |
-| [TEXT_DETECTION.md](docs/TEXT_DETECTION.md) | Detector backends, COO, Koharu, benchmarks |
+| [TEXT_DETECTION.md](docs/TEXT_DETECTION.md) | Detector backends, COO, SAM-TS-L, benchmarks |
 | [TRANSLATION_MODELS.md](docs/TRANSLATION_MODELS.md) | Specialist translators and installers |
 | [LETTERING.md](docs/LETTERING.md) | Detection and lettering-mask details |
 | [MANAGED_MODELS.md](docs/MANAGED_MODELS.md) · [MODEL_REGISTRY.md](docs/MODEL_REGISTRY.md) · [MODEL_PACKAGES.md](docs/MODEL_PACKAGES.md) | Local model lifecycle, registry, moving setups |

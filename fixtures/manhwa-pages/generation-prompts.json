@@ -1,0 +1,19 @@
+{
+  "tool": "Built-in image_gen",
+  "date": "2026-11-17",
+  "pages": [
+    {
+      "id": "009",
+      "prompt": "Use case: illustration-story\nAsset type: synthetic Korean manhwa OCR benchmark page, portrait 1024x1536.\nCreate a polished full-color Korean action webtoon page, three stacked panels with narrow white gutters. Original adult characters, gritty rain-soaked rooftop martial-arts fight at night. Strong foreshortening, diagonal movement, wet ink texture, impact lines. All text is Korean, clearly drawn but varied size and integrated into artwork. No title, logos, signatures, extra text or pseudo-lettering.\nTop panel: adult woman in black fighting jacket ducks a kick from an adult masked assailant, blue rainy skyline. At upper left a white oval dialogue balloon containing exactly two lines \"뒤로 물러서!\" and below \"놈의 손을 봐.\" At upper right small borderless white whispered lettering \"칼이 있어.\"\nMiddle panel: dynamic close shot of deflected blade with sparks, large diagonal brush sound effect across center-left exactly \"카앙!\" in pale yellow, dark outline. At right jagged white shout balloon exactly \"지금이야!\"\nBottom panel: woman sweeping assailant's legs on wet rooftop, dramatic perspective. Large red angular sound effect at upper left exactly \"콰직\". At bottom right white dialogue balloon exactly two lines \"끝난 줄 알았나?\" and \"아직 멀었어.\"\nMake Korean lettering accurate and legible, slant the sound effects ~20 degrees, keep the dialogue horizontally typeset. Non-graphic action, no gore. Page should be a real comic scene, not a typography sheet."
+    },
+    {
+      "id": "010"
+    },
+    {
+      "id": "011"
+    },
+    {
+      "id": "012"
+    }
+  ]
+}

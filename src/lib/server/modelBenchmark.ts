@@ -58,8 +58,8 @@ import { withAssistantHttp } from './openaiHttp';
 import { chatCompletions, extractJsonObject, parseReadPayload, readBubble, translateScript, type DetectedBox } from './llm';
 import { ROOT } from './paths';
 import {
-	koharuInstalled,
-	parseKoharuRegions,
+	samTsLInstalled,
+	parseSamTsLRegions,
 	parseSfxRegions,
 	regionsFromDetection,
 	composeDetections,
@@ -236,7 +236,7 @@ function cooInstalled() {
 
 function partMissing(part: DetectorPart): string | undefined {
 	if (part === 'coo' && !cooInstalled()) return 'COO DBNet++ is not installed';
-	if (part === 'koharu' && !koharuInstalled()) return 'Koharu SAM-TS-L is not installed';
+	if (part === 'sam-ts-l' && !samTsLInstalled()) return 'SAM-TS-L is not installed';
 }
 
 export function listDetectorSetups() {
@@ -254,7 +254,7 @@ export function chapterSetupId(): string {
 	return detectorSetupId({
 		base: setup.base,
 		coo: setup.coo && available.coo.installed,
-		koharu: setup.koharu && available.koharu.installed,
+		samTsL: setup.samTsL && available['sam-ts-l'].installed,
 	});
 }
 
@@ -307,13 +307,13 @@ async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: stri
 		const found = await localOperation({ cmd: 'detect-sfx', path, confidence: envNumber('SCAN_COO_CONF') ?? 0.6 }, abort);
 		return { regions: parseSfxRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1 };
 	}
-	if (part === 'koharu') {
-		const dir = await mkdtemp(join(tmpdir(), 'scan-bench-koharu-'));
+	if (part === 'sam-ts-l') {
+		const dir = await mkdtemp(join(tmpdir(), 'scan-bench-sam-ts-l-'));
 		try {
 			const out = join(dir, 'mask.png');
 			const found = await localOperation({ cmd: 'detect-text', path, out, maskExpansion: 3 }, abort);
 			const mask = existsSync(out) ? await readFile(out) : undefined;
-			return { regions: parseKoharuRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1, mask };
+			return { regions: parseSamTsLRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1, mask };
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
@@ -329,7 +329,7 @@ async function defaultDetectPart(part: DetectorPart, _page: GoldPage, path: stri
 	});
 }
 
-/** Same merge as detectRegions: every part's boxes are cross-checked, then COO and Koharu add their evidence. */
+/** Same merge as detectRegions: every part's boxes are cross-checked, then COO and SAM-TS-L add their evidence. */
 export function composeSetup(setup: DetectorSetup, outputs: Map<DetectorPart, PartOutput>, width: number, height: number): DetectedRegion[] {
 	const heuristic = outputs.get('heuristic');
 	if (setup.parts.includes('heuristic')) return heuristic ? regionsFromDetection(heuristic.regions, width, height) : [];
@@ -560,9 +560,9 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 		const scratch = await mkdtemp(join(tmpdir(), 'scan-bench-'));
 		try {
 			const signal = abort.signal;
-			/** Per page: the regions every detector setup produced, and Koharu's mask when it ran. */
+			/** Per page: the regions every detector setup produced, and SAM-TS-L's mask when it ran. */
 			const detected = new Map<string, Map<string, { regions: DetectedRegion[]; error?: string }>>();
-			const koharuMasks = new Map<string, Buffer>();
+			const samTsLMasks = new Map<string, Buffer>();
 			const raws = new Map<string, Buffer>();
 			for (const page of pages) {
 				signal.throwIfAborted();
@@ -579,7 +579,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 					try {
 						const out = await detectPart(part, page, path, signal, dataset.lang);
 						outputs.set(part, { ...out, ms: Date.now() - started });
-						if (part === 'koharu' && out.mask) koharuMasks.set(page.id, out.mask);
+						if (part === 'sam-ts-l' && out.mask) samTsLMasks.set(page.id, out.mask);
 					} catch (error) {
 						if (signal.aborted) throw error;
 						failures.set(part, messageOf(error));
@@ -623,7 +623,7 @@ export function startOcrBenchmark(opts: StartOcrOpts): OcrRun {
 					const bubbles = found ? scoredOcrBubbles(page, found.regions.map((region) => region.ocr)) : goldBubbles(page);
 					const setup = DETECTOR_SETUPS.find((item) => item.id === source);
 					const mask = bubbles.length
-						? (setup?.parts.includes('koharu') && koharuMasks.get(page.id)) || await makeMask(raw, bubbles, signal)
+						? (setup?.parts.includes('sam-ts-l') && samTsLMasks.get(page.id)) || await makeMask(raw, bubbles, signal)
 						: undefined;
 					const images: Buffer[] = [];
 					for (const bubble of bubbles) images.push(await crop(raw, bubble, signal, mask));

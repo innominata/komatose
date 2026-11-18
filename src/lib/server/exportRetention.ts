@@ -10,6 +10,8 @@ export type ExportJobFields = {
   draft: boolean;
   quality: number;
   includeMetadata: boolean;
+  /** Censor boxes painted over the pages. One zip of each kind is kept per chapter. */
+  censored: boolean;
 };
 
 /** Fields the editor needs after the zip exists. The chapter snapshot stays in memory for this process only. */
@@ -18,12 +20,14 @@ export function exportJobPayload(input: {
   draft?: unknown;
   quality?: unknown;
   includeMetadata?: unknown;
+  censored?: unknown;
 }): ExportJobFields {
   return {
     format: typeof input.format === "string" && input.format ? input.format : "png",
     draft: !!input.draft,
     quality: Number.isInteger(input.quality) ? (input.quality as number) : 95,
     includeMetadata: input.includeMetadata === true,
+    censored: input.censored === true,
   };
 }
 
@@ -43,7 +47,7 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Keep one export job per chapter (the job just finished, or otherwise the newest).
+ * Keep one export job per chapter and censoring variant (the job just finished, or otherwise the newest).
  * Other finished exports are deleted. In-flight exports are left alone.
  * Returns zip hashes and job ids that were deleted.
  */
@@ -71,17 +75,21 @@ export function pruneExportJobs(
     progress: string;
     created_at: number;
   }[];
+  // A censored and an uncensored zip are separate deliverables; keep the newest of each.
+  const variant = (row: { episode_id: string; payload: string }) =>
+    `${row.episode_id}:${safeParse(row.payload).censored ? "censored" : "full"}`;
   const keep = new Map<string, string>();
   if (opts.keepJobId) {
     const pinned = rows.find((row) => row.id === opts.keepJobId);
-    if (pinned) keep.set(pinned.episode_id, pinned.id);
+    if (pinned) keep.set(variant(pinned), pinned.id);
   }
   const drop: string[] = [];
   const hashes: string[] = [];
   const slim = db.prepare("UPDATE workflow_jobs SET payload=? WHERE id=?");
   for (const row of rows) {
-    if (!keep.has(row.episode_id)) keep.set(row.episode_id, row.id);
-    if (row.id === keep.get(row.episode_id)) {
+    const key = variant(row);
+    if (!keep.has(key)) keep.set(key, row.id);
+    if (row.id === keep.get(key)) {
       slim.run(JSON.stringify(exportJobPayload(safeParse(row.payload))), row.id);
       continue;
     }

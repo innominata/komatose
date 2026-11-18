@@ -6,7 +6,7 @@
   import type { RegionAiSettings as RegionAiSettingsData } from "$lib/regionAi";
   import type { TaskEngine } from "$lib/aiTasks";
   import type { GlossaryTerm, TranslateEngineInfo } from "$lib/types";
-  import { proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
+  import { proofreadingGate, proofreadingOperation, providerRunGate } from "$lib/providerCatalog";
   import { textEngines } from "$lib/types";
   import type { Preferences } from "$lib/workflow";
   import {
@@ -123,7 +123,7 @@
   const pendingMine = $derived((glossaryMine?.terms ?? []).filter((t) => t.state === "pending"));
   const translateGate = $derived(providerRunGate(translationModel?.engine, "translate", engines));
   const proofreadOperation = $derived(proofreadingOperation(preferences.regionAi?.proofread?.engine, engines));
-  const proofreadGate = $derived(providerRunGate(preferences.regionAi?.proofread?.engine, proofreadOperation, engines));
+  const proofreadGate = $derived(proofreadingGate(preferences.regionAi?.proofread?.engine, engines));
   const glossaryGate = $derived(providerRunGate(glossaryModel?.engine, "advisory", engines));
   const defaultSetup = $derived(parseDetectorSetup(detectorDefaults?.setup));
   /** A chapter saved before setups shows the setup its old detector still runs. */
@@ -136,7 +136,7 @@
     const missing = [
       !available[setup.base].installed && setup.base,
       setup.coo && !available.coo.installed && "COO",
-      setup.koharu && !available.koharu.installed && "Koharu",
+      setup.samTsL && !available['sam-ts-l'].installed && "SAM-TS-L",
     ].filter(Boolean);
     return missing.length ? ` (needs ${missing.join(", ")})` : "";
   }
@@ -273,7 +273,7 @@
   </p>
   <p>
     Region detection uses the text detector above, not the translation LLM:
-    a box detector, optionally with COO for sound effects and Koharu for
+    a box detector, optionally with COO for sound effects and SAM-TS-L for
     lettering the boxes missed. Leave it on Default to follow Admin → Models →
     Jobs &amp; defaults. Raise confidence if flames, empty space, or other art
     are boxed as text — manhwa often wants 0.35–0.45. An empty confidence uses

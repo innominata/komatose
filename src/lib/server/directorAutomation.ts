@@ -18,6 +18,8 @@ import {
   type RegionData,
   type Preferences,
   type TextStyle,
+  MAX_LEADING,
+  MIN_LEADING,
   pageArtwork,
   punctuationOnlyText,
 } from "../workflow";
@@ -1726,7 +1728,7 @@ async function repairLettering(
               enum: [null, ...fonts.map((font) => font.id)],
             },
             size: number(1, 300),
-            leading: number(1, 3),
+            leading: number(MIN_LEADING, MAX_LEADING),
             padding: number(0, 100),
             align: {
               type: ["string", "null"],

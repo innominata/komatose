@@ -1,4 +1,5 @@
 import { charRunFonts } from "../charStyles";
+import { censorDocId, type CensorData } from "../censor";
 import { deleteRegions, deletedRegionPages, lastDeletion } from "./regionTrash";
 import { maskInputs, currentMaskDiagnostics } from "../maskDiagnostics";
 import { sfxEnglishChoices } from "../sfx";
@@ -41,7 +42,7 @@ import {
   type TextStyle,
 } from "../workflow";
 import { glossaryMismatches } from "../glossary";
-import { activeRegionKinds, isBuiltinRegionKind, normalizeRegionKinds, regionKindFromLabel, type RegionKind } from "../regionCatalog";
+import { activeRegionKinds, isBuiltinRegionKind, normalizeRegionKinds, regionKindFromLabel, regionKindLabel, type RegionKind } from "../regionCatalog";
 import { LINE_TYPES } from "../types";
 import { isCreditsPage } from "../credits";
 import type { Episode, Series, ImageRow, LineRow } from "../types";
@@ -356,7 +357,7 @@ export function restyleForType(
 }
 
 /** Keys a complete saved style may leave out: absent means "none" (no layer style, not stacked). */
-const OPTIONAL_STYLE_KEYS = new Set<string>(["effects", "stacked"]);
+const OPTIONAL_STYLE_KEYS = new Set<string>(["effects", "stacked", "stackSpacing"]);
 
 function styleIsOwned(style: Partial<TextStyle> | undefined) {
   return !!style && STYLE_KEYS.every((key) => OPTIONAL_STYLE_KEYS.has(key) || style[key] !== undefined);
@@ -693,6 +694,7 @@ export function readiness(
       message: "Renumber pages in chapter order",
     });
   const prefs = preferences(episode.id, series.id);
+  const kinds = activeRegionKinds(prefs.regionKinds);
   const comments = sqlite
     .prepare(
       `SELECT comments.id, comments.line_id AS lineId, comments.body, comments.correction
@@ -777,6 +779,19 @@ export function readiness(
           );
         if (layout.overflow)
           add("overflow", "Text does not fit at minimum size");
+        else if (
+          layout.size < (layout.style?.size ?? layout.size) - 0.01 &&
+          !/sfx/i.test(regionKindLabel(line.lineType, kinds))
+        )
+          issues.push({
+            code: "shrunk",
+            severity: "warning",
+            imageId: img.id,
+            lineId: line.id,
+            pageLabel: pageLabel(img),
+            regionLabel: regionLabel(img, line, live),
+            message: "Text was shrunk below its set size to fit",
+          });
         if (layout.missingGlyphs.length)
           add("glyphs", `Font lacks: ${layout.missingGlyphs.join(" ")}`);
       }
@@ -848,6 +863,10 @@ export async function workflowState(series: Series, episode: Episode) {
     ),
     regions: Object.fromEntries(
       lns.map((l) => [l.id, getDoc<RegionData>(`region:${l.id}`, {})]),
+    ),
+    /** Black boxes burned into proofreader images and censored exports. */
+    censors: Object.fromEntries(
+      imgs.map((i) => [i.id, getDoc<CensorData>(censorDocId(i.id), {})]),
     ),
     fonts: listFonts(series.id),
     suggestions: sqlite

@@ -41,7 +41,7 @@
       lama?: boolean;
       lamaDevice?: string | null;
       sam?: boolean;
-      koharu?: boolean;
+      samTsL?: boolean;
       codex?: { available?: boolean; reason?: string };
       imageEdit?: Record<string, { available?: boolean; reason?: string }>;
       devices?: { name: string; backend: string }[];
@@ -96,8 +96,8 @@
     {#if pageDoc?.data.maskDiagnostics?.engine}
       <p class="muted">Last detection: {pageDoc.data.maskDiagnostics.engine} ({pageDoc.data.maskDiagnostics.version}) · {pageDoc.data.maskDiagnostics.backend}</p>
     {/if}
-    {#if maskEngine === "koharu" && backend && !backend.koharu}
-      <p class="muted">Koharu is not installed. Run scripts/install-koharu.py or choose CTD.</p>
+    {#if maskEngine === "sam-ts-l" && backend && !backend.samTsL}
+      <p class="muted">SAM-TS-L is not installed. Run scripts/install-sam-ts-l.py or choose CTD.</p>
     {/if}
     {#if pageDoc?.data.maskDiagnostics}
       {#each pageDoc.data.maskDiagnostics.entries.filter((entry) => entry.reasons.length) as entry}

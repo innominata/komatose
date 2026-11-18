@@ -14,7 +14,10 @@ and used in the README and docs.
 The eight AI-generated Korean images in `fixtures/manhwa-pages` were supplied
 by the project owner and explicitly approved for bundling. Their gold annotations,
 manifest, and app screenshots showing only these pages may also be committed and
-used in documentation. See `fixtures/manhwa-pages/README.md` for provenance.
+used in documentation. Four additional action/horror images (009–012) were
+generated at the project owner’s request for this benchmark and may also be
+bundled with their annotations and prompts. See `fixtures/manhwa-pages/README.md`
+for provenance.
 
 Any other source pages, evaluation crops, or scratch screenshots (see the
 private paths in `.gitignore`) are still private working material and must not

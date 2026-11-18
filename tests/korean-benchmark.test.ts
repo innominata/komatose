@@ -29,11 +29,11 @@ const general = (id: string, lang?: 'korean' | 'japanese'): ModelRow => ({
 const reader = general('fixture-ko-reader', 'korean');
 const translator = general('fixture-ko-translator', 'korean');
 
-test('all eight bundled Korean pages have checked, valid gold and immutable source hashes', async () => {
+test('all twelve bundled Korean pages have checked, valid gold and immutable source hashes', async () => {
   assert.equal(ko.lang, 'korean');
   assert.equal(ko.referenceLabel, 'reference');
   assert.deepEqual(ko.pages.map(page => page.id), manifest.map(page => page.id));
-  assert.equal(ko.pages.length, 8);
+  assert.equal(ko.pages.length, 12);
   const ids = new Set<string>();
   for (const page of ko.pages) {
     const bytes = await readFile(page.file);
@@ -77,7 +77,7 @@ test('Korean scoring handles Hangul normalization, standalone jamo, SFX and punc
     const detection = totalDetection([scoreDetection(page, page.lines.flatMap(line => line.boxes))]);
     assert.equal(detection.recall, 1);
     assert.equal(detection.precision, 1);
-    assert.equal(scoreDetection(page, [[0, 1600, 10, 1610]]).falseAlarms, 1);
+    assert.equal(scoreDetection(page, [[0, page.height - 10, 10, page.height]]).falseAlarms, 1);
   }
   const jamo: GoldPage = { ...ko.pages[0], lines: [{ id: 'jamo', kind: 'sfx', source: 'ㅋㅋ ㅠㅠ', boxes: [[0, 0, 100, 100]] }] };
   assert.equal(totalOcr([scoreOcrPage(jamo, 'ㅋㅋ\nㅠㅠ')]).other, 1);
@@ -133,8 +133,8 @@ test('legacy Japanese results load without leaking into Korean or changing the o
   assert.equal('ja' in loaded.models[0].pages[0].lines[0], false);
   assert.equal(server.listBenchmarkStatus(ko.id).runs.translation, null);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), legacy);
-  const mismatched = join(dir, 'model-benchmark-manhwa-ko-v1-translation.json');
-  await writeFile(mismatched, JSON.stringify({ ...legacy, dataset: ko.id, datasetVersion: 2 }));
+  const mismatched = join(dir, `model-benchmark-manhwa-ko-v${ko.version}-translation.json`);
+  await writeFile(mismatched, JSON.stringify({ ...legacy, dataset: ko.id, datasetVersion: ko.version + 1 }));
   assert.equal(server.listBenchmarkStatus(ko.id).runs.translation, null);
   await rm(mismatched);
 });
@@ -208,9 +208,9 @@ test('dataset histories remain separate through active runs, reruns and cancella
   assert.equal(cancelled.state, 'cancelled');
   assert.equal(cancelled.models.find(model => model.id === translator.id)!.totals.official, 1);
   assert.ok(cancelled.models.some(model => model.id === other.id));
-  const saved = JSON.parse(await readFile(join(scratch, 'data/run/model-benchmark-manhwa-ko-v1-translation.json'), 'utf8'));
+  const saved = JSON.parse(await readFile(join(scratch, `data/run/model-benchmark-manhwa-ko-v${ko.version}-translation.json`), 'utf8'));
   assert.equal(saved.dataset, ko.id);
-  assert.equal(saved.datasetVersion, 1);
+  assert.equal(saved.datasetVersion, ko.version);
   assert.equal(JSON.parse(await readFile(join(scratch, 'data/run/model-benchmark-translation.json'), 'utf8')).id, 'legacy');
 });
 
@@ -227,7 +227,7 @@ test('page images use the selected dataset and text-only English returns 404', a
 test('detection evaluator validates cache dataset/version and accepts both dataset flag forms', async () => {
   const cachePath = join(scratch, 'detection-cache.json');
   const env = { ...process.env, DETECT_EVAL_CACHE: cachePath };
-  await writeFile(cachePath, JSON.stringify({ dataset: ko.id, datasetVersion: 1, pages: {} }));
+  await writeFile(cachePath, JSON.stringify({ dataset: ko.id, datasetVersion: ko.version, pages: {} }));
   for (const args of [['--dataset', ko.id], [`--dataset=${ko.id}`]]) {
     const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/eval-detection.ts', ...args, 'rtdetr'], { env, encoding: 'utf8' });
     assert.equal(child.status, 0, child.stderr);

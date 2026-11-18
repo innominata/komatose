@@ -214,6 +214,11 @@
 				</form>
 			{:else}<div>{data.pageMode === 'strip' ? 'Strip · webtoon' : 'Pages · manga'}</div>{/if}
 		</div>
+		<section class="hud-card mb-3" aria-label="Text detection">
+			<div class="hud-kicker mb-2">Text detection</div>
+			<p class="small text-secondary mb-2">Which detectors the regions you delete or ignore came from, by score and kind, to tune detection for this series.</p>
+			<a class="btn-hud-ghost d-inline-block" href="/series/{data.series.id}/detection" data-find="detection-report-link">Detection report</a>
+		</section>
 		<div class="hud-card mb-3">
 			<div class="d-flex justify-content-between">
 				<div class="hud-kicker">General notes</div>

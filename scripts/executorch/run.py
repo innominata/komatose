@@ -55,9 +55,9 @@ def checkpoint_files(model_id):
         return [snapshot / name for name in filenames if (snapshot / name).is_file()]
     if model_id == 'coo':
         return [Path(os.environ.get('SCAN_COO_MODEL', ROOT / 'data/models/coo/dbnetpp-coo.pt'))]
-    if model_id == 'koharu':
-        import koharu_mask
-        return [koharu_mask.weights_path()]
+    if model_id == 'sam-ts-l':
+        import sam_ts_l_mask
+        return [sam_ts_l_mask.weights_path()]
     directory = model_directory(model_id)
     return sorted([*directory.glob('*.safetensors'), *directory.glob('*.bin'), *directory.glob('sentence-base/*.pt')])
 

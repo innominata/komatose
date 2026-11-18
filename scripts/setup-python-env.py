@@ -340,7 +340,9 @@ def load_configuration():
     names = {*ENV_VARIABLES.values(), 'SCAN_TORCH_INDEX', 'SCAN_TORCH_ARCHES', 'SCAN_TORCH_VARIANT',
              'SCAN_HIP_VISIBLE_DEVICES', 'SCAN_TRANSLATION_PYTHON', 'SCAN_REVIEW_MODELS_DIR', 'SCAN_TRANSLATION_MODELS_DIR',
              'SCAN_LAMA_CHECKPOINT', 'SCAN_SAM_CHECKPOINT', 'SCAN_COO_MODEL',
-             'SCAN_CTD_SOURCE_DIR', 'SCAN_KOHARU_WEIGHTS', 'SCAN_KOHARU_HISAM_ROOT',
+             'SCAN_CTD_SOURCE_DIR', 'SCAN_SAM_TS_L_DIR', 'SCAN_SAM_TS_L_WEIGHTS', 'SCAN_SAM_TS_L_HISAM_ROOT',
+             # Pre-rename spellings, still read as fallbacks.
+             'SCAN_KOHARU_DIR', 'SCAN_KOHARU_WEIGHTS', 'SCAN_KOHARU_HISAM_ROOT',
              'SCAN_TRANSLATION_OPUS_JAEN_CKPT', 'SCAN_TRANSLATION_KOEN_CKPT'}
     try:
         lines = (ROOT / '.env').read_text().splitlines()

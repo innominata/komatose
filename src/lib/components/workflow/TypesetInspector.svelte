@@ -1,6 +1,7 @@
 <script lang="ts">
   import { breakAtSpace, formatLettering, glossaryNames, sentenceCase } from "$lib/letteringBreaks";
   import "./studio-controls.css";
+  import ColorSwatch from "../ColorSwatch.svelte";
   import { type LineRow } from "$lib/types";
   import { builtinRegionKinds, regionKindOptions, type RegionKind } from "$lib/regionCatalog";
   import { groupFontsByCategory } from "$lib/fontCategories";
@@ -10,6 +11,8 @@
   import TextPathPanel from "./TextPathPanel.svelte";
   import { regionTextPaths } from "$lib/textPath";
   import {
+    MAX_LEADING,
+    MIN_LEADING,
     MIN_STYLE_SIZE,
     TEXT_WARP_STYLE_LABELS,
     TEXT_WARP_STYLES,
@@ -48,6 +51,7 @@
     onrender,
     onconfirmrender,
     onrectangle,
+    onsamplepattern,
     onfitbubble,
     onapprovegeometry,
     canSegmentBubble = false,
@@ -88,6 +92,8 @@
     onrender?:()=>void;
     onconfirmrender?:()=>void;
     onrectangle?: () => void;
+    /** Starts the Sample pattern tool for this region's Pattern Overlay. */
+    onsamplepattern?: () => void;
     onfitbubble?: () => void;
     onapprovegeometry?: () => void;
     canSegmentBubble?: boolean;
@@ -151,7 +157,14 @@
 
   const liveApply = throttle(() => void onapplystyle(), 1000);
 
+  // Automatic contrast picks both colours on every fit, so choosing either colour
+  // (or swapping them) turns it off rather than being overwritten.
+  function setColor(key: "fill" | "outline", value: string) {
+    regionStyle[key] = value;
+    regionStyle.autoContrast = false;
+  }
   function swapFillAndBorder() {
+    regionStyle.autoContrast = false;
     const fill = regionStyle.fill;
     const fillOpacity = regionStyle.fillOpacity;
     regionStyle.fill = regionStyle.outline;
@@ -280,10 +293,12 @@
                 step={k === "skewX" || k === "skewY" ? 1 : k === "tracking" ? 10 : ".25"}
                 min={k === "size" || k === "minSize"
                   ? MIN_STYLE_SIZE
-                  : k === "skewX" || k === "skewY"
-                    ? -75
-                    : undefined}
-                max={k === "skewX" || k === "skewY" ? 75 : undefined}
+                  : k === "leading"
+                    ? MIN_LEADING
+                    : k === "skewX" || k === "skewY"
+                      ? -75
+                      : undefined}
+                max={k === "skewX" || k === "skewY" ? 75 : k === "leading" ? MAX_LEADING : undefined}
                 bind:value={regionStyle[k as "size"]}
               /></label
             >{/each}<label
@@ -342,7 +357,16 @@
             ></label
           ><label class="check-label" title="Each character on its own line, stacked under the one before (a blank line between words). Photoshop gets the same line breaks."
             ><input type="checkbox" data-find="stacked-text" bind:checked={regionStyle.stacked} /> Stack letters vertically</label
-          ><label
+          >{#if regionStyle.stacked}<label title="Space between the stacked letters, in thousandths of an em. Negative pulls them closer together; 0 is one line apart."
+            >Stack spacing (‰ em)<input
+              type="number"
+              data-find="stack-spacing"
+              step="25"
+              min="-900"
+              max="2000"
+              bind:value={() => regionStyle.stackSpacing ?? 0, (v) => (regionStyle.stackSpacing = Number.isFinite(v) ? v : 0)}
+            /></label
+          >{/if}<label
             >Emphasis<select bind:value={regionStyle.emphasis}
               ><option>normal</option><option>bold</option><option>italic</option
               ></select
@@ -352,11 +376,11 @@
             black / white contrast</label
           ><div class="color-field"
             ><span>Fill</span><span class="color-row"
-              ><input
-                type="color"
+              ><ColorSwatch
                 aria-label="Fill color"
-                disabled={regionStyle.autoContrast !== false}
-                bind:value={regionStyle.fill}
+                value={regionStyle.fill}
+                oninput={(v) => setColor("fill", v)}
+                onpick={() => void onapplystyle()}
               /></span
             ><label class="opacity"
               >Opacity<input
@@ -370,11 +394,10 @@
             ></div
           ><div class="color-field"
             ><span>Outline color</span><span class="color-row"
-              ><input type="color" aria-label="Outline color" bind:value={regionStyle.outline} /><button
+              ><ColorSwatch aria-label="Outline color" value={regionStyle.outline} oninput={(v) => setColor("outline", v)} onpick={() => void onapplystyle()} /><button
                 type="button"
                 aria-label="Swap fill and border"
                 title="Swap fill and border"
-                disabled={regionStyle.autoContrast !== false}
                 onclick={swapFillAndBorder}
                 ><i class="bi bi-arrow-left-right" aria-hidden="true"></i></button
               ></span
@@ -415,6 +438,7 @@
         regionStyle.effects = effects;
         void onapplystyle();
       }}
+      onsample={onsamplepattern}
     />
     {#if oncharruns}
       <CharacterStylePanel

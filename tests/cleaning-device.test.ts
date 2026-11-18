@@ -5,7 +5,7 @@ import { eligibleCleaningDevices, type BackendInfo } from '../src/lib/server/loc
 test('resident LaMa Manga remains on GPU when its weights reduce free VRAM', () => {
   const resident = { id: 'cuda:0', name: 'GPU', backend: 'ROCm', free: 1024 ** 3, total: 8 * 1024 ** 3 };
   const info: BackendInfo = { devices: [resident], errors: [], cpu: true, sam: true,
-    lama: true, koharu: true, lamaDevice: resident.id };
+    lama: true, samTsL: true, lamaDevice: resident.id };
   assert.deepEqual(eligibleCleaningDevices(info, 'lama'), [resident]);
   assert.deepEqual(eligibleCleaningDevices(info, 'auto'), [resident]);
   assert.deepEqual(eligibleCleaningDevices(info, 'aot'), []);
@@ -15,7 +15,7 @@ test('resident LaMa Manga remains on GPU when its weights reduce free VRAM', () 
 test('resident native LaMa Manga stays on its GPU when free VRAM drops', () => {
   const resident = { id: 'cuda:1', name: 'GPU', backend: 'ROCm', free: 1024 ** 3, total: 8 * 1024 ** 3 };
   const info: BackendInfo = { devices: [resident], errors: [], cpu: true, sam: true,
-    lama: true, koharu: false, lamaDevice: resident.id };
+    lama: true, samTsL: false, lamaDevice: resident.id };
   assert.deepEqual(eligibleCleaningDevices(info, 'lama'), [resident]);
   assert.deepEqual(eligibleCleaningDevices({ ...info, lamaDevice: null }, 'lama'), []);
 });

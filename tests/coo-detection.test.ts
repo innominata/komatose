@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseSfxRegions, regionsFromDetection, cooEnabled, composeDetections, parseKoharuRegions, jobStepMessage, koharuDetectionMode } from '../src/lib/server/detect';
+import { parseSfxRegions, regionsFromDetection, cooEnabled, composeDetections, parseSamTsLRegions, jobStepMessage, samTsLDetectionMode } from '../src/lib/server/detect';
 const shape = [{x:.2,y:.2},{x:.4,y:.2},{x:.35,y:.4},{x:.2,y:.35}];
 const sfx = {box:[100,100,200,200],score:.9,polygon:shape,backend:'coo-dbnetpp-v1'};
 test('COO contour survives conversion and suppresses a similar RT-DETR duplicate',()=>{
@@ -16,43 +16,43 @@ test('malformed COO output is rejected',()=>{
  for(const raw of [null,{},[{}],[{...sfx,score:NaN}],[{...sfx,box:[100,100,NaN,200]}],
   [{...sfx,polygon:[{x:2,y:0},...shape]}],[{...sfx,polygon:[]}]] ) assert.deepEqual(parseSfxRegions(raw),[]);
 });
-test('lettering only Koharu marks becomes its own region; a box detector keeps what it claims', () => {
+test('lettering only SAM-TS-L marks becomes its own region; a box detector keeps what it claims', () => {
  const found = composeDetections({
   rtdetr: [{ cls: 'text_bubble', score: 0.9, box: [10, 10, 80, 60] }, { cls: 'text_free', score: 0.9, box: [300, 300, 340, 380] }],
   ctd: [],
-  koharu: parseKoharuRegions([{ box: [10, 12, 78, 58], score: 0.8 }, { box: [200, 200, 260, 240], score: 0.8 }, { box: [1] }]),
+  'sam-ts-l': parseSamTsLRegions([{ box: [10, 12, 78, 58], score: 0.8 }, { box: [200, 200, 260, 240], score: 0.8 }, { box: [1] }]),
  }, 500, 500);
  // The block inside the bubble stays the box detector's region; the unclaimed one is adopted.
  assert.equal(found.length, 3);
  assert.equal(found.filter((row) => row.provenance?.backend === 'rtdetr').length, 2);
- const adopted = found.find((row) => row.provenance?.backend === 'koharu');
+ const adopted = found.find((row) => row.provenance?.backend === 'sam-ts-l');
  assert.ok(adopted, 'unclaimed lettering is its own region');
  assert.ok(adopted!.score < 0.9, 'an adopted region scores below a detector box');
 });
-test('with no box detector Koharu supplies the regions', () => {
- const found = composeDetections({ koharu: parseKoharuRegions([{ box: [200, 200, 260, 240], score: 0.8 }]) }, 500, 500);
+test('with no box detector SAM-TS-L supplies the regions', () => {
+ const found = composeDetections({ 'sam-ts-l': parseSamTsLRegions([{ box: [200, 200, 260, 240], score: 0.8 }]) }, 500, 500);
  assert.equal(found.length, 1);
- assert.equal(found[0].provenance?.backend, 'koharu');
+ assert.equal(found[0].provenance?.backend, 'sam-ts-l');
 });
 test('job status names the page, step, and model', () => {
-  assert.equal(jobStepMessage(2, 8, 'Detecting text regions', 'Koharu SAM-TS-L'),
-    'Page 2/8 · Detecting text regions · Koharu SAM-TS-L');
+  assert.equal(jobStepMessage(2, 8, 'Detecting text regions', 'SAM-TS-L'),
+    'Page 2/8 · Detecting text regions · SAM-TS-L');
 });
-test('Koharu detection follows the mask engine unless overridden', () => {
-  const previous = { detect: process.env.SCAN_KOHARU_DETECT, mask: process.env.SCAN_MASK_ENGINE };
+test('SAM-TS-L detection follows the mask engine unless overridden', () => {
+  const previous = { detect: process.env.SCAN_SAM_TS_L_DETECT, mask: process.env.SCAN_MASK_ENGINE };
   try {
-    delete process.env.SCAN_KOHARU_DETECT;
+    delete process.env.SCAN_SAM_TS_L_DETECT;
     delete process.env.SCAN_MASK_ENGINE;
-    assert.equal(koharuDetectionMode(), 'auto');
+    assert.equal(samTsLDetectionMode(), 'auto');
     process.env.SCAN_MASK_ENGINE = 'ctd';
-    assert.equal(koharuDetectionMode(), 'off');
-    process.env.SCAN_MASK_ENGINE = 'koharu';
-    assert.equal(koharuDetectionMode(), 'on');
-    process.env.SCAN_KOHARU_DETECT = '0';
-    assert.equal(koharuDetectionMode(), 'off');
+    assert.equal(samTsLDetectionMode(), 'off');
+    process.env.SCAN_MASK_ENGINE = 'sam-ts-l';
+    assert.equal(samTsLDetectionMode(), 'on');
+    process.env.SCAN_SAM_TS_L_DETECT = '0';
+    assert.equal(samTsLDetectionMode(), 'off');
   } finally {
     for (const [key, value] of Object.entries(previous)) {
-      const name = key === 'detect' ? 'SCAN_KOHARU_DETECT' : 'SCAN_MASK_ENGINE';
+      const name = key === 'detect' ? 'SCAN_SAM_TS_L_DETECT' : 'SCAN_MASK_ENGINE';
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }

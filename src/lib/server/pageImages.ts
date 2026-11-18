@@ -5,6 +5,7 @@ import type { PageData, RegionData } from '../workflow';
 import { db, sqlite } from './db';
 import { images, lines } from './db/schema';
 import { renderPage, type ExportPage } from './finishedExport';
+import { applyCensors, pageCensors } from './censor';
 import { toImage, toLine } from './queries';
 import { readWorkingOrOrig } from './storage';
 import { effectiveDpi, preferences } from './workflowService';
@@ -37,8 +38,14 @@ export async function capturePageImages(series: Series, episode: Episode, imageI
     includeOverflow: true,
     ...(!page.source.prepared ? { base: raw } : {}),
   })).composite : undefined;
+  // Every model that reads these captures sees the censor boxes (raw and typeset alike).
+  const censors = pageCensors(imageId);
   const current = db.select().from(images).where(eq(images.id, imageId)).get();
   if (!current || current.updatedAt !== page.image.updatedAt)
     throw new WorkflowError('Page changed while capturing images. Try again.', 409);
-  return { raw, typeset: working, page, capturedAt: Date.now() };
+  return {
+    raw: await applyCensors(raw, censors),
+    typeset: working && await applyCensors(working, censors),
+    page, capturedAt: Date.now(),
+  };
 }

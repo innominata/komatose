@@ -175,6 +175,45 @@ client.exec(`CREATE TABLE IF NOT EXISTS deleted_regions (
   created_at INTEGER NOT NULL
 )`);
 client.exec('CREATE INDEX IF NOT EXISTS idx_deleted_regions_episode ON deleted_regions(episode_id, created_at)');
+// What text detection found, kept after the regions are edited or deleted, so a series can
+// see which detectors its false positives come from (see detectionLog.ts). Episodes and
+// pages are not foreign keys: a deleted page leaves its runs out of the report instead.
+client.exec(`CREATE TABLE IF NOT EXISTS detection_runs (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL,
+  image_id TEXT NOT NULL,
+  setup TEXT NOT NULL,
+  conf REAL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  outputs TEXT NOT NULL,
+  prior_lines TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL
+)`);
+client.exec('CREATE INDEX IF NOT EXISTS idx_detection_runs_series ON detection_runs(series_id, created_at)');
+client.exec('CREATE INDEX IF NOT EXISTS idx_detection_runs_image ON detection_runs(image_id, created_at)');
+client.exec(`CREATE TABLE IF NOT EXISTS detection_regions (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES detection_runs(id) ON DELETE CASCADE,
+  series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL,
+  image_id TEXT NOT NULL,
+  line_id TEXT,
+  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+  kind TEXT NOT NULL,
+  cls TEXT NOT NULL DEFAULT '',
+  score REAL NOT NULL,
+  sources TEXT NOT NULL DEFAULT '[]',
+  scores TEXT NOT NULL DEFAULT '{}',
+  outcome TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  removed_via TEXT,
+  removed_at INTEGER,
+  created_at INTEGER NOT NULL
+)`);
+client.exec('CREATE INDEX IF NOT EXISTS idx_detection_regions_series ON detection_regions(series_id)');
+client.exec('CREATE INDEX IF NOT EXISTS idx_detection_regions_line ON detection_regions(line_id)');
 
 if (!episodeCols.some((c) => c.name === 'glossary')) {
 	client.exec("ALTER TABLE episodes ADD COLUMN glossary TEXT NOT NULL DEFAULT '[]'");

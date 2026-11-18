@@ -26,6 +26,7 @@ import {
 	type TorchVariant,
 } from '$lib/server/computeDevices';
 import { komatoseGpuState, setKomatoseGpuEnabled } from '$lib/server/gpuMode';
+import { aiParallelState, setAiParallelRequests } from '$lib/server/aiParallel';
 import { restartWorkflowWorker, workflowResolved } from '$lib/server/localWorker';
 import {
 	environmentInstalled,
@@ -105,7 +106,9 @@ export const GET: RequestHandler = async ({ locals }) => {
 			devicePrefs: readDevicePrefs(),
 			/** Komatose owns the GPUs: the switch in Admin → Hardware & services. */
 			gpuMode: komatoseGpuState(),
-			/** What `auto` really means for Koharu, SAM, LaMa Manga and AOT right now. */
+			/** Requests a chapter job keeps in flight: Admin → Hardware & services. */
+			aiParallel: aiParallelState(),
+			/** What `auto` really means for SAM-TS-L, SAM, LaMa Manga and AOT right now. */
 			cleaningWorker: { choice: devicePref('cleaning-worker'), resolved: workflowResolved() },
 			catalogs,
 			rows: await Promise.all(listRegistryRows().map(async row => {
@@ -137,6 +140,7 @@ function deviceState() {
 	return {
 		devicePrefs: readDevicePrefs(),
 		gpuMode: komatoseGpuState(),
+		aiParallel: aiParallelState(),
 		cleaningWorker: { choice: devicePref('cleaning-worker'), resolved: workflowResolved() },
 	};
 }
@@ -146,7 +150,7 @@ function deviceState() {
  *   { action: 'set-device', id, choice }        auto | cpu | Vulkan1 | cuda:0 | …
  *   { action: 'set-gpu-mode', enabled }         Komatose owns the GPUs (Admin → Hardware)
  *   { action: 'set-default', job, rowId? }      per-job default; empty clears
- *   { action: 'set-detector', setup, conf? }   text detector setup id (ctd+koharu, …) and confidence
+ *   { action: 'set-detector', setup, conf? }   text detector setup id (ctd+sam-ts-l, …) and confidence
  *   { action: 'set-torch-variant', variant }    auto | cpu | cuda | rocm
  *   { action: 'refresh-hardware' }              force a fresh device probe
  *   { action: 'set-device-disabled', pdev, disabled }  turn a card off for every model
@@ -191,6 +195,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			// The resident cleaning worker was spawned under the old mode, so restart it.
 			// Review servers keep the environment they started with until restarted from this page.
 			restartWorkflowWorker();
+			return json({ ok: true, ...deviceState() });
+		}
+		if (action === 'set-ai-parallel') {
+			// The owned translation server restarts with the new slot count on its next request.
+			setAiParallelRequests(body.requests);
 			return json({ ok: true, ...deviceState() });
 		}
 		if (action === 'set-default') {

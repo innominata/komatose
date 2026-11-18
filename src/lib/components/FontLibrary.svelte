@@ -285,6 +285,23 @@
   }
 
   const current = $derived(inspecting ? (fonts.find((f) => f.id === inspecting!.id) ?? inspecting) : null);
+
+  // A sample uses its font (and so downloads it) only once its card scrolls
+  // near the screen: a library can hold hundreds of fonts.
+  let shownFonts = $state<Set<string>>(new Set());
+  function revealSample(node: HTMLElement, id: string) {
+    if (typeof IntersectionObserver === "undefined") {
+      shownFonts = new Set(shownFonts).add(id);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      shownFonts = new Set(shownFonts).add(id);
+      observer.disconnect();
+    }, { rootMargin: "200px" });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
 </script>
 
 <svelte:head>
@@ -383,8 +400,8 @@
       <div class="fl-grid">
         {#each group.fonts as font (font.id)}
           <article class="fl-card" class:selected={selected.includes(font.id) && editable(font)}>
-            <button type="button" class="fl-sample" title="Inspect glyphs" onclick={() => inspect(font)}>
-              <span style={`font-family:scan-${font.id};font-size:${sampleSize}px`}>{preview || font.familyName}</span>
+            <button type="button" class="fl-sample" title="Inspect glyphs" onclick={() => inspect(font)} use:revealSample={font.id}>
+              <span style={`${shownFonts.has(font.id) ? `font-family:scan-${font.id};` : ""}font-size:${sampleSize}px`}>{preview || font.familyName}</span>
             </button>
             <div class="fl-card-foot">
               {#if editable(font)}

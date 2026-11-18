@@ -15,7 +15,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS = {'workflow': ['lama-manga', 'aot', 'sam', 'koharu', 'rtdetr', 'ctd', 'coo'],
+MODELS = {'workflow': ['lama-manga', 'aot', 'sam', 'sam-ts-l', 'rtdetr', 'ctd', 'coo'],
           'review': ['hayai-ocr-v2', 'manga-ocr', 'opus-mt-ja-en', 'imsbee-ko-en-translator']}
 sys.path.insert(0, str(ROOT / 'ocr'))
 
@@ -27,9 +27,9 @@ def available(model_id):
     if model_id in ('opus-mt-ja-en', 'imsbee-ko-en-translator'):
         folder = Path(os.environ.get('SCAN_TRANSLATION_MODELS_DIR', ROOT / 'data/models/translation')) / model_id
         return (folder / ('sentence-base/best.pt' if model_id.startswith('imsbee') else 'pytorch_model.bin')).is_file()
-    if model_id == 'koharu':
-        import koharu_mask
-        return koharu_mask.installed()
+    if model_id == 'sam-ts-l':
+        import sam_ts_l_mask
+        return sam_ts_l_mask.installed()
     if model_id == 'coo':
         import coo
         return coo.model_path().is_file()
@@ -79,9 +79,9 @@ def probe(model_id, device):
         import workflow
         details = workflow.geometry(np.array(full)[:, :, ::-1].copy(), {
             'method': 'sam', 'device': device, 'box': [.34, .20, .18, .12], 'kind': 'bubble'})
-    elif model_id == 'koharu':
-        import koharu_mask
-        arrays['mask'] = koharu_mask.predict(np.array(full)[:, :, ::-1].copy(), device)
+    elif model_id == 'sam-ts-l':
+        import sam_ts_l_mask
+        arrays['mask'] = sam_ts_l_mask.predict(np.array(full)[:, :, ::-1].copy(), device)
     elif model_id in ('rtdetr', 'ctd'):
         import detect
         details['regions'] = detect.detect(np.array(full)[:, :, ::-1].copy(), backend=model_id,

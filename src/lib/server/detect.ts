@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { ROOT } from "./paths";
 import { automaticRegionPolygon } from "../regionGeometry";
-import type { Point } from "../workflow";
+import type { DetectionProvenance, Point } from "../workflow";
 import { cleaningDeviceLabel, localOperation } from "./localWorker";
 import {
   DETECTORS,
@@ -23,6 +23,7 @@ import {
 import { detectRegionsPy, parsePoly, type WorkerRegion } from "./ocr";
 import { fuseDetections, type DetectorSource } from "./detectFusion";
 import { clampDetectConf, type DetectorSetupConfig } from "../detectorSetup";
+import { isSamTsL, SAM_TS_L_NAME } from "../samTsL";
 
 export type { Detector };
 
@@ -46,7 +47,7 @@ export type DetectedRegion = {
   /** A thin black rectangular border frames this region (a caption box). */
   boxed?: boolean;
   geometryConfidence?: number;
-  provenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
+  provenance?: DetectionProvenance;
   bubble?: SpeechBubble;
 };
 
@@ -80,7 +81,7 @@ type Box = [number, number, number, number];
 
 type Candidate = {
   polygon?: Point[];
-  provenance?: { crop?: number[]; truncated?: boolean; backend?: string; sources?: string[] };
+  provenance?: DetectionProvenance;
   box: Box;
   kind: DetectedRegion["kind"];
   score: number;
@@ -193,10 +194,12 @@ export async function detectRegions(
     abort?: AbortSignal;
     onStep?: (update: DetectStep) => void;
     onTextMask?: (mask: Buffer, meta: TextMask) => void;
+    /** Each detector's raw output before fusion, for the series detection log. */
+    onOutputs?: (run: { setup: DetectorSetupConfig; conf?: number; width: number; height: number; outputs: Partial<Record<DetectorSource, WorkerRegion[]>> }) => void;
   } = {},
 ): Promise<DetectedRegion[]> {
   const base = opts.detector ?? parseDetector(undefined);
-  const setup = opts.setup ?? { base, coo: base !== "heuristic" && cooEnabled(), koharu: false };
+  const setup = opts.setup ?? { base, coo: base !== "heuristic" && cooEnabled(), samTsL: false };
   const detector = setup.base;
 
   // Detection and OCR must see the same working image, including page edits.
@@ -218,6 +221,7 @@ export async function detectRegions(
       detected = (await detectHeuristic(page.bytes)).filter(
         (region) => region.place.width >= minRegionPx(width, height) && region.place.height >= minRegionPx(width, height),
       );
+      opts.onOutputs?.({ setup, width, height, outputs: {} });
     } else {
       const conf = opts.conf ?? envNumber("SCAN_DETECT_CONF");
       const run = (backend: Detector, step: string, overrides: { conf?: number; supplement?: boolean } = {}) =>
@@ -268,29 +272,30 @@ export async function detectRegions(
           confidence: envNumber("SCAN_COO_CONF") ?? .6 }, opts.abort);
         outputs.coo = parseSfxRegions(sfx.regions);
       }
-      if (setup.koharu) {
+      if (setup.samTsL) {
         // Say where it really runs: the cleaner's device, not the GPU-mode flag.
-        const koharuDevice = cleaningDeviceLabel();
+        const samTsLDevice = cleaningDeviceLabel();
         opts.onStep?.({
           step: "Detecting text regions",
-          model: `${KOHARU_MODEL} · ${koharuDevice}`,
-          engine: "koharu",
+          model: `${SAM_TS_L_MODEL} · ${samTsLDevice}`,
+          engine: "sam-ts-l",
         });
-        const out = join(dir, "koharu-mask.png");
+        const out = join(dir, "sam-ts-l-mask.png");
         const found = await localOperation({
           cmd: "detect-text", path, out, maskExpansion: 3,
         }, opts.abort);
-        outputs.koharu = parseKoharuRegions(found.regions);
+        outputs['sam-ts-l'] = parseSamTsLRegions(found.regions);
         const mask = typeof found.mask === "string" && found.mask.includes(",")
           ? Buffer.from(found.mask.split(",")[1], "base64")
           : await readFile(out);
         opts.onTextMask?.(mask, {
-          engine: String(found.engine || "koharu"),
-          model: String(found.model || KOHARU_MODEL),
+          engine: String(found.engine || "sam-ts-l"),
+          model: String(found.model || SAM_TS_L_MODEL),
           backend: String(found.backend || ""),
         });
       }
       detected = composeDetections(outputs, size.width || width, size.height || height);
+      opts.onOutputs?.({ setup, conf, width: size.width || width, height: size.height || height, outputs });
     }
     if (opts.geometry && detected.length) {
       opts.onStep?.({ step: "Fitting bubble geometry", model: "OpenCV", engine: "opencv" });
@@ -361,6 +366,9 @@ export function regionsFromDetection(
           truncated: t.truncated,
           backend: t.backend,
           ...((t as { sources?: string[] }).sources?.length ? { sources: (t as { sources?: string[] }).sources } : {}),
+          score: Math.round(t.score * 1000) / 1000,
+          ...((t as { scores?: Record<string, number> }).scores ? { scores: (t as { scores?: Record<string, number> }).scores } : {}),
+          cls: t.cls,
         },
         // Only rtdetr separates in-bubble text from free-floating text;
         // `text` from the other backends carries no such claim.
@@ -471,7 +479,7 @@ export function cooEnabled(): boolean {
     join(ROOT, "data/models/coo/dbnetpp-coo.pt"));
 }
 
-export const KOHARU_MODEL = "Koharu SAM-TS-L";
+export const SAM_TS_L_MODEL = SAM_TS_L_NAME;
 export const CTD_MODEL = "Comic Text Detector";
 export const COO_MODEL = "COO DBNet++";
 const HI_SAM_REVISION = "69009434d4dba5541f228d8f5acb0754c333d417";
@@ -488,33 +496,51 @@ export function jobStepMessage(page: number, pages: number, step: string, model:
   return `${where}${step} · ${model}`;
 }
 
-export function koharuInstalled(): boolean {
-  const weights = process.env.SCAN_KOHARU_WEIGHTS ||
-    join(ROOT, "data/models/koharu-text-sam-ts-l/model.safetensors");
-  const source = process.env.SCAN_KOHARU_HISAM_ROOT ||
-    join(ROOT, `data/models/hi-sam-${HI_SAM_REVISION}`);
-  return existsSync(weights) && existsSync(join(source, "hi_sam/modeling/build.py"));
+/** A SAM-TS-L env var, falling back to its pre-rename `SCAN_KOHARU_*` spelling. */
+function samTsLEnv(name: "DETECT" | "DIR" | "WEIGHTS" | "HISAM_ROOT"): string | undefined {
+  return process.env[`SCAN_SAM_TS_L_${name}`] || process.env[`SCAN_KOHARU_${name}`] || undefined;
 }
 
-/** `off` skips Koharu. `on` requires it. `auto` uses it when the weights are installed. */
-export function koharuDetectionMode(): "off" | "on" | "auto" {
-  const flag = (process.env.SCAN_KOHARU_DETECT ?? "auto").toLowerCase();
+/** Installs from before the rename keep their weights in `data/models/koharu-text-sam-ts-l`. */
+const LEGACY_SAM_TS_L_DIR = "data/models/koharu-text-sam-ts-l";
+
+export function samTsLWeightsPath(): string {
+  const override = samTsLEnv("WEIGHTS");
+  if (override) return override;
+  const dir = samTsLEnv("DIR");
+  if (dir) return join(dir, "model.safetensors");
+  const current = join(ROOT, "data/models/sam-ts-l/model.safetensors");
+  const legacy = join(ROOT, LEGACY_SAM_TS_L_DIR, "model.safetensors");
+  return !existsSync(current) && existsSync(legacy) ? legacy : current;
+}
+
+export function samTsLHiSamRoot(): string {
+  return samTsLEnv("HISAM_ROOT") || join(ROOT, `data/models/hi-sam-${HI_SAM_REVISION}`);
+}
+
+export function samTsLInstalled(): boolean {
+  return existsSync(samTsLWeightsPath()) && existsSync(join(samTsLHiSamRoot(), "hi_sam/modeling/build.py"));
+}
+
+/** `off` skips SAM-TS-L. `on` requires it. `auto` uses it when the weights are installed. */
+export function samTsLDetectionMode(): "off" | "on" | "auto" {
+  const flag = (samTsLEnv("DETECT") ?? "auto").toLowerCase();
   if (["0", "off", "false"].includes(flag)) return "off";
-  if (["1", "on", "true", "koharu"].includes(flag)) return "on";
+  if (["1", "on", "true"].includes(flag) || isSamTsL(flag)) return "on";
   const mask = (process.env.SCAN_MASK_ENGINE ?? "auto").toLowerCase();
   if (["ctd", "comic-text-detector"].includes(mask)) return "off";
-  if (["koharu", "koharu-sam-ts-l", "sam-ts-l"].includes(mask)) return "on";
+  if (isSamTsL(mask)) return "on";
   return "auto";
 }
 
 export function maskModelName(engine?: string): string {
   const mode = String(engine || process.env.SCAN_MASK_ENGINE || "auto").toLowerCase();
   if (["ctd", "comic-text-detector"].includes(mode)) return CTD_MODEL;
-  if (["koharu", "koharu-sam-ts-l", "sam-ts-l"].includes(mode)) return KOHARU_MODEL;
-  return koharuInstalled() ? KOHARU_MODEL : CTD_MODEL;
+  if (isSamTsL(mode)) return SAM_TS_L_MODEL;
+  return samTsLInstalled() ? SAM_TS_L_MODEL : CTD_MODEL;
 }
 
-export function parseKoharuRegions(raw: unknown): WorkerRegion[] {
+export function parseSamTsLRegions(raw: unknown): WorkerRegion[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((region) => {
     if (!region || !Array.isArray(region.box) || region.box.length !== 4 ||
@@ -525,7 +551,7 @@ export function parseKoharuRegions(raw: unknown): WorkerRegion[] {
     const measure = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
     return [{
       cls: "text",
-      backend: "koharu",
+      backend: "sam-ts-l",
       score: Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0.8,
       box,
       fill: measure(region.fill),

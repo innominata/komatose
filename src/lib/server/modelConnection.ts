@@ -57,9 +57,10 @@ export function modelHttpConfig(
     managed: Boolean(managed),
   };
 }
-export async function probeModelConnection(
+/** Readiness from configuration alone: no request is sent to the model service. */
+export function modelConnectionConfigured(
   row: ModelRow,
-): Promise<{ available: boolean; reason?: string }> {
+): { available: boolean; reason?: string; cfg?: AssistantHttpConfig } {
   if (row.managedLaunch && !managedModelRunning(row.id))
     return {
       available: true,
@@ -75,6 +76,15 @@ export async function probeModelConnection(
     return { available: false, reason: "This model uses a specialist runtime" };
   if (cfg.requireApiKey && !cfg.apiKey)
     return { available: false, reason: `${cfg.apiKeyEnv} is not set` };
+  return { available: true, cfg };
+}
+
+export async function probeModelConnection(
+  row: ModelRow,
+): Promise<{ available: boolean; reason?: string }> {
+  const configured = modelConnectionConfigured(row);
+  const cfg = configured.cfg;
+  if (!cfg) return { available: configured.available, reason: configured.reason };
   try {
     const res = await fetch(`${cfg.baseUrl}/models`, {
       headers: { ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}), ...appAttributionHeaders(cfg.baseUrl) },

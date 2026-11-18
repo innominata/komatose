@@ -1,4 +1,5 @@
 import type { WorkerRegion } from "./ocr";
+import { isSamTsL } from "../samTsL";
 
 /**
  * Cross-checking text detectors.
@@ -6,13 +7,13 @@ import type { WorkerRegion } from "./ocr";
  * No single detector is right on every page: RT-DETR knows bubbles from free
  * lettering but invents low-confidence boxes on artwork, Comic Text Detector is
  * tight but misses stylised and tiny text, PaddleOCR only reports lines it can
- * actually read, COO finds sound effects, and Koharu segments lettering pixels.
+ * actually read, COO finds sound effects, and SAM-TS-L segments lettering pixels.
  * A box that several of them agree on is almost always text, so agreement is
  * what lets a weak single-detector box through. Everything else needs a score
  * high enough to stand alone.
  */
 
-export type DetectorSource = "rtdetr" | "ctd" | "paddle" | "coo" | "koharu";
+export type DetectorSource = "rtdetr" | "ctd" | "paddle" | "coo" | "sam-ts-l";
 
 type Box = [number, number, number, number];
 
@@ -59,12 +60,13 @@ export const FUSION = {
 };
 
 const TEXT = new Set(["text", "text_bubble", "text_free"]);
-const PRIORITY: DetectorSource[] = ["coo", "rtdetr", "ctd", "paddle", "koharu"];
+const PRIORITY: DetectorSource[] = ["coo", "rtdetr", "ctd", "paddle", "sam-ts-l"];
 
 export function detectorSource(region: Pick<WorkerRegion, "backend">): DetectorSource | undefined {
   const backend = String(region.backend ?? "").toLowerCase();
   if (backend.startsWith("coo")) return "coo";
-  if (backend === "rtdetr" || backend === "ctd" || backend === "paddle" || backend === "koharu") return backend;
+  if (backend === "rtdetr" || backend === "ctd" || backend === "paddle") return backend;
+  if (isSamTsL(backend)) return "sam-ts-l";
   return undefined;
 }
 
@@ -167,7 +169,7 @@ function standsAlone(c: Candidate) {
       return c.score >= (c.cls === "text_free" ? FUSION.alone.rtdetrFree : FUSION.alone.rtdetrBubble);
     case "ctd":
       return c.score >= FUSION.alone.ctd;
-    case "koharu":
+    case "sam-ts-l":
       // A pixel mask is evidence, not a region proposal.
       return false;
   }
@@ -176,6 +178,8 @@ function standsAlone(c: Candidate) {
 export type FusedRegion = WorkerRegion & {
   /** Detectors that reported this lettering, best first. */
   sources: DetectorSource[];
+  /** Each detector's best score for this lettering (members and second opinions). */
+  scores?: Partial<Record<DetectorSource, number>>;
 };
 
 /**
@@ -210,11 +214,11 @@ export function fuseDetections(
     [...(opts.ran ?? text.map((c) => c.source))].filter((s) => s === "rtdetr" || s === "ctd" || s === "paddle"),
   );
   const crossChecked = detectors.size > 1;
-  // With no box detector at all, Koharu's segments are the only proposals there are.
-  const koharuOnly = detectors.size === 0;
+  // With no box detector at all, SAM-TS-L's segments are the only proposals there are.
+  const samTsLOnly = detectors.size === 0;
   const backed = text
     .filter((c) => {
-      if (c.source === "koharu") return koharuOnly || text.some((d) => secondOpinion(c, d));
+      if (c.source === "sam-ts-l") return samTsLOnly || text.some((d) => secondOpinion(c, d));
       return !crossChecked || standsAlone(c) || text.some((d) => secondOpinion(c, d));
     })
     .sort((a, b) => rank(a.source) - rank(b.source) || b.score - a.score);
@@ -240,7 +244,7 @@ export function fuseDetections(
       continue;
     }
     // A line-grouped block spanning several seeds is not lettering of its own.
-    if (c.source === "paddle" || c.source === "koharu") {
+    if (c.source === "paddle" || c.source === "sam-ts-l") {
       // Sound effects drawn beside a line of dialogue do not make its block an artefact.
       const held = seeds.filter((s) => s.lead.source !== "coo" && inside(s.lead.box, c.box) >= FUSION.fragmentInside && area(s.lead.box) < area(c.box) * 0.7);
       if (held.length >= FUSION.containerHolds) {
@@ -250,22 +254,26 @@ export function fuseDetections(
     seeds.push({ lead: c, members: [c] });
   }
 
-  if (FUSION.adoptLettering && !koharuOnly) adoptLettering(seeds, text, balloons, opts.minAdoptPx ?? 0);
+  if (FUSION.adoptLettering && !samTsLOnly) adoptLettering(seeds, text, balloons, opts.minAdoptPx ?? 0);
 
   const fused: FusedRegion[] = seeds.map(({ lead, members }) => {
     // Only RT-DETR and COO say whether lettering sits in a bubble.
     const classed = members.find((m) => m.source === "rtdetr" || m.source === "coo");
     const sources = new Set<DetectorSource>(members.map((m) => m.source));
-    for (const d of text) if (!sources.has(d.source) && members.some((m) => secondOpinion(m, d))) sources.add(d.source);
+    const scores: Partial<Record<DetectorSource, number>> = {};
+    const note = (c: Candidate) => { scores[c.source] = Math.max(scores[c.source] ?? 0, Math.round(c.score * 1000) / 1000); };
+    members.forEach(note);
+    for (const d of text) if (!members.includes(d) && members.some((m) => secondOpinion(m, d))) { sources.add(d.source); note(d); }
     const { source: _source, ...rest } = lead;
     return {
       ...rest,
       cls: classed && classed.cls !== "text" ? classed.cls : lead.cls,
       // The mask's blocks carry a fixed score; lettering only it found ranks below a confident box.
-      score: members.every((m) => m.source === "koharu")
+      score: members.every((m) => m.source === "sam-ts-l")
         ? FUSION.adoptedScore
-        : Math.max(...members.filter((m) => m.source !== "koharu").map((m) => m.score)),
+        : Math.max(...members.filter((m) => m.source !== "sam-ts-l").map((m) => m.score)),
       sources: [...sources].sort((a, b) => PRIORITY.indexOf(a) - PRIORITY.indexOf(b)),
+      scores,
     };
   });
   return [...passthrough, ...fused];
@@ -283,8 +291,8 @@ export function fuseDetections(
  * author's permission.
  */
 function adoptLettering(seeds: { lead: Candidate; members: Candidate[] }[], text: Candidate[], balloons: Balloon[], minPx: number) {
-  const blocks = text.filter((c) => c.source === "koharu");
-  const boxed = seeds.filter((s) => s.lead.source !== "koharu");
+  const blocks = text.filter((c) => c.source === "sam-ts-l");
+  const boxed = seeds.filter((s) => s.lead.source !== "sam-ts-l");
   const loose: Candidate[] = [];
   // A box holding most of a block, but not all, cut the lettering short.
   const clipped = (s: { lead: Candidate }, block: Candidate) =>

@@ -6,6 +6,7 @@ import { writeAtomicJson } from './modelPackJournal';
 import { DATA_DIR } from './paths';
 import { findRegistryRow, listRegistryRows } from './modelRegistryStore';
 import type { ProviderOperation } from '../providerCatalog';
+import { canonicalModelId } from '../samTsL';
 
 /**
  * Operator-chosen default model per job, stored beside the other machine-local
@@ -24,7 +25,7 @@ export function readModelDefaults(): ModelDefaultsFile {
 		const parsed = JSON.parse(readFileSync(defaultsPath(), 'utf8')) as ModelDefaultsFile;
 		if (parsed && typeof parsed === 'object' && parsed.defaults && typeof parsed.defaults === 'object') {
 			const defaults = Object.fromEntries(Object.entries(parsed.defaults).filter(([, id]) =>
-				!(RETIRED_INPAINT_MODEL_IDS as readonly string[]).includes(id)));
+				!(RETIRED_INPAINT_MODEL_IDS as readonly string[]).includes(id)).map(([job, id]) => [job, canonicalModelId(id)]));
 			return { version: 1, defaults };
 		}
 	} catch {

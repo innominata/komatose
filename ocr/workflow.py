@@ -61,17 +61,17 @@ def probe():
             errors.append(str(e))
     else:
         errors.append('Dedicated PyTorch environment is not installed; CPU ONNX is available')
-    koharu = False
+    sam_ts_l = False
     try:
-        import koharu_mask
-        koharu = koharu_mask.installed()
+        import sam_ts_l_mask
+        sam_ts_l = sam_ts_l_mask.installed()
     except Exception:
-        koharu = False
+        sam_ts_l = False
     lama_models = getattr(sys.modules.get('worker'), '_lama', {})
     lama_resident = next((device for device in lama_models if str(device).startswith('cuda')), None)
     return {'devices': devices, 'errors': errors, 'sam': bool(importlib.util.find_spec('sam2')),
             'lama': bool(importlib.util.find_spec('spandrel')), 'lamaDevice': lama_resident,
-            'koharu': koharu, 'cpu': True}
+            'samTsL': sam_ts_l, 'cpu': True}
 
 
 def _keep_box_component(mask, box, width, height):

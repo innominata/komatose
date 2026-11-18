@@ -1,11 +1,14 @@
 <script lang="ts">
   import { backdropClose } from '$lib/backdropClose';
   import { onMount } from "svelte";
+  import ColorSwatch from "./ColorSwatch.svelte";
   import { activeRegionKinds, regionKindLabel } from "$lib/regionCatalog";
   import { groupFontsByCategory } from "$lib/fontCategories";
   import {
     allTypeStyles,
     DEFAULT_STYLE,
+    MAX_LEADING,
+    MIN_LEADING,
     MIN_STYLE_SIZE,
     styleKeys,
     TEXT_WARP_STYLE_LABELS,
@@ -297,8 +300,8 @@
               <input
                 class="form-control form-control-sm"
                 type="number"
-                min="1"
-                max="3"
+                min={MIN_LEADING}
+                max={MAX_LEADING}
                 step=".05"
                 value={current.leading}
                 oninput={(e) => edit("leading", Number(e.currentTarget.value))}
@@ -483,21 +486,20 @@
           <div class="type-settings-grid">
             <label class="hud-task-field"
               >Fill
-              <input
+              <ColorSwatch
                 class="form-control form-control-color"
-                type="color"
-                disabled={current.autoContrast !== false}
+                aria-label="Fill color"
                 value={current.fill}
-                oninput={(e) => edit("fill", e.currentTarget.value)}
+                oninput={(v) => { edit("fill", v); edit("autoContrast", false); }}
               /></label
             >
             <label class="hud-task-field"
               >Outline color
-              <input
+              <ColorSwatch
                 class="form-control form-control-color"
-                type="color"
+                aria-label="Outline color"
                 value={current.outline}
-                oninput={(e) => edit("outline", e.currentTarget.value)}
+                oninput={(v) => { edit("outline", v); edit("autoContrast", false); }}
               /></label
             >
             <label class="hud-task-field"

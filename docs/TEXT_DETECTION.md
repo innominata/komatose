@@ -1,7 +1,7 @@
 # Text detection and removal
 
 Three components: **RT-DETR** locates text and speech bubbles, **COO** proposes
-free-floating sound effects, and **Koharu** produces the mask used to remove
+free-floating sound effects, and **SAM-TS-L** produces the mask used to remove
 lettering. Detection and masking are separate stages and use separate models.
 Chapter transcription cross-checks several detectors (see Cross-check fusion).
 
@@ -14,7 +14,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7
 SAM2_BUILD_CUDA=0 pip install -r ocr/requirements-workflow.txt
 ```
 
-`pyclipper` is required for COO polygon expansion. Koharu additionally needs the
+`pyclipper` is required for COO polygon expansion. SAM-TS-L additionally needs the
 Hi-SAM source tree (see below).
 
 The app runs RT-DETR and CTD on GPU through native eager PyTorch in the workflow
@@ -202,9 +202,9 @@ intersection over the smaller box exceeds 0.65 and its area ratio exceeds 0.35.
 DBNet probabilities describe shrunken text regions. They are not erasure masks
 and must not be used directly to paint out lettering; use the mask stage below.
 
-## Koharu
+## SAM-TS-L
 
-Koharu SAM-TS-L produces a full-page lettering mask, in the publisher
+SAM-TS-L produces a full-page lettering mask, in the publisher
 preprocessing lineage. It is the masking stage, and during transcription its
 blocks also find lettering the box detectors missed (see Cross-check fusion).
 
@@ -217,12 +217,20 @@ blocks also find lettering the box detectors missed (see Cross-check fusion).
 | Weight size | 1,355,824,988 bytes |
 | Weight SHA256 | `bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45` |
 | Source | `ymy-k/Hi-SAM` at `69009434d4dba5541f228d8f5acb0754c333d417` |
-| Default weight path | `data/models/koharu-text-sam-ts-l/model.safetensors` |
+| Default weight path | `data/models/sam-ts-l/model.safetensors` |
 | Default source path | `data/models/hi-sam-<revision>` |
 
 The Hi-SAM source can be fetched as the codeload zip at that commit; no git
 checkout is required. The tree must contain `hi_sam/modeling/build.py`.
-`scripts/install-koharu.py` installs and verifies both parts.
+`scripts/install-sam-ts-l.py` installs and verifies both parts.
+
+Earlier versions called this model Koharu, after the publisher's repository.
+Its id is now `sam-ts-l` everywhere: the model row, mask engine, detector setup
+add-on (`rtdetr+sam-ts-l`) and detection source. Saved settings, setups, mask
+engines and region provenance that still say `koharu`, the old `SCAN_KOHARU_*`
+variables, and weights in `data/models/koharu-text-sam-ts-l` keep working; the
+saved model row is renamed on first read, and `scripts/install-sam-ts-l.py`
+moves an old weights directory to the new path instead of downloading again.
 
 ### Loading
 
@@ -245,7 +253,7 @@ unsuitable for thresholding.
 
 The model reads the whole page shrunk to 1024 on its long side. Reading large
 pages in full-resolution 1024 tiles was measured and rejected: on the bundled
-gold pages (1414 × 2000 and 941 × 1672) it lowered RT-DETR + Koharu F1 from
+gold pages (1414 × 2000 and 941 × 1672) it lowered RT-DETR + SAM-TS-L F1 from
 0.869 to 0.847 (Japanese) and 0.958 to 0.946 (Korean), at four times the cost.
 
 ### Mask post-processing
@@ -261,7 +269,7 @@ class, then the bubble line types (`maskPlacement`):
 - **Outside**, the lettering grows by half its own stroke width, up to 8 px at a
   1024 scale, so the outline drawn around a sound effect is removed too and an
   inpainter does not paint the letters back in the outline's colour.
-- **Unknown** places keep the plain dilation, but a glyph that pokes slightly out of the region box is kept whole within the same reach, so a tight detected box does not cut strokes off (Koharu engine).
+- **Unknown** places keep the plain dilation, but a glyph that pokes slightly out of the region box is kept whole within the same reach, so a tight detected box does not cut strokes off (SAM-TS-L engine).
 - A fitted glyph that pokes slightly out of its region box is kept whole rather
   than cut at the box edge.
 - The radius is clamped to 0–20 px; the application uses 3 for OCR crops and 5
@@ -288,10 +296,10 @@ The pipeline in `detectRegions` is:
    by `rtdetr`), when installed. The partner gets `supplement=false` so RT-DETR
    does not run CTD a second time internally.
 3. COO adds free-floating sound-effect polygons when the setup has `+coo`.
-4. Koharu's text mask supplies blocks when the setup has `+koharu`. Each block
+4. SAM-TS-L's text mask supplies blocks when the setup has `+sam-ts-l`. Each block
    records how much of its box the mask fills and its median stroke width.
 5. `fuseDetections` merges everything. Seeds are taken in the order COO,
-   RT-DETR, CTD, Paddle, Koharu. A candidate joins a seed when the boxes share a
+   RT-DETR, CTD, Paddle, SAM-TS-L. A candidate joins a seed when the boxes share a
    class and overlap (IoU 0.4, or 0.6 across classes), when it is a fragment of
    the seed (80% inside it, one column of a bubble), or when it is the same
    lettering with a looser margin. Each region records the detectors that
@@ -299,7 +307,7 @@ The pipeline in `detectRegions` is:
    Sure RT-DETR `bubble` boxes (0.5 and up) are **walls**: two boxes whose
    centres sit in different balloons are never merged, however they overlap.
 6. A box found by only one detector survives only above its own threshold
-   (RT-DETR bubble 0.5, RT-DETR free 0.6, CTD 0.6). A Paddle or Koharu block
+   (RT-DETR bubble 0.5, RT-DETR free 0.6, CTD 0.6). A Paddle or SAM-TS-L block
    that swallows two or more other regions is a line-grouping artefact and is
    dropped.
 7. **Pixel-first pass** (`adoptLettering`). The mask decides what is lettering
@@ -326,7 +334,7 @@ The pipeline in `detectRegions` is:
 
 The pixel-first pass and the confidence exemption are adapted from Manga
 Cleaner (github.com/k-omiq/Bear), with its author's permission. Measured on
-the bundled gold pages with RT-DETR + Koharu, before recognition confirms
+the bundled gold pages with RT-DETR + SAM-TS-L, before recognition confirms
 anything: Japanese recall 0.895 to 0.974 (sound effects 3/7 to 6/7) with 8
 more false alarms, nearly all artwork on one colour page; Korean F1 0.929 to
 0.958 (sound effects 9/14 to 14/14) with 3 more false alarms. Reading the
@@ -355,21 +363,52 @@ tuning `FUSION` takes seconds instead of minutes. `--misses` lists what each
 setup missed or invented. Benchmark setups include the partner part, so the
 Models page scores the same pipeline production runs.
 
+## Tuning detection on a series
+
+Every page Transcribe detects is recorded per series: each detector's raw boxes, and for
+every region it saved, which detectors agreed, each one's score, the box kind, and whether
+the reader dropped or blanked it. The record outlives the regions, so what you do with them
+afterwards becomes the answer key:
+
+- **Kept** or **reshaped** (moved well away from the detected box): a true positive.
+- **Deleted** on its own or with Remove blank regions, **marked ignored**, or removed by the
+  Director: a false positive of the detectors that found it.
+- **Cleared** with the rest of its page (as before detecting again): not counted.
+- Regions **drawn by hand** on a detected page: what detection missed.
+
+**Series → Detection report** shows false-positive rates by detector combination, score band,
+kind and chapter, the combinations with the most rejections, and a gallery of what was
+rejected. Download CSV lists every detected region and its outcome.
+
+To try stricter fusion thresholds against your own corrections:
+
+```bash
+npm run tune:detection -- <series id or slug>          # pages marked done
+npm run tune:detection -- <series id or slug> --all    # every detected page
+```
+
+It replays the recorded boxes through the fusion rules with stricter lone-box thresholds
+(`FUSION.alone`) and without mask-only regions, and prints how many kept regions each variant
+still finds and how many false positives it avoids. Nothing is changed; set a threshold you
+like in `src/lib/server/detectFusion.ts`. Thresholds can only be tightened (boxes below the
+confidence a detector ran at were never recorded), and the lone-box thresholds only apply when
+two box detectors cross-check each other (RT-DETR with Comic Text Detector).
+
 ## Configuration
 
-Chapter transcription runs a **detector setup**, written `base[+coo][+koharu]`
-(for example `ctd+koharu`). The base is `ctd`, `rtdetr`, `paddle` or
-`heuristic`. COO and Koharu can be added to any base except `heuristic`. These
+Chapter transcription runs a **detector setup**, written `base[+coo][+sam-ts-l]`
+(for example `ctd+sam-ts-l`). The base is `ctd`, `rtdetr`, `paddle` or
+`heuristic`. COO and SAM-TS-L can be added to any base except `heuristic`. These
 are the same ids the benchmark scores. The setup is chosen in this order:
 
 1. An explicit `detectorSetup` in the transcribe request.
 2. The chapter's own choice in Chapter settings (`detectorSetup`). Chapters
    saved before setups existed keep their old `detector`, which gets COO
-   (RT-DETR only) and Koharu under the old automatic rules.
+   (RT-DETR only) and SAM-TS-L under the old automatic rules.
 3. The admin default in **Admin → Models → Jobs & defaults**, stored in
    `data/detector-config.json` as `{ "version": 1, "setup", "conf" }`.
-4. If no admin default has been saved: `SCAN_DETECTOR`, plus COO and Koharu per
-   `SCAN_COO` and `SCAN_KOHARU_DETECT`, with confidence `SCAN_DETECT_CONF`.
+4. If no admin default has been saved: `SCAN_DETECTOR`, plus COO and SAM-TS-L per
+   `SCAN_COO` and `SCAN_SAM_TS_L_DETECT`, with confidence `SCAN_DETECT_CONF`.
 
 Confidence follows the same order, and a chapter can leave it blank to use the
 default. If a setup asks for an add-on that is not installed, the add-on is
@@ -388,10 +427,10 @@ Read by the Python layer:
 | `SCAN_COO` | `auto` | `auto` or `1` enables, `0` disables |
 | `SCAN_COO_THREADS` | `4` | torch intra-op threads |
 | `SCAN_COO_MODEL` | `data/models/coo/dbnetpp-coo.pt` | checkpoint path |
-| `SCAN_MASK_ENGINE` | `auto` | `auto`, `koharu`, or `ctd` |
-| `SCAN_KOHARU_DIR` | `data/models/koharu-text-sam-ts-l` | weights directory |
-| `SCAN_KOHARU_WEIGHTS` | `<dir>/model.safetensors` | weight file override |
-| `SCAN_KOHARU_HISAM_ROOT` | `data/models/hi-sam-<revision>` | Hi-SAM source override |
+| `SCAN_MASK_ENGINE` | `auto` | `auto`, `sam-ts-l`, or `ctd` |
+| `SCAN_SAM_TS_L_DIR` | `data/models/sam-ts-l` | weights directory |
+| `SCAN_SAM_TS_L_WEIGHTS` | `<dir>/model.safetensors` | weight file override |
+| `SCAN_SAM_TS_L_HISAM_ROOT` | `data/models/hi-sam-<revision>` | Hi-SAM source override |
 
 Read by the host application and passed as per-request arguments:
 
@@ -400,7 +439,7 @@ Read by the host application and passed as per-request arguments:
 | `SCAN_DETECT_CONF` | `0.20` | detector confidence; legacy fallback only |
 | `SCAN_DETECT_TILE` | `690` | detector tile height |
 | `SCAN_COO_CONF` | `0.60` | COO polygon confidence |
-| `SCAN_KOHARU_DETECT` | `auto` | Koharu region supplementation |
+| `SCAN_SAM_TS_L_DETECT` | `auto` | SAM-TS-L region supplementation |
 
 ## Installers
 
@@ -408,7 +447,7 @@ Read by the host application and passed as per-request arguments:
 .venv-workflow/bin/python scripts/install-detect-models.py            # RT-DETR and CTD
 .venv-workflow/bin/python scripts/install-detect-models.py --model rtdetr
 .venv-workflow/bin/python scripts/install-coo.py                      # COO weights, verifies SHA256
-.venv-workflow/bin/python scripts/install-koharu.py [--gpu]           # Koharu weights + Hi-SAM source
+.venv-workflow/bin/python scripts/install-sam-ts-l.py [--gpu]           # SAM-TS-L weights + Hi-SAM source
 ```
 
 ## Reference implementations
@@ -419,7 +458,7 @@ Read by the host application and passed as per-request arguments:
 | `ocr/coo.py` | COO preprocessing and polygon extraction |
 | `ocr/coo_model.py` | DBNet++ inference |
 | `ocr/lettering.py` | mask engine selection and mask post-processing |
-| `ocr/koharu_mask.py` | Koharu loading and inference |
+| `ocr/sam_ts_l_mask.py` | SAM-TS-L loading and inference |
 | `src/lib/server/detect.ts` | stage orchestration |
 | `src/lib/server/detectFusion.ts` | cross-check voting and merging |
 | `scripts/eval-detection.ts` | gold-box scoring harness |

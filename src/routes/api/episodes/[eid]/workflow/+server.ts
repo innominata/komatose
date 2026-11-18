@@ -24,6 +24,7 @@ import { automaticRegionPolygon, bubbleFitPoints } from "$lib/regionGeometry";
 import { transformPlacedText } from "$lib/server/placedText";
 import { assertEngineReady } from "$lib/server/engineReadiness";
 import { json } from "@sveltejs/kit";
+import { censorDocId, validateCensorRects, type CensorData } from "$lib/censor";
 import { readFile, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -122,7 +123,7 @@ import { cancelDescribePages, startDescribePages } from "$lib/server/pageEdit";
 import { cancelReslice, startReslice } from "$lib/server/reslice";
 import { cancelPageProofread, cancelChapterRawProofread, startPageProofread, startPageProofreadFollowUp, startChapterRawProofread } from '$lib/server/pageProofread';
 import { assertProofreaderGrant, isKnownProofreaderEngine } from '$lib/server/proofreadService';
-import { KOHARU_MODEL, maskModelName, parseDetectConf } from "$lib/server/detect";
+import { SAM_TS_L_MODEL, maskModelName, parseDetectConf } from "$lib/server/detect";
 import { detectorSetupId, parseDetectorSetup } from "$lib/detectorSetup";
 import { komatoseGpuEnabled } from "$lib/server/gpuMode";
 import { CLEAN_INPAINT_MODELS } from "$lib/cleanMethods";
@@ -165,7 +166,7 @@ function replayArgs<T extends object>(
 function workflowRunStatus(action: string, method: string, detect: boolean, maskEngine?: string) {
   if (action === "mask") {
     const model = maskModelName(maskEngine);
-    const running = model === KOHARU_MODEL ? `${model} · ${komatoseGpuEnabled() ? "GPU" : "CPU"}` : model;
+    const running = model === SAM_TS_L_MODEL ? `${model} · ${komatoseGpuEnabled() ? "GPU" : "CPU"}` : model;
     return detect
       ? { step: "Detecting lettering mask", model: running, engine: maskEngine || "auto" }
       : { step: "Painting lettering mask", model: "Brush", engine: "mask" };
@@ -316,6 +317,19 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
           .all(episode.id, url.searchParams.get("history")),
       });
     }
+    if (url.searchParams.has("layoutSvgs")) {
+      // Fitted lettering is most of a chapter's size, so the studio loads it
+      // separately and only for regions whose revision it has not seen.
+      const ids = String(url.searchParams.get("layoutSvgs") || "").split(",").filter(Boolean).slice(0, 200);
+      if (!ids.length) return json({ svgs: {} });
+      const rows = sqlite
+        .prepare(`SELECT id, revision, json_extract(data, '$.layout.svg') AS svg FROM workflow_docs
+          WHERE episode_id=? AND id IN (${ids.map(() => "?").join(",")})`)
+        .all(episode.id, ...ids.map((id) => `region:${id}`)) as { id: string; revision: number; svg: string | null }[];
+      return json({
+        svgs: Object.fromEntries(rows.map((row) => [row.id.slice("region:".length), { revision: row.revision, svg: row.svg ?? "" }])),
+      });
+    }
     const stamp = jobPollStamp(episode.id);
     if (url.searchParams.has("jobs")) {
       const revision = Number(url.searchParams.get("revision"));
@@ -324,8 +338,13 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
         return json({ unchanged: true, ...stamp });
       return json({ ...stamp, jobs: listJobs(episode.id, "summary") });
     }
+    const state = await workflowState(series, episode);
+    // `omitSvg`: send fitted layouts without their SVG (fetched with `layoutSvgs`).
+    if (url.searchParams.has("omitSvg"))
+      for (const region of Object.values(state.regions))
+        if (region.data.layout) region.data = { ...region.data, layout: { ...region.data.layout, svg: "" } };
     return json({
-      ...(await workflowState(series, episode)),
+      ...state,
       ...stamp,
       jobs: listJobs(episode.id, "summary"),
     });
@@ -394,6 +413,19 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         throw new WorkflowError('Wait for this page’s mask or cleaning job to finish before marking it done.', 409);
       return json(forgetPageHistory(episode.id, String(b.imageId || ""), stepName));
     }
+    if (action === "censor") {
+      requireEdit(user);
+      const img = (await listImages(episode.id)).find((i) => i.id === b.imageId);
+      if (!img) throw new WorkflowError("Page not found", 404);
+      let rects;
+      try { rects = validateCensorRects(b.rects); }
+      catch (e) { throw new WorkflowError(messageOf(e)); }
+      const doc = getDoc<CensorData>(censorDocId(img.id), {});
+      if (doc.revision !== b.expectedRevision)
+        throw new WorkflowError("Censor boxes changed. Reload the current version.", 409, doc);
+      const saved = putDoc(episode.id, doc.id, { rects }, doc.revision);
+      return json({ doc: saved });
+    }
     if (action === "export") {
       const snapshot = await captureExport(
         series,
@@ -402,6 +434,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         !!b.draft,
         b.quality ?? 95,
         b.includeMetadata === true,
+        b.censored === true,
       );
       return json({ jobId: startExport(snapshot) }, { status: 202 });
     }
@@ -435,6 +468,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
                   !!job.payload?.draft,
                   job.payload?.quality ?? 95,
                   job.payload?.includeMetadata === true,
+                  job.payload?.censored === true,
                 ));
           startExport(snapshot, job.id);
         }

@@ -3,6 +3,7 @@ import { nid } from "./ids";
 import { broadcast } from "./realtime";
 import { listLines } from "./queries";
 import { WorkflowError } from "./workflowStore";
+import { markDetectedRegionsRemoved, unmarkDetectedRegionsRemoved } from "./detectionLog";
 
 /**
  * Deleting regions keeps what the deletion takes with it, so it can be undone: the region
@@ -45,6 +46,7 @@ export function deleteRegions(episodeId: string, ids: string[], label: string): 
     sqlite.prepare("INSERT INTO deleted_regions(id,episode_id,label,payload,created_at) VALUES(?,?,?,?,?)")
       .run(nid(), episodeId, label, JSON.stringify(batch), Date.now());
     sqlite.prepare(`DELETE FROM lines WHERE episode_id=? AND id IN (${fm})`).run(episodeId, ...found);
+    markDetectedRegionsRemoved(found, label);
     sqlite.prepare(
       `DELETE FROM deleted_regions WHERE episode_id=? AND id NOT IN (SELECT id FROM deleted_regions WHERE episode_id=? ORDER BY created_at DESC LIMIT ${KEEP})`,
     ).run(episodeId, episodeId);
@@ -100,6 +102,7 @@ export async function restoreDeletion(episodeId: string, batchId?: string, image
     }
     for (const c of batch.comments) if (ids.has(c.line_id as string)) insert("comments", c);
     for (const s of batch.suggestions) if (ids.has(s.line_id as string)) insert("suggestions", s);
+    unmarkDetectedRegionsRemoved([...ids]);
     if (rest.lines.length) sqlite.prepare("UPDATE deleted_regions SET payload=? WHERE id=?").run(JSON.stringify(rest), row.id);
     else sqlite.prepare("DELETE FROM deleted_regions WHERE id=?").run(row.id);
     sqlite.prepare("UPDATE episodes SET revision=revision+1 WHERE id=?").run(episodeId);

@@ -1275,5 +1275,644 @@
         ]
       }
     ]
+  },
+  {
+    "id": "009",
+    "file": "fixtures/manhwa-pages/009.png",
+    "width": 1024,
+    "height": 1536,
+    "note": "Rainy rooftop fight: diagonal brush impacts, small unballooned white dialogue over rain, jagged shout balloon",
+    "lines": [
+      {
+        "id": "009-retreat",
+        "kind": "speech",
+        "boxes": [
+          [
+            51,
+            44,
+            255,
+            135
+          ]
+        ],
+        "source": "뒤로 물러서! 놈의 손을 봐.",
+        "en": "Get back! Watch his hand.",
+        "literal": "Step back! Look at his hand.",
+        "keys": [
+          [
+            "back"
+          ],
+          [
+            "hand"
+          ]
+        ]
+      },
+      {
+        "id": "009-knife",
+        "kind": "speech",
+        "boxes": [
+          [
+            871,
+            21,
+            1006,
+            62
+          ]
+        ],
+        "source": "칼이 있어.",
+        "en": "He has a knife.",
+        "literal": "There is a knife.",
+        "keys": [
+          [
+            "knife",
+            "blade"
+          ]
+        ]
+      },
+      {
+        "id": "009-clang",
+        "kind": "sfx",
+        "boxes": [
+          [
+            60,
+            738,
+            473,
+            959
+          ]
+        ],
+        "source": "카앙!",
+        "en": "Clang!",
+        "literal": "Clang! (metal striking metal)",
+        "keys": [
+          [
+            "clang"
+          ]
+        ]
+      },
+      {
+        "id": "009-now",
+        "kind": "speech",
+        "boxes": [
+          [
+            770,
+            800,
+            985,
+            870
+          ]
+        ],
+        "source": "지금이야!",
+        "en": "Now!",
+        "literal": "It is now!",
+        "keys": [
+          [
+            "now"
+          ]
+        ]
+      },
+      {
+        "id": "009-crack",
+        "kind": "sfx",
+        "boxes": [
+          [
+            17,
+            945,
+            396,
+            1184
+          ]
+        ],
+        "source": "콰직",
+        "en": "Crack!",
+        "literal": "Crack! (a heavy crushing impact)",
+        "keys": [
+          [
+            "crack"
+          ]
+        ]
+      },
+      {
+        "id": "009-over",
+        "kind": "speech",
+        "boxes": [
+          [
+            720,
+            1392,
+            977,
+            1493
+          ]
+        ],
+        "source": "끝난 줄 알았나? 아직 멀었어.",
+        "en": "Thought it was over? Not even close.",
+        "literal": "Did you think it was over? There is still a long way to go.",
+        "keys": [
+          [
+            "over"
+          ],
+          [
+            "close"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "010",
+    "file": "fixtures/manhwa-pages/010.png",
+    "width": 1024,
+    "height": 1536,
+    "note": "Dungeon guardian battle: huge diagonal white rumble, orange fracture SFX, tiny breath and perspective-carved sign; arch runes are decorative shapes, not Korean text",
+    "lines": [
+      {
+        "id": "010-guardian",
+        "kind": "caption",
+        "boxes": [
+          [
+            53,
+            44,
+            463,
+            86
+          ]
+        ],
+        "source": "문이 닫히자, 거인이 움직였다.",
+        "en": "As the door closed, the giant began to move.",
+        "literal": "When the door closed, the giant moved.",
+        "keys": [
+          [
+            "door"
+          ],
+          [
+            "giant"
+          ],
+          [
+            "move"
+          ]
+        ]
+      },
+      {
+        "id": "010-sign",
+        "kind": "sign",
+        "boxes": [
+          [
+            909,
+            58,
+            998,
+            178
+          ]
+        ],
+        "source": "출입 금지",
+        "en": "No entry",
+        "literal": "Entry prohibited",
+        "keys": [
+          [
+            "entry"
+          ]
+        ]
+      },
+      {
+        "id": "010-dodge",
+        "kind": "speech",
+        "boxes": [
+          [
+            54,
+            564,
+            335,
+            629
+          ]
+        ],
+        "source": "왼쪽으로 피해!",
+        "en": "Dodge left!",
+        "literal": "Dodge to the left!",
+        "keys": [
+          [
+            "left"
+          ],
+          [
+            "dodge"
+          ]
+        ]
+      },
+      {
+        "id": "010-rumble",
+        "kind": "sfx",
+        "boxes": [
+          [
+            445,
+            701,
+            1021,
+            1021
+          ]
+        ],
+        "source": "쿠구구",
+        "en": "Rumble!",
+        "literal": "Rumble! (a deep rumbling impact)",
+        "keys": [
+          [
+            "rumbl"
+          ]
+        ]
+      },
+      {
+        "id": "010-gasp",
+        "kind": "sfx",
+        "boxes": [
+          [
+            924,
+            952,
+            1001,
+            1000
+          ]
+        ],
+        "source": "헉…",
+        "en": "Gasp…",
+        "literal": "Gasp… (a sharp intake of breath)",
+        "keys": [
+          [
+            "gasp"
+          ]
+        ]
+      },
+      {
+        "id": "010-fracture",
+        "kind": "sfx",
+        "boxes": [
+          [
+            6,
+            1109,
+            264,
+            1336
+          ]
+        ],
+        "source": "쩌적",
+        "en": "Crack!",
+        "literal": "Crack! (a fracture spreading)",
+        "keys": [
+          [
+            "crack"
+          ]
+        ]
+      },
+      {
+        "id": "010-core",
+        "kind": "speech",
+        "boxes": [
+          [
+            787,
+            1103,
+            1004,
+            1205
+          ]
+        ],
+        "source": "검이 안 먹혀. 핵을 노려!",
+        "en": "The sword’s useless. Aim for the core!",
+        "literal": "The sword has no effect. Aim at the core!",
+        "keys": [
+          [
+            "sword"
+          ],
+          [
+            "core"
+          ],
+          [
+            "aim"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "011",
+    "file": "fixtures/manhwa-pages/011.png",
+    "width": 1024,
+    "height": 1536,
+    "note": "Flooded subway horror: pale whispers over shadows, weathered exit sign, repeated small dripping sounds and diagonal splash SFX",
+    "lines": [
+      {
+        "id": "011-last-train",
+        "kind": "caption",
+        "boxes": [
+          [
+            54,
+            45,
+            439,
+            85
+          ]
+        ],
+        "source": "막차는 한 시간 전에 끊겼다.",
+        "en": "The last train stopped running an hour ago.",
+        "literal": "The last train service ended one hour ago.",
+        "keys": [
+          [
+            "last train"
+          ],
+          [
+            "hour"
+          ]
+        ]
+      },
+      {
+        "id": "011-exit",
+        "kind": "sign",
+        "boxes": [
+          [
+            731,
+            59,
+            909,
+            112
+          ]
+        ],
+        "source": "나가는 곳",
+        "en": "Exit",
+        "literal": "Way out",
+        "keys": [
+          [
+            "exit",
+            "way out"
+          ]
+        ]
+      },
+      {
+        "id": "011-anyone",
+        "kind": "speech",
+        "boxes": [
+          [
+            45,
+            529,
+            239,
+            576
+          ]
+        ],
+        "source": "누구… 있어요?",
+        "en": "Is… anyone there?",
+        "literal": "Is anyone… there?",
+        "keys": [
+          [
+            "anyone"
+          ]
+        ]
+      },
+      {
+        "id": "011-whisper",
+        "kind": "speech",
+        "boxes": [
+          [
+            592,
+            588,
+            720,
+            659
+          ]
+        ],
+        "source": "뒤돌아보지 마.",
+        "en": "Don’t turn around.",
+        "literal": "Do not look behind you.",
+        "keys": [
+          [
+            "turn",
+            "look"
+          ],
+          [
+            "around",
+            "behind"
+          ]
+        ]
+      },
+      {
+        "id": "011-drip",
+        "kind": "sfx",
+        "boxes": [
+          [
+            15,
+            737,
+            127,
+            840
+          ]
+        ],
+        "source": "똑… 똑…",
+        "en": "Drip… drip…",
+        "literal": "Drip… drip… (drops falling)",
+        "keys": [
+          [
+            "drip"
+          ]
+        ]
+      },
+      {
+        "id": "011-voice",
+        "kind": "speech",
+        "boxes": [
+          [
+            730,
+            975,
+            977,
+            1020
+          ]
+        ],
+        "source": "내 목소리가 아니야.",
+        "en": "That’s not my voice.",
+        "literal": "It is not my voice.",
+        "keys": [
+          [
+            "not"
+          ],
+          [
+            "voice"
+          ]
+        ]
+      },
+      {
+        "id": "011-splash",
+        "kind": "sfx",
+        "boxes": [
+          [
+            12,
+            1162,
+            281,
+            1471
+          ]
+        ],
+        "source": "철벅",
+        "en": "Splash!",
+        "literal": "Splash! (stepping in water)",
+        "keys": [
+          [
+            "splash"
+          ]
+        ]
+      }
+    ]
+  },
+  {
+    "id": "012",
+    "file": "fixtures/manhwa-pages/012.png",
+    "width": 1024,
+    "height": 1536,
+    "note": "Haunted hospital: vertical brush radio static, small perspective signs, red outlined impact and inverted white-on-black dialogue",
+    "lines": [
+      {
+        "id": "012-empty",
+        "kind": "caption",
+        "boxes": [
+          [
+            49,
+            47,
+            320,
+            150
+          ]
+        ],
+        "source": "분명 비어 있는 병동이었다.",
+        "en": "This ward was supposed to be empty.",
+        "literal": "It was definitely an empty ward.",
+        "keys": [
+          [
+            "ward"
+          ],
+          [
+            "empty"
+          ]
+        ]
+      },
+      {
+        "id": "012-operating-room",
+        "kind": "sign",
+        "boxes": [
+          [
+            851,
+            51,
+            981,
+            148
+          ]
+        ],
+        "source": "수술실",
+        "en": "Operating room",
+        "literal": "Surgery room",
+        "keys": [
+          [
+            "room"
+          ]
+        ]
+      },
+      {
+        "id": "012-room-number",
+        "kind": "sign",
+        "boxes": [
+          [
+            866,
+            205,
+            931,
+            249
+          ]
+        ],
+        "source": "404",
+        "latin": true
+      },
+      {
+        "id": "012-static",
+        "kind": "sfx",
+        "boxes": [
+          [
+            36,
+            523,
+            161,
+            803
+          ]
+        ],
+        "source": "지지직",
+        "en": "Krrzt…",
+        "literal": "Crackle… (radio static)",
+        "keys": [
+          [
+            "krrzt",
+            "static",
+            "crackle"
+          ]
+        ]
+      },
+      {
+        "id": "012-radio",
+        "kind": "speech",
+        "boxes": [
+          [
+            730,
+            575,
+            990,
+            632
+          ]
+        ],
+        "source": "무전이 끊겼어.",
+        "en": "The radio’s gone dead.",
+        "literal": "Radio communication has been cut off.",
+        "keys": [
+          [
+            "radio"
+          ],
+          [
+            "dead",
+            "cut off"
+          ]
+        ]
+      },
+      {
+        "id": "012-door",
+        "kind": "speech",
+        "boxes": [
+          [
+            799,
+            764,
+            979,
+            813
+          ]
+        ],
+        "source": "문 열지 마.",
+        "en": "Don’t open the door.",
+        "literal": "Do not open the door.",
+        "keys": [
+          [
+            "open"
+          ],
+          [
+            "door"
+          ]
+        ]
+      },
+      {
+        "id": "012-bang",
+        "kind": "sfx",
+        "boxes": [
+          [
+            15,
+            939,
+            349,
+            1245
+          ]
+        ],
+        "source": "쾅!",
+        "en": "BANG!",
+        "literal": "Bang! (a loud blow against the door)",
+        "keys": [
+          [
+            "bang"
+          ]
+        ]
+      },
+      {
+        "id": "012-inside",
+        "kind": "speech",
+        "boxes": [
+          [
+            664,
+            1373,
+            957,
+            1480
+          ]
+        ],
+        "source": "그럼… 안에서 말한 건 누구지?",
+        "en": "Then… who was speaking from inside?",
+        "literal": "Then… who was the one who spoke inside?",
+        "keys": [
+          [
+            "who"
+          ],
+          [
+            "inside"
+          ]
+        ]
+      }
+    ]
   }
 ]

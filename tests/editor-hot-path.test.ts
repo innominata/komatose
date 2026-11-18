@@ -78,7 +78,7 @@ test("editor hot path keeps current pages fast, polls jobs, and drops finished u
   unlinkAssetFiles(unreferencedAssets(sqlite, removed.hashes));
   const exports = listJobs("chapter").filter((job) => job.kind === "export");
   assert.deepEqual(exports.map((job) => job.id), [kept]);
-  assert.deepEqual(exports[0].payload, { format: "jpg", draft: true, quality: 80, includeMetadata: true });
+  assert.deepEqual(exports[0].payload, { format: "jpg", draft: true, quality: 80, includeMetadata: true, censored: false });
   assert.equal(existsSync(assetPath(oldZip)), false);
   assert.equal(existsSync(assetPath(newZip)), true);
 

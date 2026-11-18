@@ -18,6 +18,8 @@ import { textMatrix } from "./typesetting";
 import { psdTextWarp, warpPad } from "../textWarp";
 import { activeEffects, effectsReach, psdEffects, psdPatternUuid } from "../textEffects";
 import { getPattern, patternPixels } from "./patterns";
+import { censorPixelBoxes, type CensorRect } from "../censor";
+import { applyCensors, pageCensors } from "./censor";
 import { regionTextPaths, textPathBeziers, trimBeziers } from "../textPath";
 import { buildTxt2, type Txt2Layer, type Txt2Run } from "./txt2";
 import { metaLayer, pixelHash, regionSnapshot, writeMeta, type ExportMeta } from "./psdMeta";
@@ -39,6 +41,8 @@ export type ExportPage = {
   sourceRevision: number;
   regions: { line: LineRow; data: RegionData; revision: number }[];
   dpi: number;
+  /** Set only for a censored export: boxes burned into every raster of the page. */
+  censors?: CensorRect[];
 };
 export type ExportSnapshot = {
   speakers?: Record<string, CharacterAssignment>;
@@ -53,6 +57,7 @@ export type ExportSnapshot = {
   format: string;
   quality: number;
   includeMetadata?: boolean;
+  censored?: boolean;
   issues: unknown[];
   defaults: { chapter: unknown; series: unknown };
 };
@@ -82,7 +87,7 @@ async function pixels(bytes: Buffer): Promise<PixelData> {
   };
 }
 export async function renderPage(page: ExportPage, options: { includeOverflow?: boolean; base?: Buffer } = {}) {
-  const base = options.base ?? await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source);
+  const base = await applyCensors(options.base ?? await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source), page.censors);
   const renderable = page.regions.filter(
     (r) =>
       r.line.sourceState !== "ignored" &&
@@ -170,13 +175,14 @@ export async function renderPage(page: ExportPage, options: { includeOverflow?: 
       height,
     });
   }
-  const composite = await sharp(base)
+  // Censor boxes cover lettering too, so they go over the finished composite.
+  const composite = await applyCensors(await sharp(base)
     .composite(
       layers.map((l) => ({ input: l.bytes, left: l.left, top: l.top })),
     )
     .withMetadata({ density: page.dpi })
     .png()
-    .toBuffer();
+    .toBuffer(), page.censors);
   return { base, layouts, layers, composite };
 }
 
@@ -200,6 +206,21 @@ export async function renderGuestPage(series: Series, episode: Episode, image: I
   if (source.cleaned || source.cleanBase || source.prepared) {
     try {
       return (await renderPage(page)).composite;
+    } catch {
+      /* fall back to the working scan */
+    }
+  }
+  const raw = await readWorkingOrOrig(series.slug, episode.slug, image.filename);
+  if (!raw) throw new WorkflowError("Missing image file", 404);
+  return sharp(raw).png().toBuffer();
+}
+
+/** The raw page a guest preview shows beside the finished one: the prepared source, else the scan. */
+export async function renderGuestRaw(series: Series, episode: Episode, image: ImageRow) {
+  const source = getDoc<PageData>(`page:${image.id}`, {}).data;
+  if (source.prepared) {
+    try {
+      return await sharp(await readAsset(source.prepared)).png().toBuffer();
     } catch {
       /* fall back to the working scan */
     }
@@ -268,8 +289,8 @@ export async function finishedPsd(
       422,
     );
   const r = rendered ?? (await renderPage(page));
-  const original = await pixels(await readAsset(page.source.original!));
-  const prepared = await pixels(await readAsset(page.source.prepared!));
+  const original = await pixels(await applyCensors(await readAsset(page.source.original!), page.censors));
+  const prepared = await pixels(await applyCensors(await readAsset(page.source.prepared!), page.censors));
   const usedPatterns = new Set<string>();
   const children: Layer[] = [
     { name: "Original upload", hidden: true, imageData: original },
@@ -502,6 +523,17 @@ export async function finishedPsd(
     hidden.text!.index = txt2Layers.length;
     txt2Layers.push({ text: hidden.text!.text, runs: [txt2Run({ length: hidden.text!.text.length, style: { font: { name: "ArialMT" }, fontSize: 1, leading: 1, fauxBold: false, fauxItalic: false, horizontalScale: 1, verticalScale: 1, fillColor: { r: 0, g: 0, b: 0 }, strokeColor: { r: 0, g: 0, b: 0 } } })], justification: "left", frame: { box: [0, 0, 1, 1] } });
   }
+  // Type layers are live text, so a censored PSD keeps the boxes as the top layer as well.
+  const censorBoxes = censorPixelBoxes(page.censors, width, height);
+  if (censorBoxes.length) {
+    const left = Math.min(...censorBoxes.map((b) => b.left)), top = Math.min(...censorBoxes.map((b) => b.top));
+    const right = Math.max(...censorBoxes.map((b) => b.left + b.width)), bottom = Math.max(...censorBoxes.map((b) => b.top + b.height));
+    const data = new Uint8ClampedArray((right - left) * (bottom - top) * 4);
+    for (const b of censorBoxes)
+      for (let y = b.top; y < b.top + b.height; y++)
+        for (let x = b.left; x < b.left + b.width; x++) data[((y - top) * (right - left) + x - left) * 4 + 3] = 255;
+    children.push({ name: "Censor", left, top, right, bottom, imageData: { width: right - left, height: bottom - top, data } });
+  }
   children.push(hidden);
   // A pattern overlay names its pattern; the pixels travel in the document's pattern resource.
   const patterns: NonNullable<Psd["patterns"]> = [];
@@ -538,6 +570,7 @@ export async function captureExport(
   draft: boolean,
   quality = 95,
   includeMetadata = false,
+  censored = false,
 ): Promise<ExportSnapshot> {
   if (
     !["png", "jpg", "psd", "clean", "json", "english", "bilingual"].includes(
@@ -549,7 +582,7 @@ export async function captureExport(
     throw new WorkflowError("JPG quality must be 1–100");
   const imgs = await listImages(episode.id);
   for (const img of imgs) await preparePage(series, episode, img);
-  const snapshot = readExportSnapshot(series, episode, format, draft, quality, includeMetadata, true);
+  const snapshot = readExportSnapshot(series, episode, format, draft, quality, includeMetadata, true, censored);
   const storyWidth = Math.max(0, ...snapshot.pages.filter(page => page.image.role === 'page').map(page => page.image.width));
   for (const page of snapshot.pages.filter(page => page.image.id.startsWith('series-credit:'))) {
     if (!storyWidth || storyWidth === page.image.width) continue;
@@ -568,7 +601,7 @@ export function captureExportMetadata(series: Series, episode: Episode): ExportS
   return readExportSnapshot(series, episode, 'json', true, 95, true, false);
 }
 
-function readExportSnapshot(series: Series, episode: Episode, format: string, draft: boolean, quality: number, includeMetadata: boolean, requirePrepared: boolean): ExportSnapshot {
+function readExportSnapshot(series: Series, episode: Episode, format: string, draft: boolean, quality: number, includeMetadata: boolean, requirePrepared: boolean, censored = false): ExportSnapshot {
   return sqlite.transaction(() => {
     const currentImages = db
       .select()
@@ -623,6 +656,7 @@ function readExportSnapshot(series: Series, episode: Episode, format: string, dr
         source,
         sourceRevision: doc.revision,
         dpi: effectiveDpi(source, image, prefs),
+        ...(censored ? { censors: pageCensors(image.id) } : {}),
         regions: lns
           .filter((l) => l.imageId === image.id)
           .map((line) => {
@@ -661,6 +695,7 @@ function readExportSnapshot(series: Series, episode: Episode, format: string, dr
       format,
       quality,
       includeMetadata,
+      censored,
       issues,
       defaults: {
         chapter: getDoc(`chapter:${episode.id}`, {}),
@@ -680,7 +715,7 @@ export async function buildExport(
     if (snapshot.format === "clean")
       zip.file(
         `${stem}.png`,
-        await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source),
+        await applyCensors(await compositePageAssets(await readAsset(page.source.cleaned || page.source.cleanBase || page.source.prepared!), page.source), page.censors),
       );
     else if (["png", "jpg", "psd"].includes(snapshot.format)) {
       if (
@@ -780,7 +815,7 @@ export function startExport(snapshot: ExportSnapshot, retryId?: string) {
         const artifact = await storeAsset(zip);
         updateJob(id, "completed", {
           artifact,
-          filename: `${snapshot.draft ? "DRAFT-" : ""}${snapshot.episode.slug}-${snapshot.format}.zip`,
+          filename: `${snapshot.draft ? "DRAFT-" : ""}${snapshot.episode.slug}-${snapshot.format}${snapshot.censored ? "-censored" : ""}.zip`,
           revision: snapshot.revision,
         });
         const removed = pruneExportJobs(sqlite, { episodeId: snapshot.episode.id, keepJobId: id });

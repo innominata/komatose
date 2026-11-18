@@ -1,5 +1,6 @@
 import type { TaskEngine } from "./aiTasks";
 import type { LineRow } from "./types";
+import { canonicalModelId } from "./samTsL";
 import type { RegionData } from "./workflow";
 
 export const DIRECTOR_VERSION = 17;
@@ -185,7 +186,7 @@ export function directorPolicy(
         ? input.cleanFallbackModel.trim()
         : "",
     maskEngine:
-      typeof input.maskEngine === "string" ? input.maskEngine : "auto",
+      typeof input.maskEngine === "string" ? canonicalModelId(input.maskEngine) : "auto",
     repairCycles: Number.isInteger(input.repairCycles)
       ? Math.max(1, Math.min(3, input.repairCycles!))
       : 3,

@@ -1,4 +1,6 @@
 import {transformPageAssets, compositePageAssets} from './cleanAssets';
+import { censorDocId, type CensorData, type CensorRect } from '../censor';
+import { pageCensors, transformCensors } from './censor';
 import { mapTextPaths } from "../textPath";
 import sharp, { type OverlayOptions } from "sharp";
 import type { ImageRow, LineRow } from "../types";
@@ -26,6 +28,7 @@ export type GeometrySnapshot = {
   lines: { id: string; x: number | null | undefined; y: number | null | undefined; w: number | null | undefined; h: number | null | undefined; placed: boolean; region: RegionData }[];
   history?:Record<string,{undo:any[];redo:any[]}>;
   reviews?:{id:string;geometry?:unknown}[];
+  censors?:CensorRect[];
 };
 
 export async function captureGeometry(episodeId: string, imageId: string): Promise<GeometrySnapshot> {
@@ -37,6 +40,7 @@ export async function captureGeometry(episodeId: string, imageId: string): Promi
     })),
   };
   snapshot.history={};
+  snapshot.censors=pageCensors(imageId);
   snapshot.reviews=(sqlite.prepare("SELECT id,payload,progress FROM workflow_jobs WHERE episode_id=? AND kind='page-proofread'").all(episodeId) as any[])
     .filter(r=>JSON.parse(r.payload).imageId===imageId||(JSON.parse(r.progress).pageGeometry?.imageIds??[]).includes(imageId))
     .map(r=>({id:r.id,geometry:JSON.parse(r.progress).pageGeometry}));
@@ -176,6 +180,7 @@ export async function applyPageGeometry(episodeId: string, oldPage: ImageRow, ne
       const doc=getDoc<RegionData>(`region:${line.id}`,{});putDoc(episodeId,doc.id,region,doc.revision);
     }
     const doc=getDoc<PageData>(`page:${oldPage.id}`,{});putDoc(episodeId,doc.id,page,doc.revision);
+    if(snapshot.censors?.length){const c=getDoc<CensorData>(censorDocId(oldPage.id),{});putDoc(episodeId,c.id,{rects:transformCensors(snapshot.censors,oldPage,t)},c.revision);}
     // Geometry has its own page undo entry. Keep cleaning/style undo in the new frame.
     for(const [id,h] of Object.entries(histories)) sqlite.prepare('UPDATE workflow_docs SET undo=?,redo=? WHERE id=?').run(JSON.stringify(h.undo),JSON.stringify(h.redo),id);
     const frame=getDoc(`frame:${frameId}`,{});putDoc(episodeId,frame.id,{id:frameId,width:t.width,height:t.height,sources:[{frameId:snapshot.page.geometryFrameId??`legacy:${oldPage.id}:${oldPage.updatedAt}`,imageId:oldPage.id,transform:t}]},frame.revision);
@@ -194,6 +199,10 @@ export async function restoreGeometry(episodeId: string, image: ImageRow, snapsh
       putDoc(episodeId, doc.id, line.region, doc.revision);
       const history=snapshot.history?.[doc.id];
       if(history) sqlite.prepare("UPDATE workflow_docs SET undo=?,redo=? WHERE id=?").run(JSON.stringify(history.undo),JSON.stringify(history.redo),doc.id);
+    }
+    if (snapshot.censors) {
+      const c = getDoc<CensorData>(censorDocId(image.id), {});
+      if (c.revision || snapshot.censors.length) putDoc(episodeId, c.id, { rects: snapshot.censors }, c.revision);
     }
     const doc = getDoc<PageData>(`page:${image.id}`, {});
     putDoc(episodeId, doc.id, { ...snapshot.page, ...(snapshot.page.prepared ? { preparedAt: image.updatedAt } : {}) }, doc.revision);

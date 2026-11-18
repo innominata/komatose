@@ -316,7 +316,7 @@ export function llamaServerEnv(executable: string, env: NodeJS.ProcessEnv = proc
   return next;
 }
 
-/** `cleaning` is where Koharu, SAM, LaMa Manga and AOT run — pass `cleaningDeviceLabel()`. */
+/** `cleaning` is where SAM-TS-L, SAM, LaMa Manga and AOT run — pass `cleaningDeviceLabel()`. */
 export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
   const models = managedRuntimeSummary();
   if (!komatoseGpuEnabled()) return {
@@ -333,7 +333,7 @@ export function gpuClientStatus(cleaning = `HIP ${hipVisibleDevices()}`) {
     models,
     llm: models.length ? models.map(m => `${m.name} on ${m.device}`).join(', ') : 'Managed local models (see Setup for per-model status)',
     ocr: `Hayai, PaddleOCR-VL, and Qwen3-VL on ${reviewVulkanDevice()}`,
-    cleaning: `Koharu SAM-TS-L, SAM, LaMa Manga, and AOT on ${cleaning}`,
+    cleaning: `SAM-TS-L, SAM, LaMa Manga, and AOT on ${cleaning}`,
   };
 }
 

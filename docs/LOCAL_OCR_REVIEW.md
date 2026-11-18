@@ -253,7 +253,7 @@ Japanese as printed, the official English from `fixtures/test-pages/english`, a 
 translation, and meaning checks per line. There are two separate benchmarks:
 
 - **Detection & OCR** runs every text detector setup (RT-DETR, Comic Text Detector,
-  PaddleOCR lines, geometric bubbles, and the COO and Koharu supplements, alone and
+  PaddleOCR lines, geometric bubbles, and the COO and SAM-TS-L supplements, alone and
   combined as chapter transcription combines them). Recall counts speech, captions,
   and SFX found; boxes on signs and titles are neutral; boxes on artwork are false.
   OCR models then read crops cut from the gold boxes (recognition alone) and/or from

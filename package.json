@@ -64,7 +64,7 @@
 		"test:native-detect": ".venv-workflow/bin/python -m unittest discover -s tests -p test_native_detect.py",
 		"test:geometry": "node --import tsx tests/detection-geometry.test.ts && .venv-workflow/bin/python -m unittest discover -s tests -p test_geometry.py && .venv-workflow/bin/python -m unittest discover -s tests -p test_cleaning.py",
 		"test:coo": "node --import tsx tests/coo-detection.test.ts && node --import tsx tests/detect-fusion.test.ts && .venv-workflow/bin/python tests/test_coo.py",
-		"test:lettering": "node --import tsx tests/mask-diagnostics.test.ts && .venv-workflow/bin/python tests/test_lettering.py && .venv-workflow/bin/python tests/test_mask_fit.py && .venv-workflow/bin/python tests/test_koharu_mask.py",
+		"test:lettering": "node --import tsx tests/mask-diagnostics.test.ts && .venv-workflow/bin/python tests/test_lettering.py && .venv-workflow/bin/python tests/test_mask_fit.py && .venv-workflow/bin/python tests/test_sam_ts_l_mask.py",
 		"test:cleaning": ".venv-workflow/bin/python tests/test_cleaning.py && .venv-workflow/bin/python tests/test_lama_device.py",
 		"test:codex-cleaning": "node --import tsx tests/codex-clean-prompt.test.ts && node --import tsx tests/codex-cleaning.test.ts",
 		"test:image-edit": "node --import tsx tests/image-edit-prompt.test.ts && node --import tsx tests/image-edit-cleaning.test.ts",
@@ -112,6 +112,12 @@
 		"test:browser-region-colors": "node scripts/test-browser.mjs scripts/check-browser-region-colors.mjs",
 		"test:browser-rotation": "node scripts/test-browser.mjs scripts/check-browser-independent-rotation.mjs",
 		"test:browser-region-compare": "node scripts/test-browser.mjs scripts/check-browser-region-compare.mjs",
+		"test:browser-typeset-raw-peek": "node scripts/test-browser.mjs scripts/check-browser-typeset-raw-peek.mjs",
+		"test:browser-preview-raw": "node scripts/test-browser.mjs scripts/check-browser-preview-raw.mjs",
+		"test:browser-stack-spacing": "node scripts/test-browser.mjs scripts/check-browser-stack-spacing.mjs",
+		"test:browser-color-swatch": "node scripts/test-browser.mjs scripts/check-browser-color-swatch.mjs",
+		"test:browser-detection-report": "node scripts/test-browser.mjs scripts/check-browser-detection-report.mjs",
+		"tune:detection": "tsx scripts/tune-detection.ts",
 		"test:model-packages": "node --import tsx tests/model-packages.test.ts"
 	},
 	"devDependencies": {

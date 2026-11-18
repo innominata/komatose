@@ -17,6 +17,7 @@ import {
 } from "./fillMissing";
 import { ocrTranslatorLabel, translateOcrSource } from "./ocrReview";
 import { assertTranslationModelReady } from "./translationRuntime";
+import { aiParallelRequests, mapLimit } from "./aiParallel";
 import { imageMessage, localChat, localTranscription, withLocalReview } from "./localReview";
 import { qwen3VlReviewId } from "../qwenModels";
 import { liveAssistantName, resolveLiveAssistant } from "./assistantRoute";
@@ -57,11 +58,13 @@ import { komatoseGpuEnabled } from "./gpuMode";
 import {
   detectRegions,
   jobStepMessage,
-  KOHARU_MODEL,
+  SAM_TS_L_MODEL,
   maskModelName,
 } from "./detect";
 import { resolveDetector, type ResolvedDetector } from "./detectorConfig";
 import { detectorSetupId, detectorSetupLabel, type DetectorSetupConfig } from "../detectorSetup";
+import { recordDetectedRegion, recordDetectionRun } from "./detectionLog";
+import type { WorkerRegion as DetectorOutput } from "./ocr";
 import { extractJsonObject, parseReadPayload, readBubble, readBubbleCopy, translateScript, suggestAlternativesScript, READ_SCHEMA, type DetectedBox } from "./llm";
 import {
   readBubbleWithCli,
@@ -103,7 +106,7 @@ export type AiJobSnapshot = {
   message: string;
   error?: string;
   engine?: TranslateEngine;
-  /** Detector setup id, such as `ctd+koharu`; transcription only. */
+  /** Detector setup id, such as `ctd+sam-ts-l`; transcription only. */
   detector?: string;
   detectConf?: number;
   lang?: OcrLang;
@@ -363,8 +366,9 @@ function emit(job: Job) {
   });
 }
 
-function reportStep(job: Job, update: { step: string; model: string; engine?: string }) {
-  const message = jobStepMessage(job.imageIndex, job.imageCount, update.step, update.model);
+/** `page` names the page a step belongs to when it is not the current one (a page detected ahead). */
+function reportStep(job: Job, update: { step: string; model: string; engine?: string }, page = job.imageIndex) {
+  const message = jobStepMessage(page, job.imageCount, update.step, update.model);
   if (job.message === message) return;
   job.message = message;
   job.model = update.model;
@@ -487,7 +491,7 @@ export function startRegionOcr(opts: {
   regionOcrs.set(jobId, abort);
   const ocrNames = ocrIds.map((id) => liveAssistantName(id)).join(" + ") || "transcription";
   const maskName = maskModelName();
-  const maskModel = maskName === KOHARU_MODEL
+  const maskModel = maskName === SAM_TS_L_MODEL
     ? `${maskName} · ${komatoseGpuEnabled() ? "GPU" : "CPU"}`
     : maskName;
   const progress = {
@@ -1017,18 +1021,11 @@ async function runTranscribeJob(
     const ocrNames = ocrIds.map((id) => liveAssistantName(id)).join(" + ") || "transcription";
     const ocr = await bindOcrTranslator(opts.series.id, opts.episode.id, chapterTranslator(opts.series.id, opts.episode.id), job.lang);
 
-    for (let i = 0; i < imgs.length; i++) {
-      if (job.abort.signal.aborted) throw new Error("Cancelled");
-      const img = imgs[i];
-      job.imageIndex = i + 1;
-      if (!pageScoped && occupied.has(img.id)) {
-        pageResult(job.id!, img.id, "completed");
-        pagesDone += 1;
-        job.message = `Page ${i + 1}/${imgs.length} · already transcribed`;
-        emit(job);
-        continue;
-      }
-      try {
+    // With Parallel AI requests above 1, the next page is detected and masked while this
+    // page's regions are read and translated; pages are still saved in order.
+    const parallel = aiParallelRequests();
+    const skip = (img: (typeof imgs)[number]) => !pageScoped && occupied.has(img.id);
+    const prepare = async (img: (typeof imgs)[number], page: number) => {
         const sourceStamp = deciderPageStamp(getDoc<PageData>(`page:${img.id}`, {}).data);
         const path = imagePath(opts.series.slug, opts.episode.slug, img.filename);
         const raw = await readWorkingOrOrig(
@@ -1036,20 +1033,13 @@ async function runTranscribeJob(
           opts.episode.slug,
           img.filename,
         );
-        if (!raw) {
-          if (pageScoped) {
-            throw new AiJobError(`Missing image file for ${img.originalName}`, 404);
-          }
-          pageResult(job.id!, img.id, "failed", "Missing image");
-          job.message = `Page ${i + 1}/${imgs.length} · skipped (missing image)`;
-          emit(job);
-          continue;
-        }
+        if (!raw) return null;
         const meta = await sharp(raw).metadata();
         const width = meta.width || img.width || 1;
         const height = meta.height || img.height || 1;
         let pageMask: Buffer | undefined;
         let maskModel = maskModelName();
+        let detection: Parameters<typeof recordDetectionRun>[0] | undefined;
         const regions = orderRegions(
           await detectRegions(
             { path, bytes: raw, width, height },
@@ -1059,7 +1049,14 @@ async function runTranscribeJob(
               conf: job.detection?.conf,
               lang: job.lang,
               abort: job.abort.signal,
-              onStep: (update) => reportStep(job, update),
+              onStep: (update) => reportStep(job, update, page),
+              onOutputs: (run) => {
+                detection = {
+                  seriesId: opts.series.id, episodeId: job.episodeId, imageId: img.id,
+                  setup: detectorSetupId(run.setup), conf: run.conf, width: run.width, height: run.height,
+                  outputs: run.outputs as Record<string, DetectorOutput[]>,
+                };
+              },
               onTextMask: (mask, info) => {
                 pageMask = mask;
                 const name = info.model || maskModelName(info.engine);
@@ -1070,13 +1067,9 @@ async function runTranscribeJob(
           (r) => r.place,
           preferences(job.episodeId, opts.series.id).direction,
         );
-        const includeEnglish = preferences(job.episodeId, opts.series.id).transcribeEnglish === true;
-        job.message = `Page ${i + 1}/${imgs.length} · Reading ${regions.length} regions`;
-        emit(job);
-        scanned += 1;
         let mask: Buffer | undefined = pageMask;
         if (regions.length && !mask) {
-          reportStep(job, { step: "Masking lettering", model: maskModel, engine: "mask" });
+          reportStep(job, { step: "Masking lettering", model: maskModel, engine: "mask" }, page);
           try {
             mask = await detectLetteringMask(
               raw,
@@ -1091,10 +1084,60 @@ async function runTranscribeJob(
             );
           }
         } else if (regions.length && mask) {
-          reportStep(job, { step: "Applying text mask", model: maskModel, engine: "koharu" });
+          reportStep(job, { step: "Applying text mask", model: maskModel, engine: "sam-ts-l" }, page);
         }
-        const reads: { region: (typeof regions)[number]; consensus: OcrConsensus }[] = [];
-        for (const [k, region] of regions.entries()) {
+        return { sourceStamp, raw, regions, mask, detection };
+    };
+    const ahead = new Map<number, ReturnType<typeof prepare>>();
+    const prefetch = (from: number) => {
+      if (parallel < 2) return;
+      for (let j = from; j < imgs.length; j++) {
+        if (skip(imgs[j])) continue;
+        if (!ahead.has(j)) {
+          const pending = prepare(imgs[j], j + 1);
+          pending.catch(() => {}); // awaited, and reported, when its page comes up
+          ahead.set(j, pending);
+        }
+        return;
+      }
+    };
+
+    for (let i = 0; i < imgs.length; i++) {
+      if (job.abort.signal.aborted) throw new Error("Cancelled");
+      const img = imgs[i];
+      job.imageIndex = i + 1;
+      if (skip(img)) {
+        pageResult(job.id!, img.id, "completed");
+        pagesDone += 1;
+        job.message = `Page ${i + 1}/${imgs.length} · already transcribed`;
+        emit(job);
+        continue;
+      }
+      try {
+        const pending = ahead.get(i) ?? prepare(img, i + 1);
+        ahead.delete(i);
+        let prepared: Awaited<typeof pending>;
+        try {
+          prepared = await pending;
+        } finally {
+          prefetch(i + 1);
+        }
+        if (!prepared) {
+          if (pageScoped) {
+            throw new AiJobError(`Missing image file for ${img.originalName}`, 404);
+          }
+          pageResult(job.id!, img.id, "failed", "Missing image");
+          job.message = `Page ${i + 1}/${imgs.length} · skipped (missing image)`;
+          emit(job);
+          continue;
+        }
+        const { sourceStamp, raw, regions, mask, detection } = prepared;
+        const includeEnglish = preferences(job.episodeId, opts.series.id).transcribeEnglish === true;
+        job.message = `Page ${i + 1}/${imgs.length} · Reading ${regions.length} regions`;
+        emit(job);
+        scanned += 1;
+        // Regions are read side by side; the readers and translator queue what they cannot run at once.
+        const reads = await mapLimit(regions, parallel, async (region, k) => {
           job.abort.signal.throwIfAborted();
           reportStep(job, {
             step: `Reading region ${k + 1}/${regions.length}`,
@@ -1128,8 +1171,8 @@ async function runTranscribeJob(
             consensus = failedOcrConsensus(message, ocrIds);
           }
           if (consensus.decision) consensus.decision.pageSourceStamp = sourceStamp;
-          reads.push({ region, consensus });
-        }
+          return { region, consensus };
+        });
         const sources = reads.map((item) => item.consensus.readings.map((reading) => reading.source));
         const drop = dropRedundantTranscriptions(reads.map((item, index) => ({
           id: String(index),
@@ -1143,12 +1186,27 @@ async function runTranscribeJob(
         // A region only the lettering mask found must read as text to be kept.
         const maskOnly = (item: (typeof reads)[number]) => {
           const sources = item.region.provenance?.sources;
-          return !!sources && sources.length === 1 && sources[0] === "koharu";
+          return !!sources && sources.length === 1 && sources[0] === "sam-ts-l";
         };
         const kept = reads.filter((item, index) => !drop.has(String(index)) &&
           (!maskOnly(item) || readsAsLettering([item.consensus.source, ...sources[index]], job.lang, includeEnglish)));
         job.message = `Page ${i + 1}/${imgs.length} · Saving ${kept.length} regions`;
         emit(job);
+        // The series detection log: what each detector found here, and what became of it.
+        let runId = "";
+        try {
+          if (detection) runId = recordDetectionRun(detection);
+          if (runId)
+            for (const [index, item] of reads.entries())
+              if (!kept.includes(item))
+                recordDetectedRegion({
+                  runId, seriesId: opts.series.id, episodeId: job.episodeId, imageId: img.id, region: item.region, outcome: "dropped",
+                  reason: drop.has(String(index)) ? "Repeats another region" : "Lettering mask only, and it did not read as text",
+                });
+        } catch (e) {
+          console.warn(`[detection-log] ${e instanceof Error ? e.message : e}`);
+          runId = "";
+        }
         for (const item of kept) {
           job.abort.signal.throwIfAborted();
           const place = item.region.place;
@@ -1182,6 +1240,16 @@ async function runTranscribeJob(
               reasoning: "",
             },
           });
+          if (runId) {
+            try {
+              recordDetectedRegion({
+                runId, seriesId: opts.series.id, episodeId: job.episodeId, imageId: img.id, lineId: line.id, region: item.region,
+                outcome: line.sourceState === "ignored" ? "auto-ignored" : "saved",
+              });
+            } catch (e) {
+              console.warn(`[detection-log] ${e instanceof Error ? e.message : e}`);
+            }
+          }
           if (line.sourceState === "ignored") continue;
           if (item.region.polygon) {
             const doc = getDoc(`region:${line.id}`, {});

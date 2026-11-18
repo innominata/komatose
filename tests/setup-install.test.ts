@@ -30,9 +30,9 @@ delete process.env.SCAN_IMAGE_MODELS_DIR;
 delete process.env.SCAN_WORKFLOW_MODELS_DIR;
 delete process.env.SCAN_LLM_MODELS_DIR;
 delete process.env.SCAN_COO_MODEL;
-delete process.env.SCAN_KOHARU_DIR;
-delete process.env.SCAN_KOHARU_WEIGHTS;
-delete process.env.SCAN_KOHARU_HISAM_ROOT;
+delete process.env.SCAN_SAM_TS_L_DIR;
+delete process.env.SCAN_SAM_TS_L_WEIGHTS;
+delete process.env.SCAN_SAM_TS_L_HISAM_ROOT;
 delete process.env.HF_HOME;
 await mkdir(join(root, 'data'), { recursive: true });
 await mkdir(join(root, 'home'), { recursive: true });
@@ -73,7 +73,7 @@ test('catalog ids are unique, grouped, and sized for decisions', () => {
 		'qwen3.8-27b',
 		'rtdetr',
 		'ctd',
-		'koharu',
+		'sam-ts-l',
 		'coo',
 		'hayai-ocr-v2',
 		'hayai-ocr-v2.5-nova',
@@ -147,7 +147,7 @@ test('Sugoi installer uses uv pip because uv venvs have no pip module', () => {
 
 test('unknown ids never reach spawn', () => {
 	assert.throws(() => installCommand({ ...(installTarget('rtdetr')!), id: 'x; rm -rf ~' }), /No installer/);
-	const attempts = ['rtdetr; reboot', '../../scripts/install-koharu.py', 'rtdetr --force all', ''];
+	const attempts = ['rtdetr; reboot', '../../scripts/install-sam-ts-l.py', 'rtdetr --force all', ''];
 	for (const attempt of attempts) {
 		assert.throws(() => startInstall(attempt), (e: Error & { status?: number }) => e.status === 404);
 	}

@@ -114,6 +114,8 @@ export type HubData = {
 	devicePrefs?: Record<string, string>;
 	/** Komatose owns the GPUs; `source` says whether `.env` pins it. */
 	gpuMode?: { komatose: boolean; source: 'env' | 'setting' | 'default' };
+	/** Requests a chapter job keeps in flight; `pinned` when `SCAN_AI_PARALLEL` sets it. */
+	aiParallel?: { requests: number; max: number; pinned: boolean };
 	/** The cleaning worker's saved choice and where `auto` lands right now. */
 	cleaningWorker?: { choice: string; resolved: ResolvedDevice };
 	/** Cleaning, OCR, and translation workers. A running worker can be stopped from Hardware. */
@@ -192,13 +194,14 @@ export async function hubPost(body: Record<string, unknown>): Promise<HubData | 
 	if (json.torchVariant) hub.update((cur) => (cur ? { ...cur, torchVariant: json.torchVariant } : cur));
 	if (json.hardware) hub.update((cur) => (cur ? { ...cur, hardware: json.hardware, usage: json.usage || cur.usage } : cur));
 	if (json.nvtop) hub.update((cur) => (cur ? { ...cur, nvtop: json.nvtop } : cur));
-	if (json.devicePrefs || json.gpuMode || json.cleaningWorker)
+	if (json.devicePrefs || json.gpuMode || json.cleaningWorker || json.aiParallel)
 		hub.update((cur) =>
 			cur
 				? {
 						...cur,
 						devicePrefs: json.devicePrefs || cur.devicePrefs,
 						gpuMode: json.gpuMode || cur.gpuMode,
+						aiParallel: json.aiParallel || cur.aiParallel,
 						cleaningWorker: json.cleaningWorker || cur.cleaningWorker,
 					}
 				: cur,
@@ -641,7 +644,7 @@ const TARGET_TASKS: Record<string, AdminTask['id'][]> = {
 	'qwen3.8-27b': ['translate', 'describe', 'review', 'proofread'],
 	rtdetr: ['detect'],
 	ctd: ['detect', 'mask'],
-	koharu: ['detect', 'mask'],
+	'sam-ts-l': ['detect', 'mask'],
 	coo: ['detect'],
 	'hayai-ocr-v2': ['transcribe', 'review'],
 	'hayai-ocr-v2.5-nova': ['transcribe', 'review'],

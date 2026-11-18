@@ -16,7 +16,7 @@ import sharp from 'sharp';
 import { benchmarkDataset } from '../src/lib/benchmarkDatasets';
 import { DETECTOR_SETUPS, scoreDetection, totalDetection, type DetectorPart } from '../src/lib/modelBenchmark';
 import { composeSetup } from '../src/lib/server/modelBenchmark';
-import { parseKoharuRegions, parseSfxRegions } from '../src/lib/server/detect';
+import { parseSamTsLRegions, parseSfxRegions } from '../src/lib/server/detect';
 import { detectRegionsPy, type WorkerRegion } from '../src/lib/server/ocr';
 import { localOperation } from '../src/lib/server/localWorker';
 
@@ -44,7 +44,7 @@ function loadCache(): Cache {
 function saveCache(pages: Cache) {
   writeFileSync(CACHE, JSON.stringify({ dataset: dataset.id, datasetVersion: dataset.version, pages }));
 }
-const PARTS: DetectorPart[] = ['rtdetr', 'ctd', 'paddle', 'coo', 'koharu'];
+const PARTS: DetectorPart[] = ['rtdetr', 'ctd', 'paddle', 'coo', 'sam-ts-l'];
 /** Private pages (not committed): `EXTRA_PAGES=/tmp/a.jpg,/tmp/b.jpg`. They are listed, not scored. */
 const EXTRA = (process.env.EXTRA_PAGES || '').split(',').filter(Boolean);
 const extraId = (file: string) => `extra:${file}`;
@@ -67,9 +67,9 @@ async function collect() {
 				if (part === 'coo') {
 					const found = await localOperation({ cmd: 'detect-sfx', path, confidence: 0.6 });
 					out = { regions: parseSfxRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1 };
-				} else if (part === 'koharu') {
-					const found = await localOperation({ cmd: 'detect-text', path, out: join(tmpdir(), 'eval-koharu-mask.png'), maskExpansion: 3 });
-					out = { regions: parseKoharuRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1 };
+				} else if (part === 'sam-ts-l') {
+					const found = await localOperation({ cmd: 'detect-text', path, out: join(tmpdir(), 'eval-sam-ts-l-mask.png'), maskExpansion: 3 });
+					out = { regions: parseSamTsLRegions(found.regions), width: Number(found.width) || 1, height: Number(found.height) || 1 };
 				} else {
 					const found = await detectRegionsPy(path, { backend: part, lang: GOLD_LANG, supplement: false });
 					out = { regions: found.regions, width: found.width, height: found.height };
@@ -140,6 +140,6 @@ async function score() {
 }
 
 if (args[0] === 'collect') await collect();
-else if (args[0] === 'extra') await listExtra(args[1] || 'ctd+coo+koharu');
+else if (args[0] === 'extra') await listExtra(args[1] || 'ctd+coo+sam-ts-l');
 else await score();
 process.exit(0);

@@ -10,6 +10,7 @@
     region: { id: "region", icon: "bi-bounding-box", title: "Draw region (R)", group: "" },
     "read-area": { id: "read-area", icon: "bi-eye", title: "Read area with image model", group: "" },
     "detect-area": { id: "detect-area", icon: "bi-bounding-box-circles", title: "Detect lettering in an area (T)", group: "Mask" },
+    censor: { id: "censor", icon: "bi-eye-slash-fill", title: "Censor box: black out for proofreaders and censored exports", group: "" },
     reorder: { id: "reorder", icon: "bi-arrow-down-up", title: "Reorder reading flow (O)", group: "" },
     crop: { id: "crop", icon: "bi-crop", title: "Crop", group: "" },
     split: { id: "split", icon: "bi-vr", title: "Split page", group: "" },
@@ -26,6 +27,7 @@
     raw: { id: "raw", icon: "bi-image", title: "Paint raw (S)", group: "Touch up" },
     polygon: { id: "polygon", icon: "bi-pentagon", title: "Draw polygon", group: "Geometry" },
     "style-brush": { id: "style-brush", icon: "bi-brush-fill", title: "Style brush", group: "" },
+    "sample-pattern": { id: "sample-pattern", icon: "bi-eyedropper", title: "Sample pattern from page", group: "Pattern" },
     rectangle: { id: "rectangle", icon: "bi-square", title: "Draw rectangle", group: "Geometry" },
     oval: { id: "oval", icon: "bi-circle", title: "Draw oval", group: "Geometry" },
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", group: "" },
@@ -64,7 +66,7 @@
         ? [ALL.select, ...(canUpload ? [ALL["add-break"], ALL.crop] : []), zoom]
         : [ALL.select, ...(canUpload ? [ALL.crop, ALL.split, ALL.boundary] : []), zoom];
     if (step === "Translate" || step === "Review")
-      return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), zoom] : [ALL.select, zoom];
+      return canEdit ? [ALL.select, ALL.region, ALL["read-area"], ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), ALL.censor, zoom] : [ALL.select, zoom];
     if (step === "Clean")
       return canClean
         ? [
@@ -90,6 +92,7 @@
             { ...ALL.brush, title: "Text mask brush (B)", group: "Text mask" },
             { ...ALL.erase, title: "Erase text mask (E)", group: "Text mask" },
             ...(showPolygon ? [ALL.polygon, ALL.rectangle, ALL.oval] : []),
+            ALL["sample-pattern"],
             ...(showPolygon && geometryActions ? [
               { id: "fit-bubble", icon: "bi-crosshair", title: "Fit bubble (enclosed interior)", group: "Auto",
                 run: geometryActions.fitBubble, off: geometryActions.disabled },
@@ -127,7 +130,7 @@
             title={item.title}
             aria-label={item.title}
             aria-pressed={item.run ? undefined : tool === item.id}
-            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "add-break" ? "tool-add-break" : item.id === "rect-fill" ? "tool-rect-fill" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : item.run ? `rail-${item.id}` : ""}
+            data-find={item.id === "crop" ? "tool-crop" : item.id === "split" ? "tool-split" : item.id === "add-break" ? "tool-add-break" : item.id === "rect-fill" ? "tool-rect-fill" : item.id === "region" ? "tool-region" : item.id === "read-area" ? "tool-read-area" : item.id === "reorder" ? "tool-reorder" : item.id === "style-brush" ? "tool-style-brush" : item.id === "rectangle" ? "tool-rectangle" : item.id === "sample-pattern" ? "tool-sample-pattern" : item.id === "censor" ? "tool-censor" : item.run ? `rail-${item.id}` : ""}
             disabled={item.off || (["polygon", "rectangle", "oval"].includes(item.id) && !canClean) ||
               (item.id === "style-brush" && tool !== item.id && !canCopyStyle)}
             onclick={() => item.run ? item.run() : onselect(item.id as PaletteId)}

@@ -30,13 +30,22 @@ export type RegistryPickerRow = {
 	estimates?: Record<string, { label: string; ms: number; medianMs: number }>;
 };
 
-export async function rowAvailability(row: ModelRow): Promise<{ available: boolean; reason?: string }> {
+export type AvailabilityOptions = {
+ /** false: never contact a model service; report remote models from their configuration. */
+ probe?: boolean;
+ /** Proofreader readiness already fetched for this request, by row id. */
+ proofreaders?: Map<string, { available: boolean; reason?: string }>;
+};
+
+export async function rowAvailability(row: ModelRow, opts: AvailabilityOptions = {}): Promise<{ available: boolean; reason?: string }> {
  if (row.disabled) return { available: false, reason: 'Disabled' };
- return rowInstallationAvailability(row);
+ const reported = row.access === 'proofreader' ? opts.proofreaders?.get(row.id) : undefined;
+ if (reported) return reported;
+ return rowInstallationAvailability(row, opts);
 }
 
 /** Installation checks for administration, independent of chapter picker visibility. */
-export async function rowInstallationAvailability(row: ModelRow): Promise<{ available: boolean; reason?: string }> {
+export async function rowInstallationAvailability(row: ModelRow, opts: AvailabilityOptions = {}): Promise<{ available: boolean; reason?: string }> {
  const { packageForRow } = await import('./modelTaskRunner');
  try {
   const pkg = packageForRow(row);
@@ -46,7 +55,7 @@ export async function rowInstallationAvailability(row: ModelRow): Promise<{ avai
    return { available: status?.installed === true, reason: status?.reason };
   }
   const { builtinPackageReadiness } = await import('./modelAdapterLifecycle');
-  return await builtinPackageReadiness(pkg);
+  return await builtinPackageReadiness(pkg, { probe: opts.probe });
  } catch (e) { return { available: false, reason: (e as Error).message }; }
 }
 
@@ -65,7 +74,12 @@ function estimatesOf(row: ModelRow) {
 	return out;
 }
 
-export async function registryPickerRows(role?: Role | null, operation?: ProviderOperation | readonly ProviderOperation[]): Promise<RegistryPickerRow[]> {
+/**
+ * Picker rows. Pickers pass `{ probe: false }`: availability then comes from
+ * installation and configuration only, so listing models never waits on a
+ * remote service. Running a model still checks it (`assertEngineReady`).
+ */
+export async function registryPickerRows(role?: Role | null, operation?: ProviderOperation | readonly ProviderOperation[], opts: AvailabilityOptions = {}): Promise<RegistryPickerRow[]> {
 	const rows = listRegistryRows().filter((row) => rowAllowedForRole(row, role));
 	const out: RegistryPickerRow[] = [];
 	for (const row of rows) {
@@ -75,7 +89,7 @@ export async function registryPickerRows(role?: Role | null, operation?: Provide
 			const ok = list.some((item) => rowHasOperation(row, item));
 			if (!ok) continue;
 		}
-		const live = await rowAvailability(row);
+		const live = await rowAvailability(row, opts);
 		// A proofreader's page-image job is the service reporting ready. A stored
 		// probe can stay failed from when the service was down, and that must not
 		// keep a ready proofreader out of the proofreading picker.

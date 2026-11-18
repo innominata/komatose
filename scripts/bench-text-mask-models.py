@@ -100,7 +100,7 @@ def comic_mask(model, image, boxes, size=384):
     return full, crops
 
 
-def koharu_mask(loaded, image):
+def sam_ts_l_mask(loaded, image):
     import torch
     model, publisher = loaded
     h, w = image.shape[:2]
@@ -132,7 +132,7 @@ def metrics(mask, allowed, page_number, digest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=pathlib.Path, default=PROJECT/'data/bench-lettering/model-comparison')
-    parser.add_argument('--model', choices=('ctd', 'comic', 'koharu'), required=True)
+    parser.add_argument('--model', choices=('ctd', 'comic', 'sam-ts-l'), required=True)
     parser.add_argument('--threads', type=int, default=4)
     parser.add_argument('--pages', nargs='+', type=int)
     args = parser.parse_args()
@@ -169,7 +169,7 @@ def main():
                 raw, crops = comic_mask(model, image, boxes)
                 extra['crops'] = crops
             else:
-                raw = koharu_mask(model, image)
+                raw = sam_ts_l_mask(model, image)
             # Keep full predictions for diagnosis, apply exactly the same saved
             # region limits and source-pixel expansion for the removal proposal.
             final = cv2.bitwise_and(cv2.dilate(raw, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))), allowed)

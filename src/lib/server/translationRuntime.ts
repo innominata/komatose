@@ -11,6 +11,7 @@ import { DATA_DIR, ROOT } from './paths';
 import { llamaServerBin, vulkanLlamaEnv } from './gpuMode';
 import { devicePref, estimateNeedMiB, resolveDevice, torchDeviceEnv } from './computeDevices';
 import type { ResolvedDevice } from '../computeDevices';
+import { aiParallelRequests } from './aiParallel';
 
 export type TranslationMessage = { role: 'system' | 'user'; content: string };
 export type TranslationRequest = {
@@ -27,9 +28,18 @@ export type TranslationRequest = {
 };
 type Connection = { url: string; token: string; model: string };
 type Service = Connection & { key: string; child: ChildProcess; closed: Promise<void> };
-type State = { queue: Promise<unknown>; service?: Service; idle?: NodeJS.Timeout };
+type Waiter = { key: string; limit: number; go: () => void };
+/**
+ * Requests in flight and those waiting their turn. Requests for the running model share it up
+ * to its slot count; a request for another model waits until the server is idle, then
+ * replaces it. Waiters are admitted in arrival order so a model switch is never starved.
+ */
+type State = { service?: Service; idle?: NodeJS.Timeout; active: number; activeKey: string; waiters: Waiter[] };
 const global = globalThis as typeof globalThis & { __scanTranslationRuntime?: State };
-const state = global.__scanTranslationRuntime ??= { queue: Promise.resolve() };
+const state = global.__scanTranslationRuntime ??= { active: 0, activeKey: '', waiters: [] };
+state.waiters ??= [];
+state.active ??= 0;
+state.activeKey ??= '';
 const setting = (model: TranslationModel, suffix: string) => (process.env[`${model.envPrefix}_${suffix}`] || '').trim();
 
 export function translationModelsDir() {
@@ -165,14 +175,39 @@ async function freePort() {
   return port;
 }
 
+/** Requests admitted together share one startup instead of each launching a server. */
+let starting: { key: string; ready: Promise<Connection> } | undefined;
+
 async function connection(model: TranslationModel, signal: AbortSignal): Promise<Connection> {
   assertTranslationModelReady(model);
   const cfg = translationModelConfig(model);
   if (cfg.url) return cfg;
-  const key = JSON.stringify([model.id, cfg.runtime, cfg.path, cfg.bin, cfg.device, cfg.runtime === 'pytorch' ? pythonRuntimePath(cfg.bin) : undefined]);
+  const slots = translationSlots(model);
+  const key = JSON.stringify([model.id, cfg.runtime, cfg.path, cfg.bin, cfg.device, cfg.runtime === 'pytorch' ? pythonRuntimePath(cfg.bin) : undefined, slots]);
   const current = state.service;
   if (current?.key === key && current.child.exitCode === null && current.child.signalCode === null && !current.child.killed)
     return current;
+  if (starting?.key !== key) {
+    const ready = launch(model, cfg, slots, key, signal);
+    starting = { key, ready };
+    void ready.catch(() => {}).finally(() => { if (starting?.ready === ready) starting = undefined; });
+  }
+  const pending = starting.ready;
+  // A waiter cancelled while another request starts the server leaves without stopping it.
+  return await new Promise<Connection>((resolve, reject) => {
+    const cancel = () => reject(signal.reason ?? new Error('Cancelled'));
+    signal.addEventListener('abort', cancel, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
+  });
+}
+
+async function launch(
+  model: TranslationModel,
+  cfg: ReturnType<typeof translationModelConfig>,
+  slots: number,
+  key: string,
+  signal: AbortSignal,
+): Promise<Connection> {
   await stopTranslationRuntime();
   signal.throwIfAborted();
   const port = await freePort();
@@ -188,7 +223,10 @@ async function connection(model: TranslationModel, signal: AbortSignal): Promise
       '--device', cfg.device]
     : [
       '-m', cfg.path, '--alias', model.id, '--host', '127.0.0.1', '--port', String(port),
-      '--api-key', token, '--jinja', '-c', '8192', '-np', '1', '-b', '512', '-ub', '128',
+      // Parallel slots share one unified KV cache: each region prompt is short, so a little
+      // extra room per slot is enough and memory barely grows with the slot count.
+      '--api-key', token, '--jinja', '-c', String(8192 + 1024 * (slots - 1)), '-np', String(slots),
+      ...(slots > 1 ? ['-kvu'] : []), '-b', '512', '-ub', '128',
       '-t', threads, '-dev', cfg.device, '-ngl', cfg.device === 'none' ? '0' : '999', '-fit', 'off',
       ...(model.profile === 'shisa' ? ['--reasoning', 'off', '--reasoning-budget', '0'] : []),
       ...(model.profile === 'translategemma' ? ['--chat-template-file', join(ROOT, 'ocr/translategemma-ja-en.jinja')] : []),
@@ -226,10 +264,61 @@ async function connection(model: TranslationModel, signal: AbortSignal): Promise
   }
 }
 
-/** One owned model/process at a time; cancellation never frees capacity before it stops. */
+/**
+ * Requests the translator can serve at once: the Parallel AI requests setting for llama-server
+ * and remote endpoints, one for PyTorch workers, which handle a single request at a time.
+ */
+export function translationSlots(model: TranslationModel) {
+  return translationRuntimeOf(model) === 'pytorch' ? 1 : aiParallelRequests();
+}
+
+function admit() {
+  while (state.waiters.length) {
+    const next = state.waiters[0];
+    if (state.active > 0 && (next.key !== state.activeKey || state.active >= next.limit)) return;
+    state.waiters.shift();
+    state.active++;
+    state.activeKey = next.key;
+    next.go();
+  }
+}
+
+function release() {
+  state.active = Math.max(0, state.active - 1);
+  admit();
+}
+
+/** Waits for a turn on the translator; a cancelled waiter leaves the line without starting a model. */
+function acquire(key: string, limit: number, abort?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const waiter: Waiter = { key, limit, go: () => { abort?.removeEventListener('abort', cancel); resolve(); } };
+    const cancel = () => {
+      const at = state.waiters.indexOf(waiter);
+      if (at < 0) return; // already admitted: the request itself sees the abort
+      state.waiters.splice(at, 1);
+      reject(abort?.reason ?? new Error('Cancelled'));
+      admit();
+    };
+    abort?.addEventListener('abort', cancel, { once: true });
+    state.waiters.push(waiter);
+    admit();
+  });
+}
+
+/** One owned model/process at a time, shared by up to its slot count; cancellation never frees capacity before it stops. */
 export async function completeTranslation(model: TranslationModel, request: TranslationRequest, abort?: AbortSignal) {
   abort?.throwIfAborted();
-  const task = state.queue.catch(() => {}).then(() => withPythonRuntime('env-review', async () => {
+  const limit = translationSlots(model);
+  await acquire(`${model.id}:${limit}`, limit, abort);
+  try {
+    return await sendTranslation(model, request, abort);
+  } finally {
+    release();
+  }
+}
+
+function sendTranslation(model: TranslationModel, request: TranslationRequest, abort?: AbortSignal) {
+  return withPythonRuntime('env-review', async () => {
     abort?.throwIfAborted();
     clearTimeout(state.idle);
     const signal = AbortSignal.any([...(abort ? [abort] : []), AbortSignal.timeout(5 * 60_000)]);
@@ -248,18 +337,10 @@ export async function completeTranslation(model: TranslationModel, request: Tran
       return result;
     } finally {
       if (signal.aborted) await stopTranslationRuntime();
-      state.idle = setTimeout(() => { void stopTranslationRuntime(); }, 5 * 60_000);
+      clearTimeout(state.idle);
+      state.idle = setTimeout(() => { if (!state.active) void stopTranslationRuntime(); }, 5 * 60_000);
       state.idle.unref();
     }
-  }));
-  state.queue = task.catch(() => {});
-  if (!abort) return task;
-  // A cancelled item waiting in the queue returns promptly and never starts a model.
-  return new Promise<unknown>((resolve, reject) => {
-    const cancel = () => reject(abort.reason ?? new Error('Cancelled'));
-    abort.addEventListener('abort', cancel, { once: true });
-    task.then(resolve, reject).finally(() => abort.removeEventListener('abort', cancel));
-    if (abort.aborted) cancel();
   });
 }
 

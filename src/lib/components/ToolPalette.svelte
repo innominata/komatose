@@ -23,6 +23,8 @@
     | "split"
     | "add-break"
     | "rect-fill"
+    | "sample-pattern"
+    | "censor"
     | "boundary"
     | "zoom";
 
@@ -112,6 +114,8 @@
     split: { id: "split", icon: "bi-vr", title: "Split page" },
     "add-break": { id: "add-break", icon: "bi-plus-lg", title: "Add page break (N)" },
     "rect-fill": { id: "rect-fill", icon: "bi-square-half", title: "Fill rectangle (sampled flat fill) (Q)" },
+    "sample-pattern": { id: "sample-pattern", icon: "bi-eyedropper", title: "Sample pattern from page" },
+    censor: { id: "censor", icon: "bi-eye-slash-fill", title: "Censor box (hidden from proofreaders)" },
     boundary: {id:'boundary',icon:'bi-arrows-collapse-vertical',title:'Move page boundary'},
     zoom: { id: "zoom", icon: "bi-zoom-in", title: "Zoom (Z)", key: "Z" },
   };
@@ -170,7 +174,7 @@
       ];
     if (step === "Translate" || step === "Review")
       return canEdit
-        ? [ALL.select, ALL.region, ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), ALL["read-area"], zoom]
+        ? [ALL.select, ALL.region, ALL.reorder, ...(step === 'Review' ? [ALL['assign-character']] : []), ALL["read-area"], ALL.censor, zoom]
         : [ALL.select, zoom];
     if (step === "Clean")
       return canClean

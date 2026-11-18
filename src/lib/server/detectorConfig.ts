@@ -13,7 +13,7 @@ import {
 } from '../detectorSetup';
 import { DETECTORS, type Detector } from '../types';
 import type { Preferences } from '../workflow';
-import { cooEnabled, koharuDetectionMode, koharuInstalled, parseDetector } from './detect';
+import { cooEnabled, samTsLDetectionMode, samTsLInstalled, parseDetector } from './detect';
 import { modelDefaultFor } from './modelDefaultStore';
 import { writeAtomicJson } from './modelPackJournal';
 import { DATA_DIR } from './paths';
@@ -38,13 +38,13 @@ function readStored(): StoredDetector | undefined {
 
 /**
  * The setup a fresh install ran before detection was configurable: the old
- * default detector, COO beside it, and Koharu, each whenever installed.
+ * default detector, COO beside it, and SAM-TS-L, each whenever installed.
  */
 function legacySetup(base: Detector = parseDetector(modelDefaultFor('detect'))): DetectorSetupConfig {
 	return {
 		base,
 		coo: base !== 'heuristic' && cooEnabled(),
-		koharu: base !== 'heuristic' && koharuDetectionMode() !== 'off' && koharuInstalled(),
+		samTsL: base !== 'heuristic' && samTsLDetectionMode() !== 'off' && samTsLInstalled(),
 	};
 }
 
@@ -107,9 +107,9 @@ export function resolveDetector(
 		effective.coo = false;
 		skipped.push('COO needs a current passing Detect Text test');
 	}
-	if (effective.koharu && !defaults.available.koharu?.installed) {
-		effective.koharu = false;
-		skipped.push('Koharu needs a current passing Detect Text test');
+	if (effective.samTsL && !defaults.available['sam-ts-l']?.installed) {
+		effective.samTsL = false;
+		skipped.push('SAM-TS-L needs a current passing Detect Text test');
 	}
 	return {
 		setup: effective,

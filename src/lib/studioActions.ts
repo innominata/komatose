@@ -102,7 +102,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
   A("Remove all regions on a page", "Translate › More · Page menu › Text", "Page menu", { stage: "translate", menu: "more", menuFind: "Remove all regions" }, "more-translate"),
   A("Stop AI / retry unfinished pages", "Job banner above the canvas · Jobs panel", "Translation status strip", { stage: "translate", jobs: true }, "jobs"),
   A("Translation model (engine + override)", "Translate › model chip", "Translate chapter panel picker", { stage: "translate" }, "translate-model", "engine sugoi"),
-  A("Text detector & confidence", "Settings › Text detection (chip in Translate)", "Translate chapter panel", set("detection"), "set-detection", "ctd koharu detector conf"),
+  A("Text detector & confidence", "Settings › Text detection (chip in Translate)", "Translate chapter panel", set("detection"), "set-detection", "ctd sam-ts-l detector conf"),
   A("Transcribe English text", "Settings › Text detection", "Translate chapter panel", set("detection"), "set-detection"),
   A("Draw region", "Translate/Review › Tool rail (R)", "Palette", { stage: "translate", tool: "region" }, "tool-region"),
   A("Read area with image model", "Translate/Review › Tool rail", "Palette", { stage: "translate", tool: "read-area" }, "tool-read-area", "vision"),
@@ -146,7 +146,7 @@ export const STUDIO_ACTIONS: StudioAction[] = [
 
   A("Reusable PNG assets", "Clean › Inspector › Assets tab", "Upload, replace, delete and place title cards or graphics", {stage:"clean"}, "clean-assets"),
   A("Mask chapter", "Clean › Mask chapter", "Detect lettering on every story page without regions", { stage: "clean" }, "mask-chapter"),
-  A("Detect lettering (generate mask)", "Clean › Inspector step 1 · stage bar Next", "Palette magic wand · page menu", { stage: "clean", tab: "clean" }, "detect-lettering", "mask ctd koharu"),
+  A("Detect lettering (generate mask)", "Clean › Inspector step 1 · stage bar Next", "Palette magic wand · page menu", { stage: "clean", tab: "clean" }, "detect-lettering", "mask ctd sam-ts-l"),
   A("Mask engine & detection padding", "Clean › Inspector step 1", "Clean inspector", { stage: "clean", tab: "clean" }, "clean-mask"),
   A("Approve mask", "Clean › Inspector step 1 · stage bar Next", "Palette · page menu", { stage: "clean", tab: "clean" }, "approve-mask"),
   A("Clear draft strokes", "Clean › step 1 (when drafts exist) · page menu", "Palette · page menu", pageMenu("clean", "Clear draft")),
